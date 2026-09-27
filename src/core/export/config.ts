@@ -1,7 +1,8 @@
 // Turn a recommendation into runnable configs. Pure: no I/O. The llama-server args mirror exactly what the session
 // runner measured (src/core/benchmark/session.ts loadCfg + LlamaCppBackend.loadModel), so the export reproduces the
 // benchmarked setup; Ollama / LM Studio outputs are translations and say so.
-import type { CandidateConfig, KvType, ModelMeta, Recommendation } from '../../shared/bench-types'
+import type { CandidateConfig, GenConfig, KvType, ModelMeta, Recommendation } from '../../shared/bench-types'
+import { genLabel, samplingFor, templateKwargsFor } from '../benchmark/gen'
 
 /** Batch sizes the runner benchmarks with (session.ts: batchSize 2048, ubatch = DEFAULT_CANDIDATE_RULES.ubatch). */
 export const BENCH_BATCH = 2048
@@ -30,6 +31,8 @@ export interface ExportConfig {
   /** false = loaded without mmap (-lm none), as the heavy configs were measured. */
   mmap: boolean
   workload: Recommendation['workload']
+  /** The generation config the recommendation chose (sampling + chat template kwargs), when not the plain baseline. */
+  gen?: { config: GenConfig; sampling: ReturnType<typeof samplingFor>; templateKwargs?: Record<string, unknown> }
 }
 
 /** null when the recommendation has no winner (nothing to export). */
@@ -42,8 +45,17 @@ export function exportConfigFrom(rec: Recommendation, cand: CandidateConfig, mod
     sessionId, configId: cand.id, modelPath: model.id, modelName: model.name, ctx,
     gpuLayers: cand.gpuLayers, gpuLayersAll: cand.gpuLayersAll, layers: model.layers, threads: cand.threads,
     batch: BENCH_BATCH, ubatch: BENCH_UBATCH, flashAttn: cand.flashAttn, kvType: cand.kvType, device: cand.device, workload: rec.workload,
-    kvOffload: cand.kvOffload !== false, mmap: cand.mmap !== false
+    kvOffload: cand.kvOffload !== false, mmap: cand.mmap !== false,
+    ...(best.score.gen && (best.score.gen.thinking || best.score.gen.temperature > 0)
+      ? { gen: { config: best.score.gen, sampling: samplingFor(best.score.gen), ...(templateKwargsFor(model, best.score.gen) ? { templateKwargs: templateKwargsFor(model, best.score.gen) } : {}) } }
+      : {})
   }
+}
+
+/** llama-server request body fields for the chosen generation config (POST /completion or /v1/chat/completions). */
+export function toLlamaServerRequest(c: ExportConfig): Record<string, unknown> {
+  if (!c.gen) return { temperature: 0 }
+  return { ...c.gen.sampling, ...(c.gen.templateKwargs ? { chat_template_kwargs: c.gen.templateKwargs } : {}) }
 }
 
 export function toLlamaServerArgs(c: ExportConfig): string[] {
@@ -86,6 +98,13 @@ export function toOllamaModelfile(c: ExportConfig, opts: { from: string }): stri
     `PARAMETER num_thread ${c.threads}`,
     `PARAMETER num_batch ${c.ubatch}`,
     ...(c.mmap ? [] : ['PARAMETER use_mmap false']),
+    ...(c.gen ? [
+      `# Generation: ${genLabel(c.gen.config)}${c.gen.templateKwargs ? ` — thinking is a request option in Ollama (think: ${c.gen.config.thinking}); template kwargs ${JSON.stringify(c.gen.templateKwargs)} are not a Modelfile setting` : ''}`,
+      `PARAMETER temperature ${c.gen.sampling.temperature}`,
+      ...(c.gen.sampling.top_p !== undefined ? [`PARAMETER top_p ${c.gen.sampling.top_p}`] : []),
+      ...(c.gen.sampling.top_k !== undefined ? [`PARAMETER top_k ${c.gen.sampling.top_k}`] : []),
+      ...(c.gen.sampling.min_p !== undefined ? [`PARAMETER min_p ${c.gen.sampling.min_p}`] : [])
+    ] : []),
     ''
   ].join('\n')
 }
@@ -101,7 +120,17 @@ export function toLmStudioSettings(c: ExportConfig): Record<string, unknown> {
     cpuThreads: c.threads,
     ...(c.mmap ? {} : { tryMmap: false }),
     ...(c.kvOffload ? {} : { offloadKVCacheToGpu: false }),
-    ...(c.kvType === 'f16' ? {} : { llamaKCacheQuantizationType: c.kvType, llamaVCacheQuantizationType: c.kvType })
+    ...(c.kvType === 'f16' ? {} : { llamaKCacheQuantizationType: c.kvType, llamaVCacheQuantizationType: c.kvType }),
+    // Prediction settings (lmstudio-js LLMPredictionConfig names; UNVERIFIED like the rest)
+    ...(c.gen ? {
+      prediction: {
+        temperature: c.gen.sampling.temperature,
+        ...(c.gen.sampling.top_p !== undefined ? { topPSampling: c.gen.sampling.top_p } : {}),
+        ...(c.gen.sampling.top_k !== undefined ? { topKSampling: c.gen.sampling.top_k } : {}),
+        ...(c.gen.sampling.min_p !== undefined ? { minPSampling: c.gen.sampling.min_p } : {}),
+        ...(c.gen.templateKwargs ? { chatTemplateKwargs: c.gen.templateKwargs } : {})
+      }
+    } : {})
   }
 }
 
@@ -109,7 +138,7 @@ export function toJson(c: ExportConfig): string {
   return JSON.stringify({
     format: 'local-ai-optimizer/export-1',
     ...c,
-    llamaServer: { args: toLlamaServerArgs(c), command: toLlamaServerCommand(c) },
+    llamaServer: { args: toLlamaServerArgs(c), command: toLlamaServerCommand(c), request: toLlamaServerRequest(c) },
     lmStudio: toLmStudioSettings(c)
   }, null, 2)
 }

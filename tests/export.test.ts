@@ -3,7 +3,7 @@ import { generateCandidates } from '../src/core/benchmark/candidates'
 import { recommend } from '../src/core/scoring/recommend'
 import { WORKLOADS } from '../src/core/scoring/workloads'
 import {
-  exportConfigFrom, provenanceNote, toJson, toLlamaServerArgs, toLlamaServerCommand, toLmStudioSettings, toOllamaModelfile, type ExportConfig
+  exportConfigFrom, provenanceNote, toJson, toLlamaServerArgs, toLlamaServerCommand, toLlamaServerRequest, toLmStudioSettings, toOllamaModelfile, type ExportConfig
 } from '../src/core/export/config'
 import { inputs, load, machine, withQuality } from './scoring/helpers'
 
@@ -15,6 +15,26 @@ const gen = generateCandidates(M, model, { backend: 'vulkan' }, WORKLOADS.coding
 const cands = withQuality(inputs(f)).map((c) => (c.config.id === 'llama8b|ngl=all' ? { ...c, model, config: { ...gen, id: 'llama8b|ngl=all' } } : c))
 const rec = recommend(cands, M, 'coding')
 const cfg = exportConfigFrom(rec, cands.find((c) => c.config.id === rec.best!.configId)!.config, model, '42')!
+
+describe('export: chosen generation config', () => {
+  const g = { id: 'think-low-t0.6', thinking: true, effort: 'low', temperature: 0.6, topP: 0.95, topK: 20, source: 'model-card' as const }
+  const knobs = { ...model, genKnobs: { supportsThinking: true, effortValues: ['low', 'medium'] } }
+  const recG = { ...rec, best: { ...rec.best!, score: { ...rec.best!.score, gen: g } } }
+  const cg = exportConfigFrom(recG, cands.find((c) => c.config.id === rec.best!.configId)!.config, knobs, '42')!
+  it('request body, Ollama PARAMETERs and LM Studio prediction fields carry the sampling and template kwargs', () => {
+    expect(toLlamaServerRequest(cg)).toEqual({ temperature: 0.6, top_p: 0.95, top_k: 20, chat_template_kwargs: { enable_thinking: true, reasoning_effort: 'low' } })
+    const mf = toOllamaModelfile(cg, { from: 'llama3.1:8b' })
+    expect(mf).toMatch(/PARAMETER temperature 0\.6\nPARAMETER top_p 0\.95\nPARAMETER top_k 20/)
+    expect(mf).toMatch(/# Generation: thinking on \(effort low, T=0\.6, top_p 0\.95, top_k 20\) — thinking is a request option in Ollama/)
+    expect(toLmStudioSettings(cg).prediction).toEqual({ temperature: 0.6, topPSampling: 0.95, topKSampling: 20, chatTemplateKwargs: { enable_thinking: true, reasoning_effort: 'low' } })
+    expect(JSON.parse(toJson(cg)).llamaServer.request.temperature).toBe(0.6)
+  })
+  it('the deterministic baseline exports no generation block (temperature 0 request)', () => {
+    expect(cfg.gen).toBeUndefined()
+    expect(toLlamaServerRequest(cfg)).toEqual({ temperature: 0 })
+    expect(toOllamaModelfile(cfg, { from: 'x' })).not.toMatch(/PARAMETER temperature/)
+  })
+})
 
 describe('export', () => {
   it('builds the export config from the winner at its recommended ctx', () => {
