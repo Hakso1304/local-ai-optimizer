@@ -285,11 +285,16 @@ describe('I-8.0 off/think comparator proof on both sides', () => {
     expect(options.find((g) => g.gq.gen.id === 'think-low')).toMatchObject({ comparable: false, why: expect.stringMatching(/baseline.*runtime-accepted temperature|runtime-accepted temperature.*baseline/) })
     expect(chosen).not.toBe('think-low')
   })
-  it('excludes T=1 off and think comparison when off accepted temperature contradicts T=1', () => {
-    const { options, chosen, verdict } = assess({ ...offValid, acceptedSampling: { temperature: 0.8 } })
+  it('does not borrow measured off quality when requested T=1 but runtime accepted T=0', () => {
+    const { options, chosen, verdict } = assess({ ...offValid, acceptedSampling: { temperature: 0 } })
     expect(options.find((g) => g.gq.gen.id === 'off')).toMatchObject({ comparable: false })
     expect(options.find((g) => g.gq.gen.id === 'think-low')).toMatchObject({ comparable: false, why: expect.stringMatching(/baseline.*accepted temperature|accepted temperature.*baseline/) })
     expect(chosen).toBeNull()
+    expect(verdict.ranked[0].cs.components.quality.input.kind).not.toBe('measured')
+    expect(verdict.ranked[0].qualityMeasured).toBe(false)
+    expect(verdict.ranked[0].undecided).toEqual(expect.arrayContaining([
+      expect.objectContaining({ component: 'quality', kind: 'contract-error', reason: expect.stringMatching(/accepted temperature.*config's 1/) })
+    ]))
     expect(verdict.winner).toBeNull()
   })
   it('does not compare valid think rows against off rows missing applied kwargs', () => {
