@@ -41,7 +41,8 @@ function fakeBackend(script: (ctx: number) => Step) {
     async unloadModel() { b.pid = undefined },
     async warmup() {},
     async runPrompt(req): Promise<PromptResult> {
-      const base = { promptTokens: 100, prefillMs: 10, decodeTokens: req.maxTokens, decodeMs: 1000, text: 'BANANA', stopType: 'eos' }
+      const base = { promptTokens: 100, prefillMs: 10, decodeTokens: req.maxTokens, decodeMs: 1000, text: 'BANANA', stopType: 'eos',
+        acceptedSampling: { temperature: req.temperature ?? 0, seed: req.seed } }
       if (req.prompt === ladderPrompt(ctx) && script(ctx).prompt === 'device_lost') {
         b.lastExit = { code: 3221225477, reason: 'device_lost', tail: ['vk::DeviceLostError'] }
         return { ...base, ttftMs: null, prefillTps: null, decodeTps: null, totalMs: 5, timedOut: false, error: 'server exited (device_lost)' }

@@ -1,13 +1,13 @@
 // Test scope: MOCKED — llama-server (tests/fixtures/fake-llama-server.cjs: canned /health, /props, SSE, 400s, deaths;
 // no model, no GPU) and, in one test, a child that ignores kill(). REAL — node processes, sockets, the SSE parser,
-// the stderr classifier, tasklist/taskkill/PowerShell on Windows. Proves process/HTTP orchestration, not inference.
+// the stderr classifier and Windows process cleanup in separate tests. Proves process/HTTP orchestration, not inference.
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { ConfigDriftError, LlamaCppBackend, ServerStuckError } from '../src/core/runtimes/llamacpp'
+import { ConfigDriftError, LlamaCppBackend, ServerStuckError, type ProcessTree } from '../src/core/runtimes/llamacpp'
 import { classifyExit, emptyDeclared, parseDevices, parseLogLine, parseSse, pickDiscreteDevice, toPromptResult, type CompletionChunk } from '../src/core/runtimes/llamacpp/parse'
 
 // Shape of a real llama-server /completion stream (b11208), split at awkward byte boundaries.
@@ -204,16 +204,21 @@ describe('LlamaCppBackend process handling (fake server, no GPU)', { timeout: 20
     expect(r).toMatchObject({ decodeTokens: 3, promptTokens: 4, decodeTps: null, prefillTps: null, error: null })
   })
 
-  // Windows integration (T13): uses the real taskkill on an unused pid, so the kill fails like a stuck process's.
-  it.skipIf(process.platform !== 'win32')('unloadModel keeps the handle and pid file when the server survives kill + taskkill (W4 F4) [Windows: taskkill]', async () => {
+  it('unloadModel keeps the handle and pid file when the identity-verified server survives teardown (W4 F4)', async () => {
     const { createServer } = await import('node:http')
     const { EventEmitter } = await import('node:events')
     const srv = createServer((q, s) => s.end(q.url === '/health' ? '{"status":"ok"}' : JSON.stringify({ model_path: cfg.modelPath, default_generation_settings: { n_ctx: 2048 } })))
     await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()))
     const port = (srv.address() as { port: number }).port
-    // A child that ignores kill(): pid that taskkill can't find, never exits.
+    // A child that ignores kill(): all process-tree checks are injected, so this PID is never sent to the OS.
     const stuck = Object.assign(new EventEmitter(), { pid: 999_999_1, exitCode: null, signalCode: null, stdout: null, stderr: null, kill: () => true })
-    const sb = new LlamaCppBackend('unused', { pidFile, spawnFn: () => stuck as never })
+    const identity = { pid: stuck.pid, name: 'fake-server.exe', startedAt: '2026-09-28T00:00:00.0000000Z' }
+    const processTree: ProcessTree = {
+      descendants: async () => [], kill: async () => {}, isAlive: async () => stuck.exitCode === null,
+      inspect: async () => stuck.exitCode === null ? identity : null,
+      killVerified: async () => true // ignored; post-kill identity remains live
+    }
+    const sb = new LlamaCppBackend('unused', { pidFile, spawnFn: () => stuck as never, processTree })
     try {
       await sb.loadModel({ ...cfg, port })
       await expect(sb.unloadModel()).rejects.toBeInstanceOf(ServerStuckError)

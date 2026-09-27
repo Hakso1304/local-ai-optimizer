@@ -127,6 +127,8 @@ describe('G07 memory and spill wording keep scope', () => {
 })
 
 describe('G08 generation choice is deterministic and needs application proof', () => {
+  const runtimeOrigin = { mode: 'runtime' as const, status: 'original' as const, originalPromptHashPresent: true,
+    origin: { generationPromptHashPresent: true, firstReplayAt: null, lineage: [] } }
   const proof = (key: string, requested: unknown) => ({ requested,
     counterfactual: key === 'enable_thinking' ? !requested : requested === 'low' ? 'high' : 'low',
     requestedSha256: 'a'.repeat(64), counterfactualSha256: 'b'.repeat(64), status: 'proved' as const })
@@ -138,6 +140,7 @@ describe('G08 generation choice is deterministic and needs application proof', (
         ...(applied && Object.keys(applied).length ? { templateKwargProof: Object.fromEntries(Object.entries(applied).map(([key, value]) => [key, proof(key, value)])) } : {}),
         templateHash: 't1', runtimeVersion: 'b1', modelFingerprint: 'm1', acceptedSampling: { temperature: 0, seed: 1 },
         requestedSampling: { temperature: 0, topP: null, topK: null, minP: null, seed: 1 }, promptSha256: hash,
+        proofProvenance: runtimeOrigin,
         renderProof: { rowId: proofRowId(row), promptSha256: hash, renderedSha256: hash, counterfactualSha256: alt,
           counterfactuals: Object.fromEntries(Object.keys(applied ?? {}).map((key) => [key, alt])),
           keys: Object.keys(applied ?? {}), status: applied && Object.keys(applied).length ? 'proved' as const : 'unproved' as const } }
@@ -155,7 +158,7 @@ describe('G08 generation choice is deterministic and needs application proof', (
         const hash = 'a'.repeat(64), alt = 'b'.repeat(64)
         return { ...row, templateHash: 't1', runtimeVersion: 'b1', modelFingerprint: 'm1',
           acceptedSampling: { temperature: 0, seed: 1 }, requestedSampling: { temperature: 0, topP: null, topK: null, minP: null, seed: 1 },
-          appliedTemplateKwargs: { enable_thinking: false }, promptSha256: hash,
+          appliedTemplateKwargs: { enable_thinking: false }, promptSha256: hash, proofProvenance: runtimeOrigin,
           templateKwargProof: { enable_thinking: proof('enable_thinking', false) },
           renderProof: { rowId: proofRowId(row), promptSha256: hash, renderedSha256: hash, counterfactualSha256: alt,
             counterfactuals: { enable_thinking: alt },

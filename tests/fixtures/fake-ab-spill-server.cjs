@@ -8,7 +8,10 @@ const arg = (name) => args[args.indexOf(name) + 1]
 const mode = arg('--fake-mode')
 if (process.env.FAKE_AB_PID_FILE) writeFileSync(process.env.FAKE_AB_PID_FILE, String(process.pid))
 
-if (mode === 'streams') {
+if (mode === 'mixed-buffers') {
+  process.stdout.write('Vulkan0 model buffer size = 100.00 MiB\nCPU model buffer size = 900.00 MiB\n')
+  process.stderr.write('CPU_Host KV buffer size = 850.00 MiB\n')
+} else if (mode === 'streams') {
   process.stdout.write('load_tensors: offloaded 25/25 layers to GPU\nVulkan0 model buffer size = 800.50 MiB\n')
   process.stderr.write('Vulkan0 KV buffer size = 256.25 MiB\nVulkan0 compute buffer size = 64.00 MiB\n')
 } else {

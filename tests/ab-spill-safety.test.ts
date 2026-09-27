@@ -1,12 +1,31 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { ChildProcess } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { assertNewArtifact, baseArgv, bounded, idle, launch, outputPathFor, ramFloor, reserveLoopbackPort, safeEnv, stopOwned, unifiedMemoryKeys, verifyProps, watchRam, type CollisionEvidence, type LaunchProbe } from '../scripts/ab-spill'
+import { assertNewArtifact, baseArgv, bounded, bufferExtrema, idle, launch, outputPathFor, ramFloor, reserveLoopbackPort, safeEnv, stopOwned, unifiedMemoryKeys, verifyProps, watchRam, type CollisionEvidence, type LaunchProbe } from '../scripts/ab-spill'
+import type { OwnedProcess } from '../scripts/owned-process'
+import type { ProcessIdentity, ProcessTree } from '../src/core/runtimes/llamacpp'
 
 const GiB = 1024 ** 3
+const fakeNodeTree = (): ProcessTree => {
+  const known = new Map<number, ProcessIdentity>()
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }
+  return {
+    descendants: async () => [], isAlive: async (pid) => alive(pid),
+    kill: async () => { throw new Error('numeric-PID kill must not be used') },
+    inspect: async (pid) => {
+      if (!alive(pid)) return null
+      if (!known.has(pid)) known.set(pid, { pid, name: 'node.exe', startedAt: '2026-09-28T00:00:00.0000000Z' })
+      return known.get(pid)!
+    },
+    killVerified: async (record) => {
+      if (known.get(record.pid)?.startedAt !== record.startedAt || !alive(record.pid)) return false
+      process.kill(record.pid)
+      return true
+    }
+  }
+}
 
 describe('ab-spill safety helpers (injected fakes; no GPU or executable)', () => {
   it('builds every future A/B argv with app mmap/cache policy and verbosity 4', () => {
@@ -89,20 +108,28 @@ describe('ab-spill safety helpers (injected fakes; no GPU or executable)', () =>
     await expect(idle(1, () => 5 * GiB, () => 0)).resolves.toBeUndefined()
   })
 
-  it('reaps an owned child, escalates to force-kill, and reports a survivor', async () => {
-    const fake = (kill: () => void) => ({ pid: 1234, kill }) as unknown as ChildProcess
-    let alive = true
-    const gentle = vi.fn(() => { alive = false })
-    await expect(stopOwned(fake(gentle), Promise.resolve(), () => alive, vi.fn())).resolves.toBeUndefined()
-    expect(gentle).toHaveBeenCalledTimes(1)
+  it('awaits identity-verified owned teardown and reports a survivor', async () => {
+    let release!: () => void
+    const stop = vi.fn(() => new Promise<void>((done) => { release = done }))
+    const owned = { root: { pid: 1234, name: 'node.exe', startedAt: '2026-09-28T00:00:00Z' },
+      descendants: new Map(), snapshot: async () => {}, stop } satisfies OwnedProcess
+    let settled = false
+    const pending = stopOwned(owned).then(() => { settled = true })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    expect(stop).toHaveBeenCalledTimes(1)
+    release()
+    await expect(pending).resolves.toBeUndefined()
+    expect(settled).toBe(true)
+    await expect(stopOwned({ ...owned, stop: async () => { throw new Error('owned child survived teardown') } }))
+      .rejects.toThrow(/survived teardown/)
+  })
 
-    alive = true
-    const force = vi.fn(() => { alive = false })
-    await expect(stopOwned(fake(vi.fn()), Promise.resolve(), () => alive, force)).resolves.toBeUndefined()
-    expect(force).toHaveBeenCalledWith(1234)
-
-    await expect(stopOwned(fake(vi.fn()), Promise.resolve(), () => true, vi.fn())).rejects.toThrow(/survived teardown/)
-    await expect(stopOwned({ pid: undefined } as ChildProcess, Promise.resolve(), () => false, vi.fn())).rejects.toThrow(/no PID/)
+  it('excludes CPU and host buffers from the largest device allocation', () => {
+    expect(bufferExtrema([{ dev: 'CPU', mib: 900 }, { dev: 'CPU_Host', mib: 850 }, { dev: 'Vulkan0', mib: 100 }]))
+      .toEqual({ largestDeviceBufferMiB: 100, largestHostBufferMiB: 900 })
+    expect(bufferExtrema([{ dev: 'CPU', mib: 900 }]))
+      .toEqual({ largestDeviceBufferMiB: null, largestHostBufferMiB: 900 })
   })
 })
 
@@ -111,6 +138,7 @@ describe('ab-spill launch with a fake Node HTTP child (no GPU)', { timeout: 15_0
   const safeProbe: LaunchProbe = {
     readRam: () => 5 * GiB, countServers: () => 0, devices: () => [],
     startSampler: () => ({ rows: [], stop: async () => {} }),
+    processTree: fakeNodeTree(),
     ownerOfPort: async () => process.env.FAKE_PID_FILE && existsSync(process.env.FAKE_PID_FILE)
       ? Number(readFileSync(process.env.FAKE_PID_FILE, 'utf8')) : null,
     requestTimeoutMs: 100, healthTimeoutMs: 50, loadTimeoutMs: 500, watchIntervalMs: 10
@@ -165,6 +193,7 @@ describe('ab-spill evidence from a fake Node child (no GPU)', { timeout: 15_000 
   const probe: LaunchProbe = {
     readRam: () => 5 * GiB, countServers: () => 0, devices: () => ['fake MiB'],
     startSampler: () => ({ rows: [], stop: async () => {} }),
+    processTree: fakeNodeTree(),
     ownerOfPort: async () => process.env.FAKE_AB_PID_FILE && existsSync(process.env.FAKE_AB_PID_FILE)
       ? Number(readFileSync(process.env.FAKE_AB_PID_FILE, 'utf8')) : null,
     requestTimeoutMs: 500, loadTimeoutMs: 1_000, healthTimeoutMs: 100, watchIntervalMs: 20,
@@ -288,6 +317,34 @@ describe('ab-spill evidence from a fake Node child (no GPU)', { timeout: 15_000 
     expect(row.largestBufferMiB).toBe(800.5)
     expect(row.stdoutLog).toContain('offloaded 25/25 layers')
     expect(row.stderrLog).toContain('Vulkan0 compute buffer size = 64.00 MiB')
+  })
+
+  it('records adapter provenance and device-only max even when a larger host buffer is logged', async () => {
+    const selectedAdapter = { luid: 'fake-luid', name: 'Fake Adapter', pnpDeviceId: 'PCI\\FAKE',
+      totalBytes: 16 * GiB, totalSource: 'test scanner', mappingStatus: 'inferred-single-discrete' as const }
+    const row = await runFake('mixed-buffers', null, { selectedAdapter })
+    expect(row.error).toBeNull()
+    expect(row.selectedAdapter).toEqual(selectedAdapter)
+    expect(row.adapterTotalGiB).toBe(16)
+    expect(row.largestBufferMiB).toBe(100)
+    expect(row.largestDeviceBufferMiB).toBe(100)
+    expect(row.largestHostBufferMiB).toBe(900)
+    expect(row.residencyScope).toMatch(/raw counters only.*no capacity/)
+  })
+
+  it('waits for the sampler to close before completing fake launch teardown', async () => {
+    let release!: () => void
+    let stopped = false, finished = false
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const pending = runFake('streams', null, { startSampler: () => ({ rows: [], stop: async () => { stopped = true; await gate } }) })
+      .then((row) => { finished = true; return row })
+    try {
+      await vi.waitFor(() => expect(stopped).toBe(true), { timeout: 3000 })
+      expect(finished).toBe(false)
+    } finally { release() }
+    const row = await pending
+    expect(row.error).toBeNull()
+    expect(finished).toBe(true)
   })
 
   it('reports missing buffer declarations as unavailable rather than zero', async () => {
