@@ -301,3 +301,6 @@
 
 ## Fable — 2026-09-28 05:23 local
 - Decision: replay never writes renderProof (any input); replayProof is evidence only; comparisons rely on generation-time renderProof. Guide I-8.0 updated. S1 T1/T2/T3 green in tree; replay stamping fix pending; commit next.
+
+## Fable — 2026-09-28 05:27 local
+- 2db4a11 pushed; S2: T-round green vs S1 worktree (195/195). S1 nudged to commit. Session 5 medium phase ongoing.
