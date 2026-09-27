@@ -261,6 +261,24 @@ describe('stale server cleanup verifies identity (W4c D11)', { timeout: 60_000 }
 })
 
 describe('child environment (docs/HIP-BACKEND.md)', () => {
+  it('O4: strips mixed and lowercase managed-memory keys before child spawn', async () => {
+    const { LlamaCppBackend: B, serverEnv } = await import('../src/core/runtimes/llamacpp')
+    const base = { PATH: 'x', ggml_cuda_enable_unified_memory: '1', GgMl_CuDa_EnAbLe_UnIfIeD_MeMoRy: '1' }
+    expect(serverEnv(base)).toEqual({ PATH: 'x' })
+    let env: NodeJS.ProcessEnv | undefined
+    const previous = { ...process.env }
+    try {
+      Object.assign(process.env, base)
+      const b = new B('unused', { spawnFn: (_c, _a, opts) => { env = opts.env; throw new Error('captured') } })
+      await b.loadModel({ modelPath: 'm.gguf', contextSize: 2048, gpuLayers: 999, device: 'ROCm0', threads: 8 }).catch(() => {})
+    } finally {
+      for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key]
+      Object.assign(process.env, previous)
+    }
+    expect(env).toBeDefined()
+    expect(Object.keys(env!).some((k) => k.toUpperCase() === 'GGML_CUDA_ENABLE_UNIFIED_MEMORY')).toBe(false)
+  })
+
   it('never passes GGML_CUDA_ENABLE_UNIFIED_MEMORY to llama-server', async () => {
     const { LlamaCppBackend: B, serverEnv } = await import('../src/core/runtimes/llamacpp')
     expect(serverEnv({ PATH: 'x', GGML_CUDA_ENABLE_UNIFIED_MEMORY: '1' })).toEqual({ PATH: 'x' })

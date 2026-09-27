@@ -173,9 +173,32 @@ describe('§2 coverage', () => {
     expect(gates(withQuality(inputs(f14)), 'document_analysis')).toContain('I-2.7')
     expect(gates(full8(), 'document_analysis')).not.toContain('I-2.7')
   })
+  it('stage1: a short loser has a candidate-scoped floor warning while another candidate reaches 16K', () => {
+    const short = synth([run(2048), run(4096)], { id: 'short-model', name: 'Short model' }, { id: 'short-config', modelId: 'short-model' })
+    const long = synth([run(2048), run(4096), run(8192), run(16384)], { id: 'long-model', name: 'Long model' }, { id: 'long-config', modelId: 'long-model' })
+    const v = verdicts({ candidates: [short, long], machine: M }, 'coding')
+    expect(v.ranked.find((c) => c.input.config.id === 'long-config')?.failures.some((f) => f.ruleId === 'I-2.7')).toBe(false)
+    const warnings = interpret(v).filter((i) => i.ruleId === 'I-2.7')
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0].configId).toBe('short-config')
+    expect(warnings[0].text).toMatch(/short-config/)
+    expect(warnings[0].text).not.toMatch(/no candidate|none.*8K/i)
+  })
 })
 
 describe('§3 speed', () => {
+  it('O9: backend comparison reports measured same-rung TTFT and calls a clean peak an allocation, not a capacity ceiling', () => {
+    const vk = synth([run(2048, { decode: 90, ttft: 300, vram: 7 * GiB }), run(4096, { decode: 80, ttft: 500, vram: 8 * GiB })], {}, { id: 'backend-pair', backend: 'vulkan' })
+    const hip = synth([run(2048, { decode: 100, ttft: 250, vram: 6 * GiB }), run(4096, { decode: 95, ttft: 400, vram: 7 * GiB })], {}, { id: 'backend-pair|hip', backend: 'hip' })
+    const comparison = text(panel([vk, hip], 'general_chat'), 'I-3.9')
+    expect(comparison).toMatch(/4K/)
+    expect(comparison).toMatch(/TTFT.*500.*400|TTFT.*400.*500/i)
+    expect(comparison).toMatch(/largest observed dedicated allocation/i)
+    expect(comparison).not.toMatch(/dedicated ceiling/i)
+    const estimated = { ...hip, runs: hip.runs.map((r) => ({ ...r, decodeTps: { value: 95, kind: 'estimated' as const, source: 'wall clock' } })) }
+    expect(has(panel([vk, estimated], 'general_chat'), 'I-3.9')).toBe(false)
+  })
+
   it('I-3.1 decode band with actual prompt tokens and the effective gate / user floor; the decode gate fails below it', () => {
     expect(text(panel(full8(), 'coding'), 'I-3.1')).toMatch(/decode 72\.0 t\/s at 32K \(\d+ prompt tokens\) — snappy \(Coding gate 10 t\/s\)/)
     expect(text(panel(full8(), 'coding', { minDecodeTps: 20 }), 'I-3.1')).toMatch(/Coding gate 10 t\/s; your floor 20 t\/s/)
@@ -321,6 +344,15 @@ describe('§6 eligibility and stability', () => {
     expect(panel([synth([run(2048, {}, ver('b1')), run(4096, {}, ver('b2'))])], 'general_chat').find((i) => i.ruleId === 'I-6.2')).toMatchObject({ action: 'rerun-comparable' })
     expect(text(panel([synth([run(2048, {}, ver('b1', 'interp-1')), run(4096, {}, ver('b1'))])], 'general_chat'), 'I-6.2')).toMatch(/rules versions \(interp-1, interp-2\)/)
     expect(has(panel([synth([run(2048, {}, ver('b1')), run(4096, {}, ver('b1'))])], 'general_chat'), 'I-6.2')).toBe(false)
+  })
+  it('stage1: legacy bare runtime build and namespaced Vulkan build are equivalent without rewriting stored rows', () => {
+    const legacy = run(2048, {}, { versions: { benchmark: 'bench-1.0.0', prompts: 'ladder-1', quality: 'qb-1.1.0', runtime: 'b11208', rules: 'interp-2' } })
+    const current = run(4096, {}, { versions: { benchmark: 'bench-1.0.0', prompts: 'ladder-1', quality: 'qb-1.1.0', runtime: 'vulkan:b11208', rules: 'interp-2' } })
+    const c = synth([legacy, current])
+    expect(has(panel([c], 'general_chat'), 'I-6.2')).toBe(false)
+    expect(c.runs.map((r) => r.versions?.runtime)).toEqual(['b11208', 'vulkan:b11208'])
+    const hip = synth([legacy, { ...current, versions: { ...current.versions!, runtime: 'hip:b11208' } }])
+    expect(has(panel([hip], 'general_chat'), 'I-6.2')).toBe(true) // different backend remains incompatible
   })
   it('I-6.3 failures from all persisted runs, superseded retries marked, device loss critical; none on a clean sweep', () => {
     const lost = { ...run(4096), configId: FULL, runId: 'old', status: 'fail' as const, failureKind: 'device_lost' as const, supersededBy: 'new', endedAt: 2000 }

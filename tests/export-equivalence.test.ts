@@ -2,7 +2,7 @@
 // Runner path: loadConfigFor → LlamaCppBackend.loadModel (spawn captured); export path: exportConfigFrom → toLlamaServerArgs.
 import { describe, expect, it } from 'vitest'
 import { loadConfigFor } from '../src/core/benchmark/session'
-import { exportConfigFrom, toLlamaServerArgs, toLlamaServerCommand } from '../src/core/export/config'
+import { exportConfigFrom, toJson, toLlamaServerArgs, toLlamaServerCommand } from '../src/core/export/config'
 import { LlamaCppBackend } from '../src/core/runtimes/llamacpp'
 import type { CandidateConfig, ModelMeta, Recommendation } from '../src/shared/bench-types'
 
@@ -58,4 +58,20 @@ it('export carries the measured backend (the app picks that build\'s llama-serve
   expect(cmd.startsWith(`${exe} -m `)).toBe(true)
   expect(cmd).toContain(' -dev ROCm0 ')
   expect(exportConfigFrom(rec, { ...cand, backend: undefined }, model, '1')!.backend).toBe('vulkan') // pre-HIP sessions
+})
+
+it.each([
+  ['hip' as const, 'ROCm0', String.raw`C:\rt\llama.cpp-hip\llama-server.exe`],
+  ['cuda' as const, 'CUDA0', String.raw`C:\rt\llama.cpp-cuda\llama-server.exe`]
+])('O5: JSON for %s carries the actual executable, device and safe environment', (backend, device, exe) => {
+  const cand = { ...base, id: `c-${backend}`, backend, device }
+  const rec = { workload: 'coding', best: { configId: cand.id, score: { recommendedCtx: 8192, referenceCtx: 8192 } } } as unknown as Recommendation
+  const c = exportConfigFrom(rec, cand, model, '1')!
+  expect(() => toJson(c)).toThrow(/executable unavailable/)
+  const json = JSON.parse(toJson(c, exe))
+  expect(json.backend).toBe(backend)
+  expect(json.llamaServer).toMatchObject({ executable: exe, command: toLlamaServerCommand(c, exe), environment: { GGML_CUDA_ENABLE_UNIFIED_MEMORY: null } })
+  expect(json.llamaServer.args).toEqual(toLlamaServerArgs(c))
+  expect(json.llamaServer.args).toContain(device)
+  expect(json.llamaServer.environmentPolicy).toMatch(/case-insensitively/)
 })

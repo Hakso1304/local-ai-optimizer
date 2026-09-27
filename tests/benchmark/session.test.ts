@@ -7,7 +7,7 @@ import type { ExitInfo } from '../../src/core/runtimes/llamacpp'
 import type { TelemetrySample } from '../../src/core/telemetry/sampler'
 import { runSession, type RunDetail, type SessionBackend, type SessionDeps, type SessionStorage } from '../../src/core/benchmark/session'
 import { ladderPrompt } from '../../src/core/benchmark/prompts'
-import { generateCandidates, machineFromProfile } from '../../src/core/benchmark/candidates'
+import { generateCandidates, machineFromProfile, planCandidates } from '../../src/core/benchmark/candidates'
 import { WORKLOADS } from '../../src/core/scoring/workloads'
 import { ConfigDriftError } from '../../src/core/runtimes/llamacpp'
 import { load } from '../scoring/helpers'
@@ -528,6 +528,102 @@ describe('runSession', () => {
     expect(r.reason).toMatch(/persisted after a fresh restart — capacity-suspect, not placement/)
     expect(s.budget.filter((b) => b.o.kind === 'capacity').map((b) => b.o)).toEqual([expect.objectContaining({ ceilingBytes: 8 * GiB, qualified: false, origin: expect.objectContaining({ attempts: 2, status: 'pass', configId: r.configId }) })]) // fake adapter: no driver / build → advisory
     expect(rec?.insights?.some((i) => i.ruleId === 'I-2.8') ?? false).toBe(false)
+  })
+
+  it('O1: a constant 0.5 GiB first-rung residual is a benign baseline before retry, verdict and learning', async () => {
+    const verified = { ...machine, gpus: { ...machine.gpus, value: machine.gpus.value!.map((g) => ({ ...g, driverVersion: '32.0.1' })) } } as SystemProfile
+    const sampler = (pid: number) => {
+      const v = [{ ...sample(pid - 1000), procVramSharedBytes: 0.5 * GiB }]
+      return { samples: v, unavailable: {}, stop: () => v }
+    }
+    const { s, backend, rec } = await run(() => ({ hostMiB: 1 }), { ladder: [2048, 4096] }, { startSampler: sampler, machine: verified, runtimeVersion: 'b11208' })
+    expect(ctxOf(backend)).toEqual([2048, 4096])
+    expect(s.runs.map((r) => r.status)).toEqual(['pass', 'pass'])
+    expect(s.runs.every((r) => r.peakSharedGpuBytes.value === 0)).toBe(true)
+    expect(s.budget.filter((b) => b.o.kind === 'capacity')).toEqual([])
+    expect(rec?.insights?.some((i) => i.ruleId === 'I-2.8')).toBe(false)
+  })
+
+  it('O2: a resumed HIP candidate cannot execute on Vulkan when HIP is absent', async () => {
+    const vk = fakeBackend(() => ({}))
+    const base = generateCandidates(machineFromProfile(machine, 'Vulkan0'), model, { backend: 'vulkan' }, WORKLOADS.general_chat).candidates[0]
+    const hip = { ...base, id: `${base.id}|hip`, backend: 'hip' as const, device: 'ROCm0', ctxSteps: [2048] }
+    const { s, storage } = memStorage()
+    const events: SessionEvent[] = []
+    let t = 0
+    await runSession({ workload: 'general_chat', modelIds: [model.id], runQuality: false, ladder: [2048], resumeSessionId: 's1' },
+      { backend: () => vk, backends: [{ kind: 'vulkan', backend: () => vk, runtimeVersion: 'b1', exePath: 'vulkan.exe', device: 'Vulkan0' }],
+        startSampler: () => ({ samples: [], unavailable: {}, stop: () => [] }), storage, machine, gpuDevice: 'Vulkan0', models: [model], plan: [hip], clock: { now: () => t++ }, evaluate: passAll },
+      (e) => events.push(e))
+    expect(vk.calls.loads).toEqual([])
+    expect(s.runs.some((r) => r.configId === hip.id && r.status === 'pass')).toBe(false)
+    expect(events.some((e) => e.type === 'candidate:done' && e.configId === hip.id && e.status === 'skipped')).toBe(true)
+  })
+
+  it('O3: the long-context needle uses the selected HIP backend and records its own config scope', async () => {
+    const vk = fakeBackend((ctx) => ctx === 32768 ? { load: 'oom' } : { decode: 100 })
+    const hipBackend = fakeBackend(() => ({ decode: 80 }))
+    const base = generateCandidates(machineFromProfile(machine, 'Vulkan0'), model, { backend: 'vulkan' }, WORKLOADS.long_context_coding).candidates[0]
+    const plan = [{ ...base, ctxSteps: [2048, 32768] }, { ...base, id: `${base.id}|hip`, backend: 'hip' as const, device: 'ROCm0', ctxSteps: [2048, 32768] }]
+    const { s, storage } = memStorage()
+    let t = 0
+    await runSession({ workload: 'long_context_coding', modelIds: [model.id], runQuality: true, requiredContext: 32768, ladder: [2048, 32768], qualityMode: 'quick' },
+      { backend: () => vk, backends: [
+        { kind: 'vulkan', backend: () => vk, runtimeVersion: 'b1', exePath: 'vulkan.exe', device: 'Vulkan0' },
+        { kind: 'hip', backend: () => hipBackend, runtimeVersion: 'b1', exePath: 'hip.exe', device: 'ROCm0' }
+      ], startSampler: (pid) => { const xs = [sample(pid - 1000)]; return { samples: xs, unavailable: {}, stop: () => xs } },
+      storage, machine, gpuDevice: 'Vulkan0', models: [model], plan, clock: { now: () => t++ }, evaluate: passAll }, () => {})
+    expect(vk.calls.loads.filter((l) => l.contextSize === 32768)).toHaveLength(1) // failed ladder only
+    expect(hipBackend.calls.loads.filter((l) => l.contextSize === 32768).length).toBeGreaterThanOrEqual(2) // ladder + needle
+    expect(hipBackend.calls.loads.every((l) => l.device === 'ROCm0')).toBe(true)
+    const needle = s.quality.flatMap((q) => q.results).find((r) => r.testId === 'CR-04-long') as QualityResult & { configId?: string; backend?: string; ctx?: number }
+    expect(needle).toMatchObject({ configId: plan[1].id, backend: 'hip', ctx: 32768 })
+  })
+
+  it('O5: a CUDA primary has CUDA candidate identity, runtime stamp and device', async () => {
+    const cuda = fakeBackend(() => ({}))
+    const { s } = await run(() => ({}), { ladder: [2048] }, {
+      backend: () => cuda, backendKind: 'cuda', runtimeVersion: 'b11208', gpuDevice: 'CUDA0'
+    })
+    expect(cuda.calls.loads.length).toBeGreaterThan(0)
+    expect(cuda.calls.loads.every((l) => l.device === 'CUDA0')).toBe(true)
+    expect(s.runs.every((r) => r.versions?.runtime === 'cuda:b11208')).toBe(true)
+    const planned = planCandidates(machine, model, [{ kind: 'cuda', device: 'CUDA0', runtimeVersion: 'b11208' }], WORKLOADS.general_chat)
+    expect(planned.candidates.filter((c) => c.gpuLayers > 0).every((c) => c.backend === 'cuda' && c.device === 'CUDA0')).toBe(true)
+    expect(s.runs.some((r) => planned.candidates.some((c) => c.id === r.configId && c.backend === 'cuda'))).toBe(true)
+  })
+
+  it('O6: quality measured on one backend is not attributed as measured on the other', async () => {
+    const vk = fakeBackend(() => ({ decode: 100 })), hip = fakeBackend(() => ({ decode: 80 }))
+    const backends = [
+      { kind: 'vulkan' as const, backend: () => vk, runtimeVersion: 'b1', exePath: 'vulkan.exe', device: 'Vulkan0' },
+      { kind: 'hip' as const, backend: () => hip, runtimeVersion: 'b1', exePath: 'hip.exe', device: 'ROCm0' }
+    ]
+    const { s, rec } = await run(() => ({}), { ladder: [2048], runQuality: true, qualityMode: 'quick' }, { backends })
+    const source = s.quality[0]?.configId
+    expect(source).toBeTruthy()
+    const other = rec?.ranked.find((r) => r.configId !== source && r.configId.replace(/\|hip$/, '') === source?.replace(/\|hip$/, ''))
+    expect(other).toBeTruthy()
+    expect(other!.breakdown.find((x) => x.component === 'quality')?.input.kind).not.toBe('measured')
+  })
+
+  it('O7: an unknown shared-memory sample breaks a consecutive pressure streak', async () => {
+    const high = { ...sample(2048), procVramSharedBytes: 3 * GiB }
+    const gap = { ...high, ts: high.ts + 1, procVramSharedBytes: null } as TelemetrySample
+    const after = { ...high, ts: high.ts + 2 }
+    const sampler = () => ({ samples: [high, gap, after], unavailable: {}, stop: () => [high, gap, after] })
+    const broken = await run(() => ({ warmupBlocks: true }), { ladder: [2048] }, { startSampler: sampler, config: { guardPollMs: 5 } })
+    expect(broken.s.runs[0].failureKind).not.toBe('guard_abort')
+    const adjacent = await run(() => ({ warmupBlocks: true }), { ladder: [2048] }, { startSampler: () => ({ samples: [high, after], unavailable: {}, stop: () => [high, after] }), config: { guardPollMs: 5 } })
+    expect(adjacent.s.runs[0].failureKind).toBe('guard_abort')
+  })
+
+  it('O8: declared host-pinned shared memory during a slow load does not cause a false GPU-pressure abort', async () => {
+    const pinned = { ...sample(2048), procVramSharedBytes: 3 * GiB }
+    const sampler = () => ({ samples: [pinned, { ...pinned, ts: pinned.ts + 1 }], unavailable: {}, stop: () => [pinned, { ...pinned, ts: pinned.ts + 1 }] })
+    const { s } = await run(() => ({ load: 'slow', hostMiB: 3072 }), { ladder: [2048] }, { startSampler: sampler, config: { guardPollMs: 5 } })
+    expect(s.runs[0].failureKind).not.toBe('guard_abort')
+    expect(s.runs[0].peakSharedGpuBytes.value).toBe(0)
   })
 
   it('backend axis: same configs per installed backend; each runs on its own build, device and runtime stamp', async () => {
