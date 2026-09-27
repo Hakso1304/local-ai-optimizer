@@ -1,13 +1,16 @@
 :root { color-scheme: dark; --bg: #0f1115; --panel: #161a21; --line: #262c36; --fg: #d6dbe3; --muted: #7d8694; --ok: #3fb950; --bad: #f85149; --warn: #d29922; }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.45 Consolas, 'Cascadia Mono', monospace; }
+/* Text grows with the window (13 px at 1280 wide → 16 px cap at ~2560) so high resolutions stay readable. */
+body { margin: 0; background: var(--bg); color: var(--fg); font: clamp(13px, 0.35vw + 8.5px, 16px)/1.45 Consolas, 'Cascadia Mono', monospace; }
 .app { display: flex; height: 100vh; }
-nav { width: 180px; background: var(--panel); border-right: 1px solid var(--line); padding: 12px 8px; display: flex; flex-direction: column; gap: 2px; }
+nav { width: 180px; flex-shrink: 0; background: var(--panel); border-right: 1px solid var(--line); padding: 12px 8px; display: flex; flex-direction: column; gap: 2px; }
 .brand { font-weight: bold; letter-spacing: .08em; padding: 4px 8px 14px; color: var(--muted); font-size: 11px; }
 nav button { text-align: left; background: none; border: 0; color: var(--fg); padding: 6px 8px; border-radius: 3px; cursor: pointer; font: inherit; }
 nav button.active, nav button:hover { background: var(--line); }
-main { flex: 1; overflow: auto; padding: 16px 20px; }
-.bar { display: flex; align-items: center; gap: 12px; }
+/* min-width: 0 lets the flex child shrink; wide tables then scroll inside main instead of pushing the layout. */
+main { flex: 1; min-width: 0; overflow: auto; padding: 16px 20px; }
+main > section { max-width: 2000px; margin: 0 auto; }
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; } .bar > label { white-space: nowrap; }
 h1 { font-size: 16px; margin: 0; } h2 { font-size: 14px; margin: 20px 0 8px; }
 .bar button { background: var(--line); color: var(--fg); border: 1px solid #333b47; padding: 4px 10px; border-radius: 3px; font: inherit; cursor: pointer; }
 table { width: 100%; border-collapse: collapse; margin-top: 12px; }
@@ -25,8 +28,8 @@ h3 { font-size: 12px; margin: 8px 0 0; color: var(--muted); font-weight: normal;
 .demo { background: repeating-linear-gradient(45deg, #3a2a00, #3a2a00 10px, #2a1f00 10px, #2a1f00 20px); color: #ffd666; font-weight: bold; padding: 6px 10px; border: 1px solid var(--warn); border-radius: 3px; margin: 12px 0 8px; letter-spacing: .03em; }
 .pill { font-size: 10px; border: 1px solid var(--ok); color: var(--ok); border-radius: 8px; padding: 0 6px; margin-left: 6px; }
 .demo-pill { border-color: var(--warn); color: #ffd666; font-weight: bold; margin-left: 0; }
-.tiles { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 8px 12px; min-width: 150px; display: flex; flex-direction: column; gap: 2px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; margin-top: 12px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 8px 12px; min-width: 0; overflow-wrap: anywhere; display: flex; flex-direction: column; gap: 2px; }
 .prov { font-size: 9px; padding: 0 4px; border-radius: 2px; border: 1px solid; vertical-align: middle; letter-spacing: .04em; }
 .prov.measured { color: var(--ok); } .prov.declared { color: #58a6ff; } .prov.estimated { color: var(--warn); } .prov.unavailable { color: var(--muted); }
 .scorebar { display: grid; grid-template-columns: 80px 1fr 32px auto auto; gap: 8px; align-items: center; margin: 4px 0; }
@@ -37,8 +40,9 @@ h3 { font-size: 12px; margin: 8px 0 0; color: var(--muted); font-weight: normal;
 table.kv { width: auto; } table.kv td:first-child { color: var(--muted); padding-right: 24px; }
 tr.click { cursor: pointer; } tr.click:hover, tr.selected { background: var(--panel); }
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
-.charts { display: flex; flex-wrap: wrap; gap: 16px; } .charts > div { flex: 1 1 420px; }
-.chart { width: 100%; max-width: 620px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 16px; } .charts > div { min-width: 0; }
+/* Sized by the container: the SVG keeps its viewBox aspect ratio at any width. */
+.chart { width: 100%; height: auto; max-height: 440px; display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; }
 .chart .grid { stroke: var(--line); } .chart .tick { fill: var(--muted); font-size: 10px; } .chart .axis { fill: var(--muted); font-size: 11px; }
 .chart .band-label { font-size: 10px; }
 .cliff { margin: 8px 0; } .cliff ul { margin: 4px 0 0; padding-left: 20px; }
@@ -49,4 +53,4 @@ code { color: #d2a8ff; }
 .mini { margin-left: 8px; font: inherit; font-size: 11px; background: var(--line); color: var(--fg); border: 1px solid #333b47; border-radius: 3px; cursor: pointer; }
 .warn-pill { border-color: var(--warn); color: var(--warn); }
 .export .bar { flex-wrap: wrap; margin: 6px 0; }
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; align-items: start; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 16px; align-items: start; }

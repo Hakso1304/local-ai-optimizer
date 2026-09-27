@@ -267,6 +267,8 @@ async function startSession(req: SessionRequest, storedMachine?: SystemProfile, 
 function createWindow(): void {
   const win = new BrowserWindow({
     width: 1200,
+    minWidth: 960,
+    minHeight: 640,
     height: 800,
     backgroundColor: '#0f1115',
     title: 'Local AI Optimizer',
