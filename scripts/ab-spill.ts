@@ -17,6 +17,13 @@ import { writeFileSync } from 'node:fs'
 import { freemem } from 'node:os'
 import { createInterface } from 'node:readline'
 import { generateFiller } from '../src/core/quality'
+import { serverEnv } from '../src/core/runtimes/llamacpp'
+
+// Same safety bounds as the session harness: every request <= 5 min, host RAM watchdog 4 GiB (kills the server).
+const REQUEST_TIMEOUT_MS = 300_000
+const RAM_ABORT_BYTES = 4 * 1024 ** 3
+/** Any spelling (Windows env names are case-insensitive) — serverEnv() strips them all before every spawn. */
+const unifiedMemoryKeys = () => Object.keys(process.env).filter((k) => k.toUpperCase() === 'GGML_CUDA_ENABLE_UNIFIED_MEMORY')
 
 const EXE = 'vendor/llama.cpp/llama-server.exe'
 const HIP_EXE = 'vendor/llama.cpp-hip/llama-server.exe'
@@ -34,7 +41,7 @@ const baseArgv = (ctx: number, extra: string[] = [], dev = 'Vulkan0') => ['-m', 
 
 /** Backend's own view (llama-server --list-devices): total/free MiB per device. */
 function listDevices(exe = EXE): string[] {
-  try { return execFileSync(exe, ['--list-devices'], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).split(/\r?\n/).filter((l) => /MiB/.test(l)).map((l) => l.trim()) } catch (e) { return [`error: ${(e as Error).message.slice(0, 120)}`] }
+  try { return execFileSync(exe, ['--list-devices'], { encoding: 'utf8', windowsHide: true, env: serverEnv(), stdio: ['ignore', 'pipe', 'pipe'] }).split(/\r?\n/).filter((l) => /MiB/.test(l)).map((l) => l.trim()) } catch (e) { return [`error: ${(e as Error).message.slice(0, 120)}`] }
 }
 function vulkanHeaps(): string {
   try { return execFileSync('vulkaninfo', ['--summary'], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).split(/\r?\n/).filter((l) => /heap|MEMORY_HEAP|size\s*=/i.test(l)).slice(0, 30).join('\n') } catch { return 'vulkaninfo not available (skipped)' }
@@ -64,7 +71,7 @@ function sampler(pid: number) {
 }
 
 async function prompt(port: number, tokens: number): Promise<{ text: string; n: number }> {
-  const tok = async (s: string) => ((await (await fetch(`http://127.0.0.1:${port}/tokenize`, { method: 'POST', body: JSON.stringify({ content: s }) })).json()) as { tokens: unknown[] }).tokens.length
+  const tok = async (s: string) => ((await (await fetch(`http://127.0.0.1:${port}/tokenize`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), method: 'POST', body: JSON.stringify({ content: s }) })).json()) as { tokens: unknown[] }).tokens.length
   let est = tokens, text = '', n = 0
   for (let i = 0; i < 6; i++) {
     text = generateFiller(est, 65536).join(' ') + '\n\nContinue the story in the same style:\n'
@@ -80,8 +87,15 @@ async function launch(label: string, argv: string[], promptTokens: number | null
   const t0 = Date.now()
   const ramBefore = freemem()
   const devicesBefore = listDevices(exe)
-  const p = spawn(exe, [...argv, '--port', String(port), '--host', '127.0.0.1'], { windowsHide: true })
+  const p = spawn(exe, [...argv, '--port', String(port), '--host', '127.0.0.1'], { windowsHide: true, env: serverEnv() })
   let log = ''
+  let ramAbort: string | null = null
+  let ramMinSeen = freemem()
+  const watchdog = setInterval(() => {
+    ramMinSeen = Math.min(ramMinSeen, freemem())
+    if (!ramAbort && freemem() < RAM_ABORT_BYTES) { ramAbort = `RAM available ${g(freemem())} GiB < 4 GiB`; console.log(`RAM WATCHDOG: ${ramAbort}; killing server`); p.kill() }
+  }, 500)
+  let error: string | null = null
   p.stderr.on('data', (d) => { log += d.toString() })
   for (let i = 0; i < 480; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break } catch {} await sleep(250) }
   const loadMs = Date.now() - t0
@@ -89,18 +103,19 @@ async function launch(label: string, argv: string[], promptTokens: number | null
   await sleep(2500)
   const reps: { decodeTps: number | null; prefillTps: number | null; promptN: number | null; ttftMs: number | null }[] = []
   let promptN: number | null = null
-  if (promptTokens) {
+  if (promptTokens) try {
     const pr = await prompt(port, promptTokens)
     promptN = pr.n
     for (const phase of ['warmup', 'rep1', 'rep2']) {
       const r0 = Date.now()
-      const j = (await (await fetch(`http://127.0.0.1:${port}/completion`, { method: 'POST', body: JSON.stringify({ prompt: pr.text, n_predict: phase === 'warmup' ? 8 : 128, temperature: 0, seed: 1, cache_prompt: false }) })).json()) as { timings?: { prompt_n?: number; prompt_per_second?: number; predicted_per_second?: number; prompt_ms?: number } }
+      const j = (await (await fetch(`http://127.0.0.1:${port}/completion`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), method: 'POST', body: JSON.stringify({ prompt: pr.text, n_predict: phase === 'warmup' ? 8 : 128, temperature: 0, seed: 1, cache_prompt: false }) })).json()) as { timings?: { prompt_n?: number; prompt_per_second?: number; predicted_per_second?: number; prompt_ms?: number } }
       if (phase !== 'warmup') reps.push({ decodeTps: j.timings?.predicted_per_second ?? null, prefillTps: j.timings?.prompt_per_second ?? null, promptN: j.timings?.prompt_n ?? null, ttftMs: j.timings?.prompt_ms ?? Date.now() - r0 })
     }
-  }
+  } catch (e) { error = (e as Error).message }
   await sleep(1500)
   s.stop()
-  const ramMin = freemem()
+  clearInterval(watchdog)
+  const ramMin = Math.min(ramMinSeen, freemem())
   p.kill()
   for (let i = 0; i < 40 && servers() > 0; i++) await sleep(250)
   const rows = s.rows
@@ -110,7 +125,7 @@ async function launch(label: string, argv: string[], promptTokens: number | null
   const peak = (f: (r: Row) => number | null) => { const v = rows.map(f).filter((x): x is number => x != null); return v.length ? Math.max(...v) : null }
   const bufs = (kind: string) => [...log.matchAll(/(\S+) (model|KV|compute) buffer size\s*=\s*([\d.]+) MiB/g)].filter((m) => m[2] === kind).map((m) => ({ dev: m[1], mib: Number(m[3]) }))
   const res = {
-    label, exe, argv: argv.join(' '), loadMs, promptTokensRequested: promptTokens, promptTokensActual: promptN, reps,
+    label, exe, argv: argv.join(' '), error, ramAbort, loadMs, promptTokensRequested: promptTokens, promptTokensActual: promptN, reps,
     samples: rows.length, adapterLuid: luid, adapterTotalGiB: g(ADAPTER_TOTAL),
     peakPidDedicatedGiB: g(peak((r) => r.pidDed)), peakPidSharedGiB: g(peak((r) => r.pidShr)), pidSharedBaselineGiB: g(base),
     peakAdapterDedicatedGiB: g(peak((r) => (luid ? r.adapterDed[luid] ?? null : null))),
@@ -119,7 +134,7 @@ async function launch(label: string, argv: string[], promptTokens: number | null
     layersPerDevice: [...log.matchAll(/layer\s+\d+ assigned to device (\S+?),?\s/g)].reduce<Record<string, number>>((a, m) => ((a[m[1]] = (a[m[1]] ?? 0) + 1), a), {}),
     offloadLines: log.split(/\r?\n/).filter((l) => /offload(ing|ed) \d+/.test(l)).map((l) => l.trim()),
     largestBufferMiB: Math.max(0, ...[...bufs('model'), ...bufs('KV'), ...bufs('compute')].map((b) => b.mib)),
-    listDevicesBefore: devicesBefore, ramAvailBeforeGiB: g(ramBefore), ramAvailAfterGiB: g(ramMin)
+    listDevicesBefore: devicesBefore, ramAvailBeforeGiB: g(ramBefore), ramAvailMinGiB: g(ramMin)
   }
   console.log(JSON.stringify(res))
   return res
@@ -133,7 +148,7 @@ async function idle(ms: number) {
 
 async function hipAb() {
   // Unified memory would let HIP page to host RAM silently — the ceiling comparison would be meaningless.
-  if (process.env.GGML_CUDA_ENABLE_UNIFIED_MEMORY) throw new Error('GGML_CUDA_ENABLE_UNIFIED_MEMORY is set; unset it first')
+  if (unifiedMemoryKeys().length) throw new Error(`${unifiedMemoryKeys().join(', ')} set in this environment; unset it first (serverEnv strips it from the server, but the A/B must not depend on that)`)
   const hipDevices = listDevices(HIP_EXE)
   console.log(`HIP --list-devices: ${JSON.stringify(hipDevices)}`)
   const results = []
@@ -143,7 +158,7 @@ async function hipAb() {
       results.push(await launch(`${dev} f16 ${ctx / 1024}K, ${Math.round(0.558 * ctx)}-token prompt`, baseArgv(ctx, [], dev), Math.round(0.558 * ctx), exe))
     }
   }
-  writeFileSync(out, JSON.stringify({ when: new Date().toISOString(), model: MODEL, hipDevices, vulkanDevices: listDevices(), unifiedMemoryEnv: process.env.GGML_CUDA_ENABLE_UNIFIED_MEMORY ?? null, results }, null, 1))
+  writeFileSync(out, JSON.stringify({ when: new Date().toISOString(), model: MODEL, hipDevices, vulkanDevices: listDevices(), unifiedMemoryEnvKeys: unifiedMemoryKeys(), serverEnvStripsUnifiedMemory: true, results }, null, 1))
   console.log(`wrote ${out}; leftover llama-server ${servers()}`)
 }
 
@@ -163,6 +178,7 @@ async function igpuAb() {
 }
 
 void (async () => {
+  if (unifiedMemoryKeys().length) throw new Error(`${unifiedMemoryKeys().join(', ')} set in this environment; unset it first`)
   if (HIP) return hipAb()
   if (IGPU) return igpuAb()
   const results = []
