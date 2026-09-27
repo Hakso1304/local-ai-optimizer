@@ -103,7 +103,7 @@ export function componentScores(
   const cliff = detectCliffs(input.runs, val(machine.vramBytes, true), cfg.cliff)
   // Score at the workload's target (comparable across candidates); recommend the largest ctx the latency budget allows.
   const ref = referenceStep(input.runs, cliff, profile.targetContext)
-  const rec = referenceStep(input.runs, cliff, profile.targetContext, { maxContext: profile.maxContext, latencyToleranceMs: profile.latencyToleranceMs })
+  const rec = referenceStep(input.runs, cliff, profile.targetContext, { maxContext: profile.maxContext, latencyToleranceMs: profile.latencyAdvisory ? undefined : profile.latencyToleranceMs })
   const none = zero(NA('no usable context step'))
 
   const fromRef = (m: Metric | undefined, f: (v: number) => number, what: string): ComponentScore => {

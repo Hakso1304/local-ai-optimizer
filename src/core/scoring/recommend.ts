@@ -4,7 +4,7 @@ import type {
 } from '../../shared/bench-types'
 import { componentScores } from './components'
 import { fmtCtx, val } from './cliff'
-import { DEFAULT_SCORING_CONFIG, type ScoringConfig } from './workloads'
+import { DEFAULT_SCORING_CONFIG, effectiveProfile, withProfile, type ScoringConfig } from './workloads'
 
 const LABEL: Record<ComponentId, string> = {
   quality: 'quality', genSpeed: 'generation speed', prefillSpeed: 'prefill speed', latency: 'latency',
@@ -35,6 +35,17 @@ function limitText(input: CandidateInput, cliff: CliffReport, ceiling: number): 
   return `largest step tested`
 }
 
+/** One word for what capped the practical ceiling (for the required-context gate). */
+function limitWord(input: CandidateInput, cliff: CliffReport, ceiling: number | null): string {
+  if (cliff.steps.some((s) => s.reasons.some((r) => r.code === 'shared_spill' || r.code === 'vram_spill'))) return 'spill'
+  if (cliff.limitedBy === 'cliff') return 'cliff'
+  if (cliff.limitedBy === 'failure') return 'failure'
+  const next = input.config.skippedSteps.find((s) => s.ctx > (ceiling ?? 0))
+  if (next && /VRAM|RAM/.test(next.reason)) return 'memory'
+  if (next) return 'declared context'
+  return 'largest step tested'
+}
+
 export function recommend(
   inputs: CandidateInput[],
   machine: MachineLimits,
@@ -63,7 +74,11 @@ export function recommend(
     const total = breakdown.reduce((s, r) => s + r.contribution, 0)
     const gateFailures: string[] = []
     const ceil = val(cs.cliff.practicalContextCeiling)
-    if (ceil === null || ceil < profile.targetContext * cfg.gates.minCtxFraction) {
+    if (profile.requiredContext) {
+      if (ceil === null || ceil < profile.requiredContext) {
+        gateFailures.push(`practical context ${ceil === null ? 'none' : fmtCtx(ceil)} < required ${fmtCtx(profile.requiredContext)} (limited by ${limitWord(input, cs.cliff, ceil)})`)
+      }
+    } else if (ceil === null || ceil < profile.targetContext * cfg.gates.minCtxFraction) {
       gateFailures.push(`practical context ${ceil === null ? 'none' : fmtCtx(ceil)} is below ${fmtCtx(profile.targetContext * cfg.gates.minCtxFraction)}`)
     }
     if (cs.components.stability.score < cfg.gates.minStability) gateFailures.push(`stability ${cs.components.stability.score.toFixed(0)} < ${cfg.gates.minStability}`)
@@ -75,7 +90,7 @@ export function recommend(
       gateFailures.push(`decode ${refDecode.toFixed(1)} t/s at ${fmtCtx(ref!.ctx)} is below the ${profile.minDecodeTps} t/s minimum`)
     }
     const refTtft = val(ref?.ttftMs, true)
-    if (refTtft !== null && refTtft > profile.latencyToleranceMs) {
+    if (refTtft !== null && refTtft > profile.latencyToleranceMs && !profile.latencyAdvisory) {
       gateFailures.push(`TTFT ${(refTtft / 1000).toFixed(1)} s at ${fmtCtx(ref!.ctx)} exceeds the ${(profile.latencyToleranceMs / 1000).toFixed(0)} s tolerance`)
     }
     scored.push({
@@ -114,7 +129,15 @@ export function recommend(
     lowestMemory: pick((a, b) => cmp(a.vram, b.vram, false) || cmp(a.ram, b.ram, false))
   }
 
-  const top = eligible[0]
+  // Explicit required context: never "no recommendation" just because everything is slow — fall back to the fastest
+  // config that reaches it and fails only speed gates.
+  let top = eligible[0]
+  let fallback = false
+  if (!top && profile.requiredContext) {
+    top = scored.filter((s) => (val(s.cs.cliff.practicalContextCeiling) ?? 0) >= profile.requiredContext! && s.score.gateFailures.every((g) => /decode|TTFT/.test(g)))
+      .sort((a, b) => cmp(a.decode, b.decode, true) || byId(a, b))[0]
+    fallback = !!top
+  }
   const reasons: string[] = []
   if (!inputs.length) reasons.push('No recommendation: no candidates were benchmarked')
   else if (!scored.length) {
@@ -124,7 +147,7 @@ export function recommend(
       for (const why of [...new Set(all.map((r) => r.reason).filter((x): x is string => !!x))]) reasons.push(why)
     } else reasons.push('No recommendation: no successful runs')
   }
-  else if (!top) {
+  else if (!top || fallback) {
     reasons.push(`No recommendation: no candidate meets the ${profile.label} requirements`)
     for (const s of scored) reasons.push(`${s.score.configId}: ${s.score.gateFailures.join('; ')}`)
   }
@@ -140,8 +163,22 @@ export function recommend(
     const { cliff, components } = top.cs
     const declared = top.input.model.ctxTrain
     const declaredContext: Metric = declared ? { value: declared, kind: 'declared', source: 'GGUF context_length' } : { value: null, kind: 'unavailable', reason: 'GGUF has no context_length' }
-    best = { configId: top.score.configId, score: top.score, practicalContext: cliff.practicalContextCeiling, declaredContext, cliff }
-    reasons.push(`Best for ${profile.label}: ${top.score.configId} scores ${top.score.total.toFixed(1)}/100`)
+    best = { configId: top.score.configId, score: top.score, practicalContext: cliff.practicalContextCeiling, declaredContext, cliff, ...(fallback ? { fallback: 'meets required context; below preferred speed' as const } : {}) }
+    reasons.push(fallback
+      ? `Meets required context; below preferred speed: ${top.score.configId} (fastest config reaching ${fmtCtx(profile.requiredContext!)}; ${top.score.gateFailures.join('; ')})`
+      : `Best for ${profile.label}: ${top.score.configId} scores ${top.score.total.toFixed(1)}/100`)
+    // Quality over speed: say how much slower the pick is than the fastest eligible alternative.
+    const fast = scored.find((s) => s.input.config.id === alternatives.fastest)
+    if (fast && fast !== top && fast.decode && top.decode && fast.decode / top.decode >= 1.5) {
+      reasons.push(`Chosen for quality over speed: decode ${top.decode.toFixed(1)} t/s (${(fast.decode / top.decode).toFixed(1)}× slower than ${fast.input.config.id})`)
+    }
+    if (profile.requiredContext) {
+      const at = top.input.runs.find((r) => r.ctx === profile.requiredContext && r.status !== 'fail')
+      const t = val(at?.ttftMs, true)
+      const over = t !== null && t > profile.latencyToleranceMs
+      reasons.push(`Required context ${fmtCtx(profile.requiredContext)}: TTFT ${t === null ? 'not measured' : `${(t / 1000).toFixed(1)} s`} at ${fmtCtx(profile.requiredContext)}` +
+        (over ? ` (above the profile's ${(profile.latencyToleranceMs / 1000).toFixed(0)} s tolerance; accepted because you required ${fmtCtx(profile.requiredContext)})` : ''))
+    }
     if (scored.length === 1) reasons.push('Only one candidate; not compared')
     const leaders = [...top.score.breakdown].sort((a, b) => b.contribution - a.contribution || (a.component < b.component ? -1 : 1)).slice(0, 2)
     reasons.push(`Largest contributions: ${leaders.map((r) => `${LABEL[r.component]} ${r.contribution.toFixed(1)}`).join(', ')}`)
@@ -173,3 +210,16 @@ export function recommend(
 
   return { workload, scoringVersion: cfg.version, best, alternatives, ranked: scored.map((s) => s.score), excluded, reasons }
 }
+
+/** Recommendation for any workload from stored session data — no re-run. Same scoring as the runner (effective
+ *  profile from requiredContext / minDecodeTps), so a card for another workload can be computed at read time. */
+export function recommendForWorkload(
+  data: { candidates: CandidateInput[]; machine: MachineLimits },
+  workload: WorkloadId,
+  request: { requiredContext?: number | null; minDecodeTps?: number | null } = {},
+  unplanned: { model: string; reason: string }[] = [],
+  cfg: ScoringConfig = DEFAULT_SCORING_CONFIG
+): Recommendation {
+  return recommend(data.candidates, data.machine, workload, withProfile(cfg, effectiveProfile(cfg.profiles[workload], request)), unplanned)
+}
+

@@ -45,7 +45,7 @@ describe('calibration: 8B Q4_K_M full offload 2K→64K', () => {
   // full-prompt TTFT fits its tolerance, capped at its maxContext.
   const expected: Record<WorkloadId, number> = {
     fast_assistant: 4096, general_chat: 16384, reasoning: 16384, max_quality: 16384,
-    coding: 32768, long_context_coding: 65536, document_analysis: 65536
+    coding: 32768, long_context_coding: 65536, document_analysis: 65536, large_coding: 65536
   }
   for (const [w, ctx] of Object.entries(expected) as [WorkloadId, number][]) {
     it(`${w}: recommends full offload at ${ctx / 1024}K`, () => {
@@ -108,11 +108,18 @@ describe('calibration: Qwen2.5-14B Q4_K_M real spill cliff at 32K (per-PID telem
     expect(r.steps.at(-1)!.verdict).toBe('fail')
   })
 
-  it('Document Analysis: 14B at 16K beats 8B when its measured quality is higher', () => {
+  it('Reasoning: 14B at 16K beats 8B when its measured quality is higher', () => {
     const inp = both().map((c) => ({ ...c, quality: passAll(c.model.id, c.model.id === q14.id) }))
-    const rec = recommend(inp, M, 'document_analysis')
+    const rec = recommend(inp, M, 'reasoning')
     expect(rec.best?.configId).toBe(FULL14)
     expect(rec.best?.score.recommendedCtx).toBe(16384) // the spilled 32K step is never recommended
+  })
+
+  it('Document Analysis now targets 64K: the 14B (practical 16K) is below the 32K floor, the 8B wins', () => {
+    const inp = both().map((c) => ({ ...c, quality: passAll(c.model.id, c.model.id === q14.id) }))
+    const rec = recommend(inp, M, 'document_analysis')
+    expect(rec.best?.configId).toBe(FULL)
+    expect(rec.ranked.find((s) => s.configId === FULL14)!.gateFailures.join(' ')).toMatch(/practical context 16K is below 32K/)
   })
 
   it('Document Analysis on priors only: 8B wins (64K ceiling + faster prefill outweigh the 14B quality prior)', () => {

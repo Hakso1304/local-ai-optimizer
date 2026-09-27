@@ -151,12 +151,20 @@ Total = Σ wᵢ · scoreᵢ. Breakdown rows `{component, input: Metric, score, w
 | Profile | Q | G | P | L | M | S | C | targetCtx | maxContext | genTarget | ppTarget | TTFT tol | minQ | quality categories |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | general_chat | .30 | .25 | .05 | .15 | .10 | .10 | .05 | 8K | 16K | 60 | 1000 | 8 s | 40 | instr, reason, struct, extract |
-| coding | .40 | .20 | .10 | .10 | .05 | .10 | .05 | 16K | 32K | 60 | 1500 | 15 s | 50 | coding, instr, struct |
-| long_context_coding | .30 | .10 | .20 | .05 | .05 | .10 | .20 | 32K | 128K | 40 | 2000 | 40 s | 50 | coding, context |
+| coding | .40 | .20 | .10 | .10 | .05 | .10 | .05 | 16K | 64K | 60 | 1500 | 15 s | 50 | coding, instr, struct |
+| long_context_coding | .30 | .10 | .20 | .05 | .05 | .10 | .20 | **64K** | 128K | 40 | 2000 | **90 s** | 50 | coding, context |
 | reasoning | .45 | .20 | 0 | .05 | .05 | .15 | .10 | 8K | 16K | 50 | 1000 | 10 s | 55 | reason, instr |
-| document_analysis | .30 | .05 | .25 | .05 | .05 | .10 | .20 | 32K | 128K | 30 | 2000 | 60 s | 45 | extract, context, struct |
+| document_analysis | .30 | .05 | .25 | .05 | .05 | .10 | .20 | **64K** | 128K | 30 | 2000 | **120 s** | 45 | extract, context, struct |
 | fast_assistant | .15 | .35 | .10 | .25 | .05 | .10 | 0 | 4K | 8K | 100 | 1000 | 2 s | 30 | instr, extract |
 | max_quality | .70 | .05 | 0 | 0 | .05 | .15 | .05 | 8K | 16K | 15 | 500 | 20 s | 0 | all |
+| **large_coding** | .40 | .10 | .10 | 0 | .05 | .15 | .20 | 64K | 128K | 30 | 1000 | 180 s (advisory) | 50 | coding, instr, struct, context |
+
+**Long-context tolerances:** a full 64K prefill costs ~21–32 s on the 8B, but it is a one-off per session (follow-ups reuse the prompt cache), hence 90 s / 120 s.
+
+**`large_coding`** ("bigger model, slower is fine"):
+- Latency is advisory: TTFT is reported but never gates, and its weight is 0. The decode gate is 8 t/s.
+- The UI applies heavyMode + requiredContext 64K when this profile is selected.
+- Calibrated (`required.test.ts`): a 27B partial offload at 12 t/s with measured Q 100 beats the 8B at ~100 t/s with Q 60 when both reach 64K. Plain Coding still picks the 8B.
 
 Calibrated on the 8B full offload (TTFT 0.5 s @ 2K, 1.1 s @ 4K, 2.2 s @ 8K, 4.9 s @ 16K, 12.0 s @ 32K, 32.4 s @ 64K). The recommended contexts are asserted in `calibration.test.ts`: fast_assistant 4K; general_chat, reasoning and max_quality 16K; coding 32K; long_context_coding and document_analysis 64K. genTarget values are near full-offload speed on this GPU class (52–109 t/s), so partial offload is clearly behind. These are calibrated on one machine and one model, so they are still [A] elsewhere.
 
@@ -209,6 +217,16 @@ Estimates are `kind:'estimated'`, prune only, and never rank.
   - fa = on.
   - VRAM total unavailable → no VRAM pruning (with a note).
   - SWA/hybrid/recurrent archs prune on weights only.
+
+### Required context (`SessionRequest.requiredContext`: 32K / 64K / 128K; Auto = the workload default)
+- **Effective profile** (`effectiveProfile`): targetContext = required, maxContext ≥ required, latency **advisory**. The runner, the quality ctx and `recommend()` all use it; `recommendForWorkload(data, workload, request)` recomputes any workload from stored data.
+- **Ladder:** every candidate runs all rungs ≤ min(required, declared) — the UI ladder cap is ignored, nothing above is run — and the "2 consecutive degraded" stop is suspended below the required ctx.
+- **Gate:** practical ceiling ≥ required, else "practical context 64K < required 128K (limited by spill|memory|cliff|failure|declared context)". TTFT above the tolerance does not gate; the reason says "(above the profile's N s tolerance; accepted because you required X)".
+- **User decode gate:** `SessionRequest.minDecodeTps` replaces the profile gate when set.
+- **Fallback:** if nothing passes but some config reaches the required ctx and fails only speed gates, the fastest such config is returned with `best.fallback = 'meets required context; below preferred speed'`.
+- **Long-context variants:** when f16 full offload cannot reach the target ctx within VRAM, a KV q8_0 variant and a KV-in-RAM (`-nkvo`) full-offload variant are added, each noted. For example, the 8B on 16 GB at 128K: q8_0 plans 128K; the `-nkvo` variant is RAM-limited at 128K (16 GiB KV). Partial offload stays heavy-mode only.
+- **CR-04-long:** when required ≥ 32K, one extra needle test at 50 % depth of a ~0.75 × required prompt runs on a config that reached the required ctx (category context). Otherwise it is skipped, with a reason in the recommendation.
+- **Quality over speed:** when the pick decodes ≥ 1.5× slower than the fastest eligible alternative, the reasons say "Chosen for quality over speed: decode X t/s (Y× slower than …)".
 
 ### Heavy-model mode (summary)
 - **What it is:** opt-in (`SessionRequest.heavyMode`, the "Include heavy models" checkbox). A model whose full GPU offload does not fit gets up to 4 partial-offload probes (§9, all `expectDegraded` with a reason) instead of being rejected.

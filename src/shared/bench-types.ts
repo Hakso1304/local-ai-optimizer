@@ -17,7 +17,7 @@ export interface Metric<T = number> {
 
 export type WorkloadId =
   | 'general_chat' | 'coding' | 'long_context_coding' | 'reasoning'
-  | 'document_analysis' | 'fast_assistant' | 'max_quality'
+  | 'document_analysis' | 'fast_assistant' | 'max_quality' | 'large_coding'
 
 export type ComponentId = 'quality' | 'genSpeed' | 'prefillSpeed' | 'latency' | 'memory' | 'stability' | 'context'
 
@@ -38,6 +38,10 @@ export interface WorkloadProfile {
   minQuality: number
   /** Decode gate (t/s at the scoring step): below this the workload is unusable, whatever else scores. */
   minDecodeTps?: number
+  /** Set from SessionRequest.requiredContext: eligibility needs practical context ≥ this. */
+  requiredContext?: number
+  /** TTFT is reported and scored but never gates (large-scale work, or an explicit required context). */
+  latencyAdvisory?: boolean
   /** Quality-suite categories that count for this profile. */
   promptSetIds: QualityCategory[]
 }
@@ -255,6 +259,8 @@ export interface Recommendation {
   scoringVersion: string
   best: {
     configId: string
+    /** Set when no candidate passed every gate but this one reaches the required context (fastest such). */
+    fallback?: 'meets required context; below preferred speed'
     score: WorkloadScore
     practicalContext: Metric
     declaredContext: Metric

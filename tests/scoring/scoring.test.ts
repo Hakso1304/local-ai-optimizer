@@ -14,8 +14,8 @@ const finiteEverywhere = (r: Recommendation) =>
   r.ranked.every((s) => Number.isFinite(s.total) && s.breakdown.every((b) => Number.isFinite(b.score) && Number.isFinite(b.contribution)))
 
 describe('workload profiles', () => {
-  it('has 7 profiles whose weights are non-negative and sum to 1 (X6)', () => {
-    expect(Object.keys(WORKLOADS)).toHaveLength(7)
+  it('has 8 profiles whose weights are non-negative and sum to 1 (X6)', () => {
+    expect(Object.keys(WORKLOADS)).toHaveLength(8)
     for (const p of Object.values(WORKLOADS)) {
       const ws = Object.values(p.weights)
       expect(ws.every((w) => w >= 0)).toBe(true)
@@ -87,7 +87,7 @@ describe('componentScores', () => {
 
   it('uses the practical ceiling, not the declared context (X9)', () => {
     const [c] = inputs(load('sweep-cliff-16k-32k.json'))
-    const r = recommend([c], machine(), 'long_context_coding')
+    const r = recommend([c], machine(), 'coding') // coding targets 16K; long-context coding now needs ≥ 32K
     expect(r.best?.practicalContext).toMatchObject({ value: 16384, kind: 'measured' })
     expect(r.best?.declaredContext).toMatchObject({ value: 131072, kind: 'declared' })
     expect(r.best?.score.referenceCtx).toBe(16384)

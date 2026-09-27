@@ -257,7 +257,20 @@ export function generateCandidates(
   if (hasGpu) {
     const full = build(model.layers, 'f16')
     add(full)
-    if (full && workload.targetContext >= rules.longContextMin && maxCtx >= rules.longContextMin) add(build(model.layers, 'q8_0'))
+    // Long context: when the f16 full offload can't reach the target ctx within VRAM, add KV q8_0 (≈ half the KV) and
+    // KV-in-RAM (-nkvo) full-offload variants, each noted. Partial offload stays heavy-mode only.
+    const tctx = ladder.filter((c) => c <= workload.targetContext).at(-1)
+    const shortOfTarget = !!full && tctx !== undefined && !full.ctxSteps.includes(tctx)
+    if (full && ((workload.targetContext >= rules.longContextMin && maxCtx >= rules.longContextMin) || shortOfTarget)) {
+      const q8 = build(model.layers, 'q8_0')
+      q8?.notes.push('long-context variant: KV cache q8_0 (-ctk/-ctv q8_0, about half the KV size)')
+      add(q8)
+    }
+    if (full && shortOfTarget) {
+      const nk = build(model.layers, 'f16', { kvOnGpu: false })
+      nk?.notes.push(`long-context variant: KV cache in system RAM (-nkvo) so ${ctxK(tctx!)} fits; decode is slower`)
+      add(nk)
+    }
     if (!full && rules.heavyMode) heavyLadder()
     else if (!full) {
       const r = rejected.find((x) => x.id === idOf(model.layers, 'f16'))

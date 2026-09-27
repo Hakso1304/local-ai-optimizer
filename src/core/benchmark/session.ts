@@ -9,10 +9,10 @@ import type { ExitInfo } from '../runtimes/llamacpp'
 import type { LoadConfig, LoadResult, PromptRequest, PromptResult } from '../runtimes/types'
 import type { Field, TelemetrySample } from '../telemetry/sampler'
 import { peaks } from '../telemetry/sampler'
-import { buildQualityPrompts, defaultTestSet, evaluateAsync } from '../quality'
-import { detectCliffs, isUsable, val } from '../scoring/cliff'
+import { buildQualityPrompts, defaultTestSet, evaluateAsync, needlePrompt, type QualityTest } from '../quality'
+import { detectCliffs, fmtCtx, isUsable, val } from '../scoring/cliff'
 import { recommend } from '../scoring/recommend'
-import { DEFAULT_SCORING_CONFIG } from '../scoring/workloads'
+import { DEFAULT_SCORING_CONFIG, effectiveProfile, withProfile } from '../scoring/workloads'
 import { estimateMemory, generateCandidates, machineFromProfile, rulesForRequest } from './candidates'
 import { LADDER_PREDICT, PROMPT_VERSION, ladderPrompt } from './prompts'
 
@@ -147,7 +147,11 @@ const failKind = (exit: ExitInfo | null): FailureKind | null =>
 export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (e: SessionEvent) => void): Promise<Recommendation | null> {
   const cfg = { ...DEFAULT_SESSION_CONFIG, ...deps.config }
   const rules = rulesForRequest(req)
-  const profile = DEFAULT_SCORING_CONFIG.profiles[req.workload]
+  // requiredContext / minDecodeTps (explicit user choices) reshape the profile; the same object drives planning,
+  // quality ctx and recommend().
+  const profile = effectiveProfile(DEFAULT_SCORING_CONFIG.profiles[req.workload], req)
+  const scoringCfg = withProfile(DEFAULT_SCORING_CONFIG, profile)
+  const required = req.requiredContext ?? null
   const { storage, clock, signal } = deps
   const machine = machineFromProfile(deps.machine, deps.gpuDevice)
   const vramTotal = val(machine.vramBytes, true)
@@ -201,6 +205,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
 
     const inputs: CandidateInput[] = []
     const quality = new Map<string, QualityResult[]>() // modelId → results
+    const longNotes: string[] = []
     let gpuLost = false
     const paused = () => !signal?.aborted && !!deps.pauseSignal?.aborted
 
@@ -212,7 +217,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         continue
       }
       for (const s of cand.skippedSteps) log('info', `${cand.id} @${s.ctx}: skipped (${s.reason})`)
-      const steps = req.ladder ? cand.ctxSteps.filter((c) => req.ladder!.includes(c)) : cand.ctxSteps
+      // An explicit required context wins over the UI ladder cap: run every rung up to it, nothing above it.
+      const steps = required ? cand.ctxSteps.filter((c) => c <= required) : req.ladder ? cand.ctxSteps.filter((c) => req.ladder!.includes(c)) : cand.ctxSteps
       const runs: BenchmarkRunResult[] = []
       let spillBase = 0 // shared level of the config's first step when VRAM was not saturated (not spill)
       let degradedRun = 0
@@ -245,7 +251,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
           break
         }
         degradedRun = verdict === 'degraded' ? degradedRun + 1 : 0
-        if (degradedRun >= cfg.maxConsecutiveDegraded) { stopReason = `stopped after ${degradedRun} consecutive degraded steps`; break }
+        if (degradedRun >= cfg.maxConsecutiveDegraded && !(required && ctx < required)) { stopReason = `stopped after ${degradedRun} consecutive degraded steps`; break }
       }
 
       const anyUsable = runs.some(isUsable)
@@ -271,6 +277,18 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         const qctx = Math.min(profile.targetContext, val(cliff.practicalContextCeiling) ?? Math.max(...usable))
         const results = await runQuality(best.config, best.model, qctx)
         await backend.unloadModel().catch((e) => log('error', `unload failed: ${(e as Error).message}`))
+        // One long-context retrieval test at the required ctx (a full prefill of it), on a config that reached it.
+        if (required && required >= 32768 && results.length && !signal?.aborted && !paused()) {
+          const reach = inputs.filter((i) => i.model.id === modelId && (val(detectCliffs(i.runs, vramTotal).practicalContextCeiling) ?? 0) >= required)
+            .sort((a, b) => b.config.gpuLayers - a.config.gpuLayers || decode(b) - decode(a) || (a.config.id < b.config.id ? -1 : 1))[0]
+          if (reach) {
+            const r = await runLongNeedle(reach.config, reach.model, required)
+            await backend.unloadModel().catch(() => {})
+            if (r) results.push(r)
+          } else {
+            longNotes.push(`Long-context needle CR-04-long at ${fmtCtx(required)} skipped for ${best.model.name}: practical context ${fmtCtx(val(cliff.practicalContextCeiling) ?? 0)} < ${fmtCtx(required)}`)
+          }
+        }
         if (results.length) {
           quality.set(modelId, results)
           await storage.saveQuality(sessionId, modelId, best.config.id, qctx, results)
@@ -289,7 +307,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       return null
     }
     for (const i of inputs) i.quality = quality.get(i.model.id) ?? []
-    const rec = recommend(inputs, machine, req.workload, undefined, unplanned)
+    const rec = recommend(inputs, machine, req.workload, scoringCfg, unplanned)
+    rec.reasons.push(...longNotes)
     await storage.saveRecommendation(sessionId, rec)
     await storage.setSessionStatus(sessionId, 'done')
     send({ type: 'session:done', recommendation: rec })
@@ -513,6 +532,30 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     if (timedOut) return { status: 'timeout', kind: 'req_timeout', reason: error }
     if (signal?.aborted) return { status: 'cancelled', kind: null, reason: 'cancelled by user' }
     return { status: 'fail', kind: 'request_error', reason: error }
+  }
+
+  /** CR-04-long: needle at 50 % depth of a prompt filling ~0.75 × ctx. null when the load itself failed. */
+  async function runLongNeedle(cand: CandidateConfig, model: ModelMeta, ctx: number): Promise<QualityResult | null> {
+    send({ type: 'phase', configId: cand.id, ctx, phase: 'quality' })
+    const needle = 'OBSIDIAN-42'
+    const test: QualityTest = {
+      id: 'CR-04-long', category: 'context', weight: 1, maxTokens: 24, template: 'needle',
+      params: { depth: 0.5, seed: 4242, needle }, checker: { type: 'needle', needle }
+    } as QualityTest
+    try {
+      await backend.loadModel(loadCfg(cand, model, ctx))
+    } catch (e) {
+      log('error', `${cand.id}: long-context needle load at ${ctx} failed: ${(e as Error).message}`)
+      return null
+    }
+    const templateKwargs = model.supportsThinking ? { enable_thinking: false } : undefined
+    try {
+      const prompt = await backend.applyTemplate([{ role: 'user', content: needlePrompt(test.params!, Math.floor(ctx * 0.75)) }], templateKwargs ? { templateKwargs } : undefined)
+      const r = await backend.runPrompt({ prompt, maxTokens: test.maxTokens, temperature: 0, seed: 1, timeoutMs: cfg.promptTimeoutBaseMs + ctx * cfg.promptTimeoutPerCtxMs })
+      return r.error ? { testId: test.id, category: 'context', weight: 1, pass: false, score: 0, detail: `request failed: ${r.error}` } : await evaluate(test, r.text)
+    } catch (e) {
+      return { testId: test.id, category: 'context', weight: 1, pass: false, score: 0, detail: `request failed: ${(e as Error).message}` }
+    }
   }
 
   async function runQuality(cand: CandidateConfig, model: ModelMeta, ctx: number): Promise<QualityResult[]> {

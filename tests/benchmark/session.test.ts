@@ -52,7 +52,7 @@ function fakeBackend(script: (ctx: number, cfg: LoadConfig) => Step) {
       if (s.load === 'drift') throw new ConfigDriftError(`config_drift: requested -c ${ctx} but server serves n_ctx 16384`)
       if (s.load === 'slow') await new Promise((r) => setTimeout(r, 150)) // pid exists, /health not yet ok
       calls.order.push('load-resolved')
-      return { loadTimeMs: 900, declared: { layersOffloaded: 33, layersTotal: 33, modelBufferMiB: s.hostMiB ? { Vulkan0: 9000, CPU: s.hostMiB } : {}, kvBufferMiB: {}, computeBufferMiB: {} } }
+      return { loadTimeMs: 900, declared: { layersOffloaded: 33, layersTotal: 33, modelBufferMiB: (s.hostMiB ? { Vulkan0: 9000, CPU: s.hostMiB } : {}) as Record<string, number>, kvBufferMiB: {}, computeBufferMiB: {} } }
     },
     async unloadModel() { calls.unloads++; b.pid = undefined },
     async warmup() {
@@ -383,6 +383,25 @@ describe('runSession', () => {
     const free = await run(() => ({}), { ladder: [2048, 4096] }, { startSampler: (pid) => { const v = at(pid - 1000, 8 * GiB); return { samples: v, unavailable: {}, stop: () => v } } })
     expect(free.s.runs[1].peakSharedGpuBytes.value).toBe(0)
     expect(free.s.runs[1].peakSharedGpuBytes.source).toMatch(/dedicated below saturation: not spill/)
+  })
+
+  it('required context: the ladder runs every rung up to it (UI ladder cap ignored), nothing above; CR-04-long added', async () => {
+    const m = { ...model, ctxTrain: 131072 }
+    const r = await run(() => ({}), { workload: 'long_context_coding', requiredContext: 65536, ladder: [2048, 4096], runQuality: true }, { models: [m] })
+    const f16 = `${m.id}|ngl=all|kv=f16|t=8`
+    expect(r.s.runs.filter((x) => x.configId === f16).map((x) => x.ctx)).toEqual([2048, 4096, 8192, 16384, 32768, 65536])
+    expect(r.s.quality[0].results.map((x) => x.testId)).toContain('CR-04-long')
+    expect(r.backend.calls.loads.some((l) => l.contextSize === 131072)).toBe(false)
+  })
+
+  it('no CR-04-long without a required context ≥ 32K; skipped (with a reason) when no config reaches it', async () => {
+    const m = { ...model, ctxTrain: 131072 }
+    const plain = await run(() => ({}), { runQuality: true, ladder: [2048, 4096] }, { models: [m] })
+    expect(plain.s.quality[0].results.some((x) => x.testId === 'CR-04-long')).toBe(false)
+    // 128K: f16 over VRAM, q8_0 reaches it in the plan, but the fake run fails the 128K load → no config reaches 128K.
+    const r = await run((ctx) => (ctx === 131072 ? { load: 'oom' } : {}), { workload: 'long_context_coding', requiredContext: 131072, runQuality: true }, { models: [m] })
+    expect(r.s.quality[0].results.some((x) => x.testId === 'CR-04-long')).toBe(false)
+    expect(r.rec?.reasons.some((x) => /^Long-context needle CR-04-long at 128K skipped for .*: practical context 64K < 128K$/.test(x))).toBe(true)
   })
 
   it('emits events in order', async () => {
