@@ -322,9 +322,15 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
       // the sampling the runtime accepted — and the same identities as the baseline it is compared with.
       // A (w4l): every config, the baseline included — a contradiction always excludes it; absent proof excludes
       // only thinking configs (the baseline then stands, comparisons with it are not evaluable).
-      const base = (gq.gen.thinking ? (sortedGens.find((x) => !x.gen.thinking)?.results ?? input.quality) : []) as ContractRow[]
+      const off = sortedGens.find((x) => !x.gen.thinking)
+      const base = (gq.gen.thinking ? (off?.results ?? input.quality) : []) as ContractRow[]
       const chk = contractCheck(gq.results as ContractRow[], base, gq.gen, templateKwargsFor(input.model, gq.gen))
+      // A thinking result is comparable only to a baseline whose own requested
+      // sampling and template kwargs were verified on every row. The baseline
+      // may still stand alone with missing proof, but it cannot prove a delta.
+      const offCheck = gq.gen.thinking ? contractCheck(base, [], off?.gen ?? BASELINE_GEN, templateKwargsFor(input.model, off?.gen ?? BASELINE_GEN)) : null
       const missing = [...chk.errors, ...(gq.gen.thinking ? chk.missing : [])]
+      if (offCheck) missing.push(...offCheck.errors.map((x) => `baseline: ${x}`), ...offCheck.missing.map((x) => `baseline: ${x}`))
       const comparable = missing.length === 0
       const quarantined = !!s.cs.components.quality.quarantined
       return {
@@ -345,7 +351,9 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
     if (thinkingModel && genOptions.length) genChoices.push({ configId: input.config.id, chosen: gen?.gq.gen.id ?? null, steps: gsteps })
     const selected = gen ? { cs: gen.cs, breakdown: scoreOf(scored, machine, profile, cfg, gen.gq, scoringRung).breakdown, total: gen.total } : base
     // A (w4l): the rows the quality term comes from must not contradict the config they claim (sampling / kwargs).
-    const qConfig = gen?.gq.gen ?? BASELINE_GEN
+    // If every option was rejected, the baseline rows still carry the request's
+    // explicit off sampling contract (which may be T=1), not the default T=0.
+    const qConfig = gen?.gq.gen ?? sortedGens.find((x) => !x.gen.thinking)?.gen ?? BASELINE_GEN
     const qRows = (gen ? gen.gq.results : input.quality) as ContractRow[]
     const qErrors = contractCheck(qRows, [], qConfig, templateKwargsFor(input.model, qConfig)).errors
     // A contradictory baseline cannot remain a measured quality contribution merely
