@@ -4,6 +4,8 @@
 //   A2 fresh server after >=2 min idle GPU, prompt tokenized to 49,152 (0.75·ctx)
 //   B1 immediately after a q8_0 -c 131072 load of the same model, then the A1 launch
 // Identical argv: -c 65536 -ngl 999 -dev Vulkan0 -t 8 -b 2048 -ub 512 -fa on -fit off --parallel 1. Warmup + 2 reps.
+// --hip: Vulkan-vs-HIP ladder A/B instead — 8B f16 at 32K and 64K (0.56·ctx prompt), identical argv except the exe and
+//   -dev Vulkan0 / ROCm0; first reports whether the HIP build enumerates ROCm0 (stops there if not).
 // Telemetry: typeperf 1 s, per-PID dedicated/shared + adapter dedicated/shared (all LUIDs). At spill onset (per-PID shared
 // > first sample + 256 MiB) records per-PID dedicated, adapter dedicated, adapter free and adapter total.
 import { execFileSync, spawn } from 'node:child_process'
@@ -13,18 +15,20 @@ import { createInterface } from 'node:readline'
 import { generateFiller } from '../src/core/quality'
 
 const EXE = 'vendor/llama.cpp/llama-server.exe'
+const HIP_EXE = 'vendor/llama.cpp-hip/llama-server.exe'
+const HIP = process.argv.includes('--hip')
 const MODEL = 'D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf'
 const ADAPTER_TOTAL = 17095983104 // RX 9070 XT qwMemorySize (scanner, registry)
 const GiB = 1024 ** 3
 const MiB = 1024 ** 2
-const out = process.argv[2] ?? 'docs/ab-spill-2026-09-28.json'
+const out = process.argv.slice(2).find((a) => !a.startsWith('--')) ?? (HIP ? 'docs/ab-hip-2026-09-28.json' : 'docs/ab-spill-2026-09-28.json')
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const g = (b: number | null) => (b == null ? null : +(b / GiB).toFixed(2))
-const baseArgv = (ctx: number, extra: string[] = []) => ['-m', MODEL, '-c', String(ctx), '-ngl', '999', '-dev', 'Vulkan0', '-t', '8', '-b', '2048', '-ub', '512', '-fa', 'on', '-fit', 'off', '--parallel', '1', ...extra]
+const baseArgv = (ctx: number, extra: string[] = [], dev = 'Vulkan0') => ['-m', MODEL, '-c', String(ctx), '-ngl', '999', '-dev', dev, '-t', '8', '-b', '2048', '-ub', '512', '-fa', 'on', '-fit', 'off', '--parallel', '1', ...extra]
 
 /** Backend's own view (llama-server --list-devices): total/free MiB per device. */
-function listDevices(): string[] {
-  try { return execFileSync(EXE, ['--list-devices'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).split(/\r?\n/).filter((l) => /MiB/.test(l)).map((l) => l.trim()) } catch (e) { return [`error: ${(e as Error).message.slice(0, 120)}`] }
+function listDevices(exe = EXE): string[] {
+  try { return execFileSync(exe, ['--list-devices'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).split(/\r?\n/).filter((l) => /MiB/.test(l)).map((l) => l.trim()) } catch (e) { return [`error: ${(e as Error).message.slice(0, 120)}`] }
 }
 function vulkanHeaps(): string {
   try { return execFileSync('vulkaninfo', ['--summary'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).split(/\r?\n/).filter((l) => /heap|MEMORY_HEAP|size\s*=/i.test(l)).slice(0, 30).join('\n') } catch { return 'vulkaninfo not available (skipped)' }
@@ -65,12 +69,12 @@ async function prompt(port: number, tokens: number): Promise<{ text: string; n: 
   return { text, n }
 }
 
-async function launch(label: string, argv: string[], promptTokens: number | null) {
+async function launch(label: string, argv: string[], promptTokens: number | null, exe = EXE) {
   const port = 19100 + Math.floor(Math.random() * 500)
   const t0 = Date.now()
   const ramBefore = freemem()
-  const devicesBefore = listDevices()
-  const p = spawn(EXE, [...argv, '--port', String(port), '--host', '127.0.0.1'], { windowsHide: true })
+  const devicesBefore = listDevices(exe)
+  const p = spawn(exe, [...argv, '--port', String(port), '--host', '127.0.0.1'], { windowsHide: true })
   let log = ''
   p.stderr.on('data', (d) => { log += d.toString() })
   for (let i = 0; i < 480; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break } catch {} await sleep(250) }
@@ -100,7 +104,7 @@ async function launch(label: string, argv: string[], promptTokens: number | null
   const peak = (f: (r: Row) => number | null) => { const v = rows.map(f).filter((x): x is number => x != null); return v.length ? Math.max(...v) : null }
   const bufs = (kind: string) => [...log.matchAll(/(\S+) (model|KV|compute) buffer size\s*=\s*([\d.]+) MiB/g)].filter((m) => m[2] === kind).map((m) => ({ dev: m[1], mib: Number(m[3]) }))
   const res = {
-    label, argv: argv.join(' '), loadMs, promptTokensRequested: promptTokens, promptTokensActual: promptN, reps,
+    label, exe, argv: argv.join(' '), loadMs, promptTokensRequested: promptTokens, promptTokensActual: promptN, reps,
     samples: rows.length, adapterLuid: luid, adapterTotalGiB: g(ADAPTER_TOTAL),
     peakPidDedicatedGiB: g(peak((r) => r.pidDed)), peakPidSharedGiB: g(peak((r) => r.pidShr)), pidSharedBaselineGiB: g(base),
     peakAdapterDedicatedGiB: g(peak((r) => (luid ? r.adapterDed[luid] ?? null : null))),
@@ -119,7 +123,24 @@ async function idle(ms: number) {
   await sleep(ms)
 }
 
+async function hipAb() {
+  // Unified memory would let HIP page to host RAM silently — the ceiling comparison would be meaningless.
+  if (process.env.GGML_CUDA_ENABLE_UNIFIED_MEMORY) throw new Error('GGML_CUDA_ENABLE_UNIFIED_MEMORY is set; unset it first')
+  const hipDevices = listDevices(HIP_EXE)
+  console.log(`HIP --list-devices: ${JSON.stringify(hipDevices)}`)
+  const results = []
+  if (hipDevices.some((l) => /ROCm0/.test(l))) {
+    for (const ctx of [32768, 65536]) for (const [exe, dev] of [[EXE, 'Vulkan0'], [HIP_EXE, 'ROCm0']]) {
+      await idle(120_000)
+      results.push(await launch(`${dev} f16 ${ctx / 1024}K, ${Math.round(0.558 * ctx)}-token prompt`, baseArgv(ctx, [], dev), Math.round(0.558 * ctx), exe))
+    }
+  }
+  writeFileSync(out, JSON.stringify({ when: new Date().toISOString(), model: MODEL, hipDevices, vulkanDevices: listDevices(), unifiedMemoryEnv: process.env.GGML_CUDA_ENABLE_UNIFIED_MEMORY ?? null, results }, null, 1))
+  console.log(`wrote ${out}; leftover llama-server ${servers()}`)
+}
+
 void (async () => {
+  if (HIP) return hipAb()
   const results = []
   await idle(120_000)
   results.push(await launch('A1 fresh, 36,572-token prompt', baseArgv(65536), 36572))
