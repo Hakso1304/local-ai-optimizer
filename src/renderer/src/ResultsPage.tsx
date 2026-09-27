@@ -8,6 +8,7 @@ import { genLabel, type GenRow } from '../../core/benchmark/gen'
 import { ExportMenu } from './ExportMenu'
 import { DecisionTrace } from './DecisionTrace'
 import { Evidence } from './Evidence'
+import { ProofPills, notEvaluableReason } from './ProofPills'
 import { downloadFromAction } from './Suggestions'
 import { ENGINE_RULES, InterpretPanel, Reason, RulesVersion, insightsOf, rulesOf, type InsightActions } from './InterpretPanel'
 import type { BenchPreset } from './LargeCodingCard'
@@ -74,7 +75,7 @@ function GenTable({ d, chosen, tag }: { d: SessionDetail; chosen: string | null;
       <h2>Generation settings{tag}</h2>
       {models.map((c) => (
         <table key={c.model.id}>
-          <thead><tr><th>{c.model.name}</th><th>Quality</th><th>Answer t/s (effective)</th><th>Answer latency</th><th>Reasoning tokens</th><th>Samples</th></tr></thead>
+          <thead><tr><th>{c.model.name}</th><th>Quality</th><th>Answer t/s (effective)</th><th>Answer latency</th><th>Reasoning tokens</th><th>Samples</th><th title="I-8.0: was the requested setting demonstrably applied on every row?">Application proof</th></tr></thead>
           <tbody>
             {c.genQuality!.map((g) => (
               <tr key={g.gen.id}>
@@ -85,6 +86,8 @@ function GenTable({ d, chosen, tag }: { d: SessionDetail; chosen: string | null;
                 <td><M m={g.reasoningTokens} fmt={(v) => num(v, 0)} /></td>
                 <td>{g.samples}{g.stochastic && <span className="muted" title="T > 0: seeded, not bit-identical across builds/hardware"> (sampled)</span>}
                   <EvalPills rows={g.results as GenRow[]} /></td>
+                <td><ProofPills rows={g.results} />
+                  {(() => { const why = notEvaluableReason(insightsOf(d.recommendation), c.config.id, genLabel(g.gen)); return why ? <div className="muted">not evaluable: {why}</div> : null })()}</td>
               </tr>
             ))}
           </tbody>

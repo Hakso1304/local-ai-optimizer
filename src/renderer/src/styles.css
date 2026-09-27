@@ -66,3 +66,4 @@ tr.flash { background: #1f3350; transition: background .3s; }
 .not-evaluable { opacity: .55; }
 .provisional { border: 1px dashed var(--warn); border-radius: 3px; padding: 4px 10px; margin: 6px 0; }
 .trace { margin: 10px 0; } .trace summary { cursor: pointer; } .trace ol, .trace ul { margin: 4px 0 8px; padding-left: 20px; }
+.err-pill { border-color: var(--err, #e05555); color: var(--err, #e05555); }
