@@ -205,3 +205,6 @@
 
 ## Fable — 2026-09-28 03:48 local
 - RECHECK5 committed. P1 HIGH (per-key proof broadcast) → S1 producer/verdict fix + offline proveQualityRows tool; S2 negatives. Session 5 effort comparisons are NOT citable until rows are re-proven. Lane plan after session 5 export: S3 runs proveQualityRows(5) (needs the Qwen server; short) → then xhigh with the fixed producer → HIP check. STATUS/morning report updated.
+
+## Fable — 2026-09-28 03:50 local
+- Heartbeat: pushed 08c37bd (S2 tests). In flight: S1 P1–P3 + scripts/prove-quality-rows.ts; S2 P1–P3 negatives; Astra harness review (w4q); S3 session 5 (then HOLD → proof job → xhigh with -lv 4 → HIP check). Fable active.
