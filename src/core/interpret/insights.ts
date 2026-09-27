@@ -301,6 +301,21 @@ export function interpret(v: Verdicts): Insight[] {
         [num('decodeTps', c.decode, 'measured', ctx ?? undefined, cand.id)], { configId: cand.id })
     }
   }
+  // I-3.9: the same model/config on two backend builds (HIP id = Vulkan id + '|hip'): decode at the largest rung both
+  // measured, and each one's dedicated ceiling (max per-PID dedicated over usable rungs). Backend is a config axis.
+  const byId = new Map(everyone.map((c) => [c.input.config.id, c]))
+  for (const o of everyone.filter((c) => c.input.config.backend === 'hip')) {
+    const b = byId.get(o.input.config.id.replace(/\|hip$/, ''))
+    if (!b) continue
+    const ok = (c: typeof o) => c.input.runs.filter(isUsable)
+    const common = ok(o).map((r) => r.ctx).filter((x) => ok(b).some((r) => r.ctx === x))
+    if (!common.length) continue
+    const ctx = Math.max(...common)
+    const at = (c: typeof o) => ok(c).find((r) => r.ctx === ctx)!
+    const ceil = (c: typeof o) => { const xs = ok(c).map((r) => val(r.peakVramBytes)).filter((x): x is number => x !== null); return xs.length ? gib(Math.max(...xs)) : 'unavailable' }
+    add('speed.backend', { other: 'HIP', base: 'Vulkan', config: id(b), dOther: t1(val(at(o).decodeTps, true)!), dBase: t1(val(at(b).decodeTps, true)!), ctx: fmtCtx(ctx), cOther: ceil(o), cBase: ceil(b) },
+      [ev('decodeTps', at(o).decodeTps, ctx, id(o)), ev('decodeTps', at(b).decodeTps, ctx, id(b))], { configId: id(o) })
+  }
   for (const m of [...new Map(allInputs.map((c) => [c.model.id, c.model])).values()]) {
     if (m.expertCount && m.expertCount > 0) add('speed.moe-note', { model: m.name, used: m.expertUsedCount ?? '?', experts: m.expertCount }, [num('expertCount', m.expertCount, 'declared')])
   }

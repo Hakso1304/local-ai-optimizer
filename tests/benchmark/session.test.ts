@@ -528,6 +528,33 @@ describe('runSession', () => {
     expect(rec?.insights?.some((i) => i.ruleId === 'I-2.8') ?? false).toBe(false)
   })
 
+  it('backend axis: same configs per installed backend; each runs on its own build, device and runtime stamp', async () => {
+    const vk = fakeBackend(() => ({ decode: 90 })), hip = fakeBackend(() => ({ decode: 110 }))
+    const backends = [
+      { kind: 'vulkan' as const, backend: () => vk, runtimeVersion: 'b11208', exePath: 'vendor/llama.cpp/llama-server.exe', device: 'Vulkan0' },
+      { kind: 'hip' as const, backend: () => hip, runtimeVersion: 'b11208', exePath: 'vendor/llama.cpp-hip/llama-server.exe', device: 'ROCm0' }
+    ]
+    const { s, rec } = await run(() => ({}), { ladder: [2048], runQuality: true }, { backends })
+    const ids = [...new Set(s.runs.map((r) => r.configId))]
+    const base = `${model.id}|ngl=all|kv=f16|t=8`
+    expect(ids).toContain(base) // Vulkan ids unchanged
+    expect(ids).toContain(`${base}|hip`)
+    expect(vk.calls.loads.every((l) => l.device === 'Vulkan0')).toBe(true)
+    expect(hip.calls.loads.length).toBeGreaterThan(0)
+    expect(hip.calls.loads.every((l) => l.device === 'ROCm0')).toBe(true)
+    expect(s.runs.find((r) => r.configId === `${base}|hip`)!.versions?.runtime).toBe('hip:b11208')
+    expect(s.runs.find((r) => r.configId === base)!.versions?.runtime).toBe('vulkan:b11208')
+    expect(ids.filter((i) => i.includes('|ngl=0|'))).toHaveLength(ids.filter((i) => i.includes('|ngl=0|') && !i.endsWith('|hip')).length) // CPU baselines once
+    // switching backends unloads the other server first
+    expect(vk.calls.unloads).toBeGreaterThan(0)
+    expect(rec?.ranked.some((r) => r.configId === `${base}|hip`)).toBe(true) // ranked like any other config
+    // compareBackends: false → the primary only; a backend without a GPU device plans no GPU configs
+    const only = await run(() => ({}), { ladder: [2048], compareBackends: false }, { backends: [backends[0], { ...backends[1], backend: () => fakeBackend(() => ({})) }] })
+    expect(only.s.runs.some((r) => r.configId.endsWith('|hip'))).toBe(false)
+    const noDev = await run(() => ({}), { ladder: [2048] }, { backends: [backends[0], { ...backends[1], device: null, backend: () => fakeBackend(() => ({})) }] })
+    expect(noDev.s.runs.some((r) => r.configId.endsWith('|hip'))).toBe(false)
+  })
+
   it("quality phase loads the chosen rung with exactly the ladder step's LoadConfig (no RAM-changing drift)", async () => {
     const { s, backend } = await run(() => ({}), { ladder: [2048, 4096, 8192], runQuality: true })
     const qctx = s.quality[0].ctx

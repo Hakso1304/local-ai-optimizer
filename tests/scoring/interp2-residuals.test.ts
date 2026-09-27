@@ -306,3 +306,15 @@ describe('w4m-6: required sampling fields must be present, finite and matching',
     expect(V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')!.comparable).toBe(false)
   })
 })
+
+describe('I-3.9 backend comparison', () => {
+  it('HIP vs Vulkan for the same config: decode at the largest common rung and each dedicated ceiling', () => {
+    const vk = candidate('m', [2048, 4096], 40)
+    const hip = candidate('m', [2048, 4096], 52)
+    hip.config = { ...hip.config, id: 'm|hip', backend: 'hip', device: 'ROCm0' }
+    hip.runs = hip.runs.map((r) => ({ ...r, configId: 'm|hip', peakVramBytes: m(14.5 * GiB) }))
+    const t = text(interpret(V([vk, hip])), 'I-3.9')
+    expect(t).toBe('[I-3.9] HIP vs Vulkan for m: decode 52.0 vs 40.0 t/s at 4K; dedicated ceiling 14.50 GiB vs 8.00 GiB (per-PID peak over usable rungs).')
+    expect(text(interpret(V([vk])), 'I-3.9')).toBe('')
+  })
+})

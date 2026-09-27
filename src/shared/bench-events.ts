@@ -6,6 +6,8 @@ import type { BenchmarkRunResult, GenConfig, Recommendation, StepVerdict, Worklo
 export type { TelemetrySample }
 
 export interface SessionRequest {
+  /** Installed backend builds are all planned unless false (primary only). docs/HIP-BACKEND.md */
+  compareBackends?: boolean
   workload: WorkloadId
   /** ModelMeta ids (absolute GGUF paths). */
   modelIds: string[]

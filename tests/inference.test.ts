@@ -259,3 +259,18 @@ describe('stale server cleanup verifies identity (W4c D11)', { timeout: 60_000 }
     }
   })
 })
+
+describe('child environment (docs/HIP-BACKEND.md)', () => {
+  it('never passes GGML_CUDA_ENABLE_UNIFIED_MEMORY to llama-server', async () => {
+    const { LlamaCppBackend: B, serverEnv } = await import('../src/core/runtimes/llamacpp')
+    expect(serverEnv({ PATH: 'x', GGML_CUDA_ENABLE_UNIFIED_MEMORY: '1' })).toEqual({ PATH: 'x' })
+    const prev = process.env.GGML_CUDA_ENABLE_UNIFIED_MEMORY
+    process.env.GGML_CUDA_ENABLE_UNIFIED_MEMORY = '1'
+    let env: NodeJS.ProcessEnv | undefined
+    const b = new B('unused', { spawnFn: (_c, _a, opts) => { env = opts.env; throw new Error('captured') } })
+    await b.loadModel({ modelPath: 'm.gguf', contextSize: 2048, gpuLayers: 999, device: 'ROCm0', threads: 8 }).catch(() => {})
+    if (prev === undefined) delete process.env.GGML_CUDA_ENABLE_UNIFIED_MEMORY; else process.env.GGML_CUDA_ENABLE_UNIFIED_MEMORY = prev
+    expect(env).toBeDefined()
+    expect(env).not.toHaveProperty('GGML_CUDA_ENABLE_UNIFIED_MEMORY')
+  })
+})

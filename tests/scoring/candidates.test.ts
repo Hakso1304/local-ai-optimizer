@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MachineLimits, ModelMeta, VramBudgetObservation } from '../../src/shared/bench-types'
-import { budgetFor, estimateMemory, generateCandidates, machineFromProfile, vramBudgetKey } from '../../src/core/benchmark/candidates'
+import { budgetFor, estimateMemory, generateCandidates, machineFromProfile, planCandidates, vramBudgetKey } from '../../src/core/benchmark/candidates'
 import type { SystemProfile } from '../../src/shared/types'
 import { WORKLOADS } from '../../src/core/scoring/workloads'
 import { load, machine } from './helpers'
@@ -164,5 +164,21 @@ describe('effective per-process VRAM budget — advisory until qualified (w4m)',
     expect(vramBudgetKey(p(gpu('PCI\\A', null)), 'vulkan', 'b11208')!.verified).toBe(false)
     expect(vramBudgetKey(p(gpu('PCI\\A', '32.0.1')), 'vulkan', null)!.verified).toBe(false)
     expect(vramBudgetKey(p(gpu('PCI\\A', '32.0.1')), 'hip', 'b11208')!.key).not.toBe(vramBudgetKey(p(gpu('PCI\\A', '32.0.1')), 'vulkan', 'b11208')!.key)
+  })
+})
+
+describe('planCandidates: backend axis', () => {
+  const f = load('calib-8b-rx9070.json')
+  const p = { gpus: { value: [{ name: 'RX 9070 XT', pnpDeviceId: 'PCI\\A', driverVersion: '32', isIntegrated: false, dedicatedVramBytes: { value: f.vramBytes, status: 'available', source: 't' } }] },
+    ram: { value: { totalBytes: 31 * 1024 ** 3, availableBytes: 20 * 1024 ** 3 }, source: 't' }, cpu: { value: { physicalCores: 8 } } } as unknown as SystemProfile
+  it('Vulkan ids are unchanged; HIP gets the same configs with |hip, backend and its own device; CPU baselines once', () => {
+    const vkOnly = planCandidates(p, f.models[0], [{ kind: 'vulkan', device: 'Vulkan0', runtimeVersion: 'b1' }], WORKLOADS.coding)
+    const both = planCandidates(p, f.models[0], [{ kind: 'vulkan', device: 'Vulkan0', runtimeVersion: 'b1' }, { kind: 'hip', device: 'ROCm0', runtimeVersion: 'b1' }], WORKLOADS.coding)
+    const gpu = vkOnly.candidates.filter((c) => c.gpuLayers > 0)
+    expect(both.candidates.filter((c) => !c.backend).map((c) => c.id)).toEqual(vkOnly.candidates.map((c) => c.id))
+    const hip = both.candidates.filter((c) => c.backend === 'hip')
+    expect(hip.map((c) => c.id)).toEqual(gpu.map((c) => `${c.id}|hip`))
+    expect(hip.every((c) => c.device === 'ROCm0' && c.gpuLayers > 0)).toBe(true)
+    expect(hip.map((c) => c.ctxSteps)).toEqual(gpu.map((c) => c.ctxSteps))
   })
 })

@@ -1,7 +1,7 @@
 // Candidate configs per model + memory estimates for pruning (DESIGN §2.7, §6). Pure, deterministic.
 // Estimates only prune; they are never shown as facts (kind 'estimated').
 import type {
-  CandidateConfig, CandidateSet, KvType, MachineLimits, Metric, ModelMeta, PlannedSkip, PlanningSnapshot, RejectedCandidate, VramBudgetObservation, WorkloadProfile
+  CandidateConfig, CandidateSet, GpuBackendKind, KvType, MachineLimits, Metric, ModelMeta, PlannedSkip, PlanningSnapshot, RejectedCandidate, VramBudgetObservation, WorkloadProfile
 } from '../../shared/bench-types'
 import type { SystemProfile } from '../../shared/types'
 import type { SessionRequest } from '../../shared/bench-events'
@@ -203,7 +203,7 @@ export function machineFromProfile(p: SystemProfile, gpuDevice: string | null, v
 export function generateCandidates(
   machine: MachineLimits,
   model: ModelMeta,
-  runtime: { backend: 'vulkan' | 'cuda' | 'cpu' },
+  runtime: { backend: GpuBackendKind | 'cpu' },
   workload: WorkloadProfile,
   rules: CandidateRules = DEFAULT_CANDIDATE_RULES
 ): CandidateSet {
@@ -240,7 +240,7 @@ export function generateCandidates(
     return gpuBudget === null ? null : eb === null ? gpuBudget : Math.min(gpuBudget, eb)
   }
 
-  const idOf = (ngl: number, kv: KvType, kvOnGpu = true) => `${model.id}|ngl=${ngl >= model.layers ? 'all' : ngl}|kv=${kv}|t=${threads}${kvOnGpu ? '' : '|nkvo'}`
+  const idOf = (ngl: number, kv: KvType, kvOnGpu = true) => `${model.id}|ngl=${ngl >= model.layers ? 'all' : ngl}|kv=${kv}|t=${threads}${kvOnGpu ? '' : '|nkvo'}${runtime.backend === 'hip' ? '|hip' : ''}`
 
   /** Returns the candidate, or null after recording the rejection. heavy: resident-RAM check, no keep-over step. */
   const build = (ngl: number, kv: KvType, heavy?: { kvOnGpu: boolean }): CandidateConfig | null => {
@@ -283,7 +283,7 @@ export function generateCandidates(
     if (ramBudget === null) notes.push('RAM size unknown; not pruned by RAM, runtime guards apply')
     const src = `DESIGN §2.7 at ${ctxK(steps[0])}`
     return {
-      id, modelId: model.id, device: ngl > 0 ? machine.gpuDevice : null, gpuLayers: Math.min(ngl, model.layers), gpuLayersAll: ngl >= model.layers,
+      id, ...(runtime.backend === 'hip' || runtime.backend === 'cuda' ? { backend: runtime.backend } : {}), modelId: model.id, device: ngl > 0 ? machine.gpuDevice : null, gpuLayers: Math.min(ngl, model.layers), gpuLayersAll: ngl >= model.layers,
       kvType: kv, flashAttn: true, threads, ctxSteps: steps, skippedSteps: skipped.sort((a, b) => a.ctx - b.ctx),
       estVramBytes: est(e0.vramBytes, src), estRamBytes: est(heavy ? e0.ramResidentBytes : e0.ramBytes, src), notes,
       ...(kvOnGpu ? {} : { kvOffload: false }), planning: ngl > 0 ? { ...planning, effectiveBudget: budgetFor(machine, largestOf(estimateMemory(model, ngl, steps[steps.length - 1], kv, rules.ubatch, kvOnGpu))) } : planning
@@ -365,4 +365,19 @@ export function generateCandidates(
 
   for (const c of candidates.splice(rules.maxPerModel)) rejected.push({ id: c.id, modelId: model.id, reason: `over the per-model cap of ${rules.maxPerModel}` })
   return { candidates, rejected }
+}
+
+/** One installed backend as the planner sees it: its own device id (Vulkan0 / ROCm0), build and budget observations. */
+export interface PlannedBackend { kind: GpuBackendKind | 'cpu'; device: string | null; runtimeVersion: string | null; observations?: VramBudgetObservation[] }
+
+/** The same configs for every installed backend (runner and main's planFor both call this, so ids agree).
+ *  backends[0] is the primary; CPU-only configs (ngl 0) are backend-independent and come from it alone. */
+export function planCandidates(p: SystemProfile, model: ModelMeta, backends: PlannedBackend[], workload: WorkloadProfile, rules: CandidateRules = DEFAULT_CANDIDATE_RULES): CandidateSet {
+  const out: CandidateSet = { candidates: [], rejected: [] }
+  backends.forEach((b, i) => {
+    const set = generateCandidates(machineFromProfile(p, b.device, undefined, b.observations ?? []), model, { backend: b.kind }, workload, rules)
+    out.candidates.push(...(i === 0 ? set.candidates : set.candidates.filter((c) => c.gpuLayers > 0)))
+    out.rejected.push(...(i === 0 ? set.rejected : set.rejected.filter((r) => !r.id.includes('|ngl=0|'))))
+  })
+  return out
 }

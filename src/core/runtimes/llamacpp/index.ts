@@ -85,6 +85,13 @@ export interface ExitInfo {
 
 type SpawnFn = (cmd: string, args: string[], opts: SpawnOptions) => ChildProcess
 
+/** The child's environment: the parent's minus GGML_CUDA_ENABLE_UNIFIED_MEMORY. Managed memory lets a CUDA/HIP
+ *  build oversubscribe VRAM into system RAM, which would make "fits in VRAM" unmeasurable (docs/HIP-BACKEND.md). */
+export function serverEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const { GGML_CUDA_ENABLE_UNIFIED_MEMORY: _um, ...env } = base
+  return env
+}
+
 /** Ask the OS for a free loopback port (tiny race until llama-server binds it; /props check catches a squatter). */
 export function freePort(): Promise<number> {
   return new Promise((ok, fail) => {
@@ -274,7 +281,7 @@ export class LlamaCppBackend implements InferenceBackend {
     args.push(...(cfg.extraArgs ?? []))
     const declared = emptyDeclared()
     const t0 = performance.now()
-    const p = this.spawnFn(this.exePath, args, { windowsHide: true })
+    const p = this.spawnFn(this.exePath, args, { windowsHide: true, env: serverEnv() })
     this.proc = p
     if (this.pidFile && p.pid) writeFileSync(this.pidFile, JSON.stringify({ pid: p.pid, exePath: resolve(this.exePath), startedAt: new Date().toISOString() } satisfies PidRecord))
     const onLine = (line: string) => {

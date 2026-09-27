@@ -172,9 +172,14 @@ export interface GenQuality {
 
 export type KvType = 'f16' | 'q8_0'
 
+/** llama.cpp GPU backend build a config runs on (docs/HIP-BACKEND.md). */
+export type GpuBackendKind = 'vulkan' | 'hip' | 'cuda'
+
 export interface CandidateConfig {
-  /** Deterministic: `${modelId}|ngl=<all|n>|kv=<type>|t=<threads>`. Tie-breaks sort on it. */
+  /** Deterministic: `${modelId}|ngl=<all|n>|kv=<type>|t=<threads>[|nkvo][|hip]`. Tie-breaks sort on it. */
   id: string
+  /** Backend build; absent = vulkan (ids of Vulkan configs stay as before; only hip gets an id suffix). */
+  backend?: GpuBackendKind
   modelId: string
   device: string | null
   gpuLayers: number

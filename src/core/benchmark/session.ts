@@ -2,7 +2,7 @@
 // telemetry → quality once per model → recommend. One plain async function; every failure becomes data.
 import type { SessionEvent, SessionEventBody, SessionRequest } from '../../shared/bench-events'
 import type {
-  BenchmarkRunResult, CandidateConfig, CandidateInput, FailureKind, GenConfig, GenQuality, Metric, ModelMeta, QualityResult, Recommendation, RunStatus, VramBudgetObservation
+  BenchmarkRunResult, CandidateConfig, CandidateInput, FailureKind, GenConfig, GenQuality, Metric, ModelMeta, GpuBackendKind, QualityResult, Recommendation, RunStatus, VramBudgetObservation
 } from '../../shared/bench-types'
 import type { SystemProfile } from '../../shared/types'
 import type { ExitInfo } from '../runtimes/llamacpp'
@@ -13,7 +13,7 @@ import { buildQualityPrompts, evaluateAsync, needlePrompt, suiteFor, type Qualit
 import { detectCliffs, fmtCtx, isUsable, val } from '../scoring/cliff'
 import { recommend } from '../scoring/recommend'
 import { DEFAULT_SCORING_CONFIG, effectiveProfile, withProfile } from '../scoring/workloads'
-import { DEFAULT_CANDIDATE_RULES, budgetFor, estimateMemory, generateCandidates, machineFromProfile, vramBudgetKey, rulesForRequest, type CandidateRules } from './candidates'
+import { DEFAULT_CANDIDATE_RULES, budgetFor, estimateMemory, machineFromProfile, planCandidates, vramBudgetKey, rulesForRequest, type CandidateRules } from './candidates'
 import { CHARACTER_PROMPT_VERSION, LADDER_FILL, LADDER_FILL_TOLERANCE, LADDER_PREDICT, LADDER_SIZE_ROUNDS, PROMPT_VERSION, ladderPrompt } from './prompts'
 import { RULES_VERSION, type InterpretData, type StoredRun } from '../interpret'
 import { BASELINE_GEN, genConfigsFor, genLabel, samplingFor, splitReasoning, summarizeGen, templateKwargsFor, type GenRow } from './gen'
@@ -112,6 +112,16 @@ export const DEFAULT_SESSION_CONFIG = {
 }
 export type SessionConfig = typeof DEFAULT_SESSION_CONFIG
 
+export interface InstalledBackend {
+  kind: GpuBackendKind
+  backend: () => SessionBackend
+  /** llama.cpp build of this backend (e.g. 'b11208'); stored as versions.runtime '<kind>:<build>' */
+  runtimeVersion: string | null
+  exePath: string
+  /** this backend's --list-devices id for the benchmark GPU; null → no GPU on this backend (its GPU configs are not planned) */
+  device: string | null
+}
+
 export interface SessionDeps {
   backend: () => SessionBackend
   startSampler: (pid: number) => SessionSampler
@@ -120,6 +130,9 @@ export interface SessionDeps {
   /** Runtime device of the benchmark GPU (from listDevices), e.g. 'Vulkan0'; null = CPU only. */
   gpuDevice: string | null
   backendKind?: 'vulkan' | 'cuda' | 'cpu'
+  /** Installed llama.cpp backend builds (docs/HIP-BACKEND.md); [0] is the primary. Absent → the single
+   *  backend()/backendKind/runtimeVersion/gpuDevice above. Each has its OWN device id (Vulkan0 / ROCm0). */
+  backends?: InstalledBackend[]
   /** From the runtime's detect() (e.g. llama.cpp build); stored on every run (X17). */
   runtimeVersion?: string | null
   /** ModelMeta.id is the absolute GGUF path (ModelInfo convention); it is passed to loadModel. */
@@ -190,9 +203,20 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   // the same resolved object, and the v2 seed is persisted with the request so resume reproduces it.
   const suiteSeed = req.qualitySeed ?? (Math.floor(clock.now()) >>> 0)
   const suite = suiteFor(req.qualityMode, suiteSeed)
-  // Effective per-process budget: learned per GPU + driver + backend build (never generalised across them).
-  const budgetKey = vramBudgetKey(deps.machine, deps.backendKind ?? 'vulkan', deps.runtimeVersion)
-  const machine = machineFromProfile(deps.machine, deps.gpuDevice, undefined, budgetKey ? [...((await storage.listVramBudget?.(budgetKey.key)) ?? [])] : [])
+  // Installed backends: each with its own device, build, budget key (GPU + driver + backend build — never
+  // generalised across them) and machine view. [0] = primary; compareBackends === false → primary only.
+  const installed = deps.backends?.length ? deps.backends
+    : [{ kind: deps.backendKind ?? 'vulkan', backend: deps.backend, runtimeVersion: deps.runtimeVersion ?? null, exePath: '', device: deps.gpuDevice }]
+  const states = await Promise.all((req.compareBackends === false ? installed.slice(0, 1) : installed).map(async (b) => {
+    const budgetKey = vramBudgetKey(deps.machine, b.kind, b.runtimeVersion)
+    const observations = budgetKey ? [...((await storage.listVramBudget?.(budgetKey.key)) ?? [])] : []
+    let inst: SessionBackend | null = null
+    return { ...b, budgetKey, observations, machine: machineFromProfile(deps.machine, b.device, undefined, observations), instance: () => (inst ??= b.backend()),
+      runtime: b.runtimeVersion === null ? null : `${b.kind}:${b.runtimeVersion}` }
+  }))
+  let cur = states[0]
+  const stateOf = (c: CandidateConfig) => states.find((s) => s.kind === (c.backend ?? 'vulkan')) ?? states[0]
+  const machine = states[0].machine // adapter/RAM facts are backend-independent; budget + device come from `cur`
   const vramTotal = val(machine.vramBytes, true)
   /** Per-PID shared − host-pinned − the config's unsaturated baseline (not the saturation-gated spill metric). */
   const residentShared = (r: BenchmarkRunResult, base: number): number | null => {
@@ -211,7 +235,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   // other processes held at planning, the per-process budget), not the adapter total.
   const vramEffective = (): number | null => {
     const adapter = vramTotal === null ? null : vramTotal - (val(machine.vramInUseBytes) ?? 0)
-    const b = machine.vramEffectiveBudgetBytes ? val(machine.vramEffectiveBudgetBytes, true) : null
+    const b = cur.machine.vramEffectiveBudgetBytes ? val(cur.machine.vramEffectiveBudgetBytes, true) : null
     return adapter === null ? b : b === null ? adapter : Math.min(adapter, b)
   }
   /** THE spill definition (guard, persisted metric, verdict): per-PID shared − host-pinned − the config's unsaturated
@@ -233,7 +257,16 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   let sessionId = req.resumeSessionId ?? ''
   const send = (e: SessionEventBody) => emit({ sessionId, ...e })
   const log = (level: 'info' | 'warn' | 'error', msg: string) => send({ type: 'log', level, msg })
-  const backend = deps.backend()
+  let backend = cur.instance()
+  /** Run `c` on its own backend build: unload the current server first when switching. */
+  const backendFor = async (c: CandidateConfig) => {
+    const s = stateOf(c)
+    if (s === cur) return
+    await unload((e) => log('warn', `unload before switching to ${s.kind}: ${(e as Error).message}`))
+    cur = s
+    backend = s.instance()
+    log('info', `backend: ${s.kind}${s.runtimeVersion ? ` ${s.runtimeVersion}` : ''} (${s.exePath || 'default'})`)
+  }
   // The session's prompt procedure: tokenized ladder-2 only when the backend can tokenize (else character-sized ladder-1).
   const sessionPromptVersion = backend.tokenize ? PROMPT_VERSION : CHARACTER_PROMPT_VERSION
   // ServerStuckError (runtimes/llamacpp, `.fatal`): unload couldn't confirm the server exited. That is a hard stop —
@@ -286,7 +319,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         for (const cand of deps.plan.filter((c) => c.modelId === model.id)) plan.push({ cand, model })
         continue
       }
-      const set = generateCandidates(machine, model, { backend: deps.backendKind ?? 'vulkan' }, profile, rules)
+      const set = planCandidates(deps.machine, model, states.map((s) => ({ kind: s.kind, device: s.device, runtimeVersion: s.runtimeVersion, observations: s.observations })), profile, rules)
       for (const r of set.rejected) log('info', `rejected ${r.id}: ${r.reason}`)
       if (!set.candidates.length) unplanned.push({ model: model.name, reason: [...new Set(set.rejected.map((r) => r.reason))].join('; ') || 'no candidate configuration' })
       for (const cand of set.candidates) plan.push({ cand, model })
@@ -377,6 +410,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       checkStuck()
       if (signal?.aborted || paused()) break
       send({ type: 'candidate:started', configId: cand.id, model: model.id, gpuLayers: cand.gpuLayers, ctxSteps: cand.ctxSteps })
+      await backendFor(cand)
+      checkStuck()
       if (gpuLost && cand.gpuLayers > 0) {
         send({ type: 'candidate:done', configId: cand.id, status: 'skipped', reason: 'GPU device was lost earlier in this session' })
         continue
@@ -438,6 +473,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
           // measured request; a clean observation from a measured clean run. Identity unverified → stored, never prunes.
           const dedN = val(run.peakVramBytes)
           const kind = persistent !== null ? 'capacity' as const : isUsable(run) && residentOf(run) === null ? 'clean' as const : null
+          const { budgetKey } = cur
           if (budgetKey && kind && dedN !== null) {
             const b = buffersOf(out.detail)
             const o: VramBudgetObservation = {
@@ -446,8 +482,9 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
               origin: { sessionId, configId: cand.id, status: run.status, attempts: first ? 2 : 1, firstPeakVramBytes: first ? val(first.peakVramBytes) : null, firstResidentSharedBytes: first ? residentOf(first) : null },
               observedAt: clock.now()
             }
-            machine.vramBudgetObservations = [...(machine.vramBudgetObservations ?? []), o]
-            machine.vramEffectiveBudgetBytes = budgetFor(machine, null)
+            cur.observations.push(o)
+            cur.machine.vramBudgetObservations = [...cur.observations]
+            cur.machine.vramEffectiveBudgetBytes = budgetFor(cur.machine, null)
             try { await storage.saveVramBudgetObservation?.(budgetKey.key, o) } catch (e) { log('warn', `VRAM budget observation not saved: ${(e as Error).message}`) }
             if (kind === 'capacity') log('info', `${cand.id} @${ctx}: per-process VRAM ceiling observed at ${(dedN / GiB).toFixed(2)} GiB dedicated (${o.qualified ? 'qualified' : 'advisory: identity or load-log buffer unverified'})`)
           }
@@ -560,7 +597,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         loadTimeMs: na('not loaded'), ttftMs: na('no request'), prefillTps: na('no request'), decodeTps: na('no request'), totalMs: na('no request'),
         peakVramBytes: na('no telemetry'), peakSharedGpuBytes: na('no telemetry'), peakRamBytes: na('no telemetry'),
         avgGpuUtil: na('no telemetry'), avgCpuUtil: na('no telemetry'), warm: false,
-        versions: { benchmark: BENCHMARK_VERSION, prompts: promptVersionOfStep, quality: suite.suite, runtime: deps.runtimeVersion ?? null, rules: RULES_VERSION },
+        versions: { benchmark: BENCHMARK_VERSION, prompts: promptVersionOfStep, quality: suite.suite, runtime: cur.runtime, rules: RULES_VERSION },
         ramFloorBytes: ramFloor, ...extra
       },
       detail: {
@@ -878,6 +915,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
    *  suite completed, baseline first; an interrupted config and everything after it is dropped (never partial). */
   async function runQuality(cand: CandidateConfig, model: ModelMeta, ctx: number, gens: { gen: GenConfig; samples: number }[]): Promise<GenQuality[]> {
     send({ type: 'phase', configId: cand.id, ctx, phase: 'quality' })
+    await backendFor(cand)
     const g = await guardedLoad(cand, model, ctx, 'quality suite')
     if (!g.ok) { log('error', `${cand.id}: ${g.reason}`); return [] }
     const prompts = buildQualityPrompts(suite, { fillerTokens: Math.min(cfg.qualityFillerMax, Math.floor(ctx * 0.6)), thinking: false })
@@ -922,7 +960,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
                 evaluationStatus: (r.error && !r.timedOut ? 'infra_error' : truncated ? 'truncated' : 'valid') as GenRow['evaluationStatus'],
                 ...(templateKwargs ? { requestedTemplateKwargs: templateKwargs } : {}),
                 // F5 contract: identities + runtime-accepted sampling (null when the backend does not report them)
-                templateHash: backend.templateHash ?? null, runtimeVersion: deps.runtimeVersion ?? null, modelFingerprint: `${model.id}#${model.fileBytes}`,
+                templateHash: backend.templateHash ?? null, runtimeVersion: cur.runtime, modelFingerprint: `${model.id}#${model.fileBytes}`,
                 acceptedSampling: (r as PromptResult & { acceptedSampling?: Record<string, unknown> | null }).acceptedSampling ?? null
               }
               rows.push(r.error
