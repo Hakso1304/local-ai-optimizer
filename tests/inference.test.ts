@@ -196,3 +196,38 @@ describe('LlamaCppBackend process handling (fake server, no GPU)', { timeout: 20
     expect((await b.runPrompt({ prompt: 'x', maxTokens: 1 })).error).toMatch(/^server exited \(crash, code/)
   })
 })
+
+describe('stale server cleanup verifies identity (W4c D11)', { timeout: 60_000 }, () => {
+  it('staleMatches: same exe path and start time within 30 s, else never', async () => {
+    const { staleMatches } = await import('../src/core/runtimes/llamacpp')
+    const rec = { pid: 5, exePath: 'C:/rt/llama-server.exe', startedAt: '2026-09-27T10:00:00.000Z' }
+    expect(staleMatches(rec, { path: 'C:\\RT\\llama-server.exe', startedAt: '2026-09-27T10:00:03.000Z' })).toBe(true)
+    expect(staleMatches(rec, { path: 'C:\\other\\llama-server.exe', startedAt: '2026-09-27T10:00:03.000Z' })).toBe(false)
+    expect(staleMatches(rec, { path: 'C:/rt/llama-server.exe', startedAt: '2026-09-27T11:00:00.000Z' })).toBe(false) // reused pid
+    expect(staleMatches(rec, null)).toBe(false)
+  })
+
+  it('killStaleServer kills a verified record, spares a mismatch and an old plain-number file', async () => {
+    const { killStaleServer } = await import('../src/core/runtimes/llamacpp')
+    const { writeFileSync: w } = await import('node:fs')
+    const { spawn: sp } = await import('node:child_process')
+    const pf = join(tmpdir(), `lao-stale-${process.pid}.pid`)
+    const child = () => sp(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'])
+    const a = child(), b = child(), c = child()
+    try {
+      await new Promise((r) => setTimeout(r, 500))
+      w(pf, JSON.stringify({ pid: b.pid, exePath: 'C:/not/node.exe', startedAt: new Date().toISOString() }))
+      expect(await killStaleServer(pf)).toMatch(/not the recorded/)
+      w(pf, String(c.pid))
+      expect(await killStaleServer(pf)).toMatch(/could not be verified/)
+      w(pf, JSON.stringify({ pid: a.pid, exePath: process.execPath, startedAt: new Date().toISOString() }))
+      expect(await killStaleServer(pf)).toMatch(/killed stale/)
+      await new Promise((r) => setTimeout(r, 500))
+      expect(a.exitCode !== null || a.signalCode !== null).toBe(true)
+      expect(b.exitCode).toBeNull()
+      expect(c.exitCode).toBeNull()
+    } finally {
+      for (const x of [a, b, c]) x.kill()
+    }
+  })
+})

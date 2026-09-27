@@ -97,15 +97,37 @@ export function freePort(): Promise<number> {
 }
 
 /** Kill a llama-server left behind by a previous app run (pid persisted in pidFile). Returns what it did. */
+/** What the pid file records about the server we started (W4c D11): a reused pid must never be killed. */
+export interface PidRecord { pid: number; exePath: string; startedAt: string }
+
+/** Kill only if the live process is the one we recorded: same exe path and started within 30 s of the record.
+ *  Anything unverifiable (old plain-number file, process gone, no path/start time) → don't kill. Pure, for tests. */
+export function staleMatches(rec: PidRecord, proc: { path: string | null; startedAt: string | null } | null): boolean {
+  if (!proc?.path || !proc.startedAt) return false
+  const t = Date.parse(proc.startedAt) - Date.parse(rec.startedAt)
+  return resolve(proc.path).toLowerCase() === resolve(rec.exePath).toLowerCase() && Number.isFinite(t) && Math.abs(t) <= 30_000
+}
+
+export function readPidRecord(pidFile: string): PidRecord | null {
+  try {
+    const j = JSON.parse(readFileSync(pidFile, 'utf8')) as Partial<PidRecord>
+    return Number.isInteger(j.pid) && (j.pid as number) > 0 && typeof j.exePath === 'string' && typeof j.startedAt === 'string' ? (j as PidRecord) : null
+  } catch { return null } // plain-number file from an older build: unverifiable
+}
+
+/** Kill a llama-server left behind by a previous app run (recorded in pidFile). Returns what it did. */
 export async function killStaleServer(pidFile: string): Promise<string | null> {
   if (!existsSync(pidFile)) return null
-  const pid = Number(readFileSync(pidFile, 'utf8').trim())
+  const rec = readPidRecord(pidFile)
   rmSync(pidFile, { force: true })
-  if (!Number.isInteger(pid) || pid <= 0) return null
-  const { stdout } = await runProcess('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], 10_000)
-  if (!/^"llama-server\.exe"/im.test(stdout)) return null // gone, or pid reused by something else
-  await runProcess('taskkill', ['/PID', String(pid), '/T', '/F'], 10_000)
-  return `killed stale llama-server pid ${pid}`
+  if (!rec) return 'stale pid file could not be verified (no exe path / start time); nothing killed'
+  const q = await runPowerShell(`$p = Get-Process -Id ${rec.pid} -ErrorAction SilentlyContinue; if ($p) { @{ path = $p.Path; startedAt = $p.StartTime.ToUniversalTime().ToString('o') } | ConvertTo-Json -Compress }`, 15_000).catch(() => '')
+  let proc: { path: string | null; startedAt: string | null } | null = null
+  try { proc = q.trim() ? (JSON.parse(q.trim()) as typeof proc) : null } catch { proc = null }
+  if (!proc) return null // gone
+  if (!staleMatches(rec, proc)) return `pid ${rec.pid} is not the recorded llama-server (reused pid); nothing killed`
+  await runProcess('taskkill', ['/PID', String(rec.pid), '/T', '/F'], 10_000)
+  return `killed stale llama-server pid ${rec.pid}`
 }
 
 const alive = (p: ChildProcess) => p.exitCode === null && p.signalCode === null
@@ -248,7 +270,7 @@ export class LlamaCppBackend implements InferenceBackend {
     const t0 = performance.now()
     const p = this.spawnFn(this.exePath, args, { windowsHide: true })
     this.proc = p
-    if (this.pidFile && p.pid) writeFileSync(this.pidFile, String(p.pid))
+    if (this.pidFile && p.pid) writeFileSync(this.pidFile, JSON.stringify({ pid: p.pid, exePath: resolve(this.exePath), startedAt: new Date().toISOString() } satisfies PidRecord))
     const onLine = (line: string) => {
       if (!line) return
       parseLogLine(line, declared)
