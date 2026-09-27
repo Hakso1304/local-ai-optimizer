@@ -51,6 +51,9 @@ export interface SystemProfile {
   cuda: Sourced<{ available: boolean; driverCudaVersion?: string }>
   disks: Sourced<DiskInfo[]>
   runtimes: RuntimeDetection[]
+  /** Dedicated VRAM already used on the discrete GPU (other apps), measured by main just before planning a session.
+   *  machineFromProfile reads it as MachineLimits.vramInUseBytes; unavailable = reading failed (0-budget behaviour). */
+  vramInUse?: Sourced<number>
   /** GPU temperature/power source: nvidia-smi (NVIDIA only). Filled by main's system:scan. */
   nvidiaSmi?: { available: boolean; reason: string | null; cudaVersion: string | null }
 }

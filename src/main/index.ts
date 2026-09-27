@@ -17,7 +17,7 @@ import { runSession, type SessionStorage } from '../core/benchmark/session'
 import { generateCandidates, machineFromProfile, rulesForRequest } from '../core/benchmark/candidates'
 import { findGgufModels, toModelMeta } from '../core/models/gguf'
 import { defaultLmStudioDirs, defaultOllamaRoot, listOllamaModels, toModelInfo as toOllamaModelInfo } from '../core/runtimes/ollama/models'
-import { startSampler, stopAllSamplers, withNvidia } from '../core/telemetry/sampler'
+import { readVramInUse, startSampler, stopAllSamplers, withNvidia } from '../core/telemetry/sampler'
 import { probeNvidiaSmi, startNvidiaSampler, type NvidiaProbe } from '../core/telemetry/nvidia'
 import { evaluateAsync } from '../core/quality'
 import type { SessionEvent, SessionRequest } from '../shared/bench-events'
@@ -94,7 +94,7 @@ ipcMain.handle('models:fit', async (_e, w: WorkloadId): Promise<Record<string, s
   const devices = await llama.listDevices().catch(() => null)
   if (!devices) return Object.fromEntries(infos.map((m) => [m.id, 'llama.cpp runtime not installed (System page)']))
   const device = pickDiscreteDevice(devices)?.id ?? null
-  const machine = machineFromProfile(profileCache, device)
+  const machine = machineFromProfile(await withVramInUse(profileCache), device)
   const out: Record<string, string | null> = {}
   for (const info of infos) {
     const mm = toModelMeta(info)
@@ -178,6 +178,17 @@ ipcMain.handle('bench:smoke', async (_e, modelPath: string): Promise<SmokeResult
   }
 })
 
+/** The scan plus a fresh reading of VRAM already in use (other apps), so planning budgets what is actually free. */
+async function withVramInUse(p: SystemProfile): Promise<SystemProfile> {
+  const r = await readVramInUse()
+  return {
+    ...p,
+    vramInUse: r
+      ? { value: r.bytes, status: 'available', source: `typeperf GPU Adapter Memory(luid_${r.luid}_phys_0)\\Dedicated Usage` }
+      : { value: null, status: 'unavailable', source: 'typeperf GPU Adapter Memory', error: 'reading failed' }
+  }
+}
+
 // ---- Benchmark session (one at a time, in the main process) ----
 let active: { cancel: AbortController; pause: AbortController } | null = null
 let profileCache: SystemProfile | null = null
@@ -191,7 +202,7 @@ async function startSession(req: SessionRequest, storedMachine?: SystemProfile, 
   try {
     // ponytail: static facts cached per app run; RAM is re-read live via freemem(). A resume re-uses the stored scan
     // so generateCandidates yields the same configIds/ctxSteps as the original plan (review item d).
-    const profile = storedMachine ?? (profileCache ??= await scanSystem())
+    const profile = storedMachine ?? (await withVramInUse((profileCache ??= await scanSystem())))
     const runtime = await llama.detect()
     if (runtime.status !== 'available') throw new Error('llama.cpp runtime is not installed: install it on the System page first')
     const [infos, devices] = await Promise.all([listAllModels(), llama.listDevices()])
