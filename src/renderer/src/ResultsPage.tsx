@@ -7,6 +7,7 @@ import { WORKLOADS } from '../../core/scoring/workloads'
 import { genLabel, type GenRow } from '../../core/benchmark/gen'
 import { ExportMenu } from './ExportMenu'
 import { DecisionTrace } from './DecisionTrace'
+import { Evidence } from './Evidence'
 import { ENGINE_RULES, InterpretPanel, Reason, RulesVersion, insightsOf, rulesOf, type InsightActions } from './InterpretPanel'
 import type { BenchPreset } from './LargeCodingCard'
 import { LineChart, type Band } from './LineChart'
@@ -252,6 +253,7 @@ function Detail({ d, onRerun, go }: { d: SessionDetail; onRerun: (configId: stri
           {!d.session.demo && <><h3>Export</h3><ExportMenu rec={rec} cand={d.candidates.find((c) => c.config.id === rec.best?.configId)} sessionId={d.session.id} ctx={exportCtx} />{exportCtx && <p className="muted">Export uses -c {exportCtx} (from an interpretation action). <button className="mini" onClick={() => setExportCtx(null)}>reset</button></p>}</>}
         </div>
       ) : <p className="muted">No recommendation stored for this session.</p>}
+      <Evidence d={d} />
     </RulesVersion.Provider>
   )
 }
