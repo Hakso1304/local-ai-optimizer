@@ -135,5 +135,18 @@ describe('RECHECK6 R1: replay lineage', () => {
     const proved = await run(validIn, validOut)
     expect(proved?.qualityResults[0].payload.proofProvenance).toMatchObject({ status: 'original', originalPromptHashPresent: true })
     expect(proved?.qualityResults[0].payload.renderProof?.status).toBe('proved')
+    if (!proved) throw new Error('valid runtime-origin replay did not produce an artifact')
+    const coherentReplayOut = join(dir, 'valid-replay-out.json')
+    const coherentReplay = await run(validOut, coherentReplayOut)
+    expect(coherentReplay?.qualityResults[0].payload.proofProvenance?.status).toBe('original')
+    expect(coherentReplay?.qualityResults[0].payload.renderProof?.status).toBe('proved')
+    const malformedReplay = structuredClone(proved) as typeof proved & { qualityResults: { payload: typeof proved.qualityResults[0]['payload'] & {
+      proofProvenance?: { origin?: { firstReplayAt?: string; lineage?: string[] } }
+    } }[] }
+    malformedReplay.qualityResults[0].payload.proofProvenance!.origin!.firstReplayAt = 'not-an-iso-time'
+    malformedReplay.qualityResults[0].payload.proofProvenance!.origin!.lineage = ['not-a-hash']
+    const badReplayIn = join(dir, 'bad-replay-origin.json'), badReplayOut = join(dir, 'bad-replay-origin-out.json')
+    writeFileSync(badReplayIn, JSON.stringify(malformedReplay))
+    expect(await run(badReplayIn, badReplayOut)).toBeNull()
   })
 })

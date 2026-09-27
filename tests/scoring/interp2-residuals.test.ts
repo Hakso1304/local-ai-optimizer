@@ -354,6 +354,26 @@ describe('A/B/C (review-w4l): generation contract strictness', () => {
     c.genQuality[1] = gq('off-alt', false, inconsistent)
     expect(V([c]).ranked[0].genOptions.find((o) => o.gq.gen.id === 'off-alt')).toMatchObject({ comparable: false })
   })
+  it('RECHECK8 T3: malformed runtime and replay origin metadata cannot prove a gen comparison', () => {
+    const c = thinkModel(candidate('origin-format'))
+    const off = bound(rowsFor('off'), { enable_thinking: false })
+    const low = bound(rowsFor('think-low'), { enable_thinking: true, reasoning_effort: 'low' })
+    c.quality = off
+    c.genQuality = [gq('off', false, off), gq('think-low', true, low)]
+    const comparable = () => V([c]).ranked[0].genOptions.find((o) => o.gq.gen.id === 'think-low')!.comparable
+    const validRuntime = { mode: 'runtime', status: 'original', originalPromptHashPresent: true,
+      origin: { generationPromptHashPresent: true, firstReplayAt: null, lineage: [] } }
+    const validReplay = { mode: 'live-template-replay', status: 'original', originalPromptHashPresent: true,
+      origin: { generationPromptHashPresent: true, firstReplayAt: '2026-09-28T00:00:00.000Z', lineage: ['a'.repeat(64)] } }
+    for (const [valid, expectedComparable] of [[validRuntime, true], [validReplay, false]] as const) {
+      c.genQuality[1] = gq('think-low', true, low.map((r) => ({ ...r, proofProvenance: valid } as QualityResult)))
+      expect(comparable()).toBe(expectedComparable)
+      const malformed = { ...valid, origin: { generationPromptHashPresent: true,
+        firstReplayAt: 'not-an-iso-time', lineage: ['not-a-hash'] } }
+      c.genQuality[1] = gq('think-low', true, low.map((r, i) => i === 1 ? { ...r, proofProvenance: malformed } as QualityResult : { ...r, proofProvenance: valid } as QualityResult))
+      expect(comparable()).toBe(false)
+    }
+  })
   it('I-5.7 excludes an infra error despite valid template proof; I-5.8 keeps a proved truncation comparable', () => {
     const c = thinkModel(candidate('a'))
     c.quality = bound(rowsFor('off'), { enable_thinking: false })

@@ -215,6 +215,79 @@ describe('runPrompt', () => {
 })
 
 describe('unloadModel', () => {
+  it('T1: a child first seen in final scan is reaped or causes fatal retained ownership', async () => {
+    const startedAt = new Date().toISOString()
+    const root = { pid: child.pid, name: 'fake-root', startedAt }
+    const late = { pid: 424245, parentPid: child.pid, name: 'late-child', startedAt }
+    let scans = 0, visible = false, alive = true
+    const killed: number[] = []
+    const processTree: ProcessTree = {
+      descendants: async () => { scans++; return visible && alive ? [late] : [] },
+      inspect: async (pid) => pid === root.pid ? root : pid === late.pid && visible && alive ? late : null,
+      killVerified: async (record) => {
+        killed.push(record.pid)
+        if (record.pid === root.pid) { visible = true; child.kill() }
+        if (record.pid === late.pid) alive = false
+        return true
+      },
+      isAlive: async (pid) => pid === late.pid && alive,
+      kill: async () => { throw new Error('unverified PID kill') }
+    }
+    b = new LlamaCppBackend('unused', { pidFile, spawnFn: () => child as unknown as ChildProcess, processTree })
+    handler = healthy()
+    await load()
+    expect(scans).toBe(1) // successful-load snapshot was empty
+    let failure: unknown = null
+    try {
+      await b.unloadModel()
+    } catch (error) {
+      failure = error
+    }
+    try {
+      if (failure) {
+        expect(failure).toBeInstanceOf(ServerStuckError)
+        expect(existsSync(pidFile)).toBe(true)
+      } else {
+        expect(killed).toContain(late.pid)
+        expect(alive).toBe(false)
+        expect(existsSync(pidFile)).toBe(false)
+      }
+    } finally {
+      visible = false // release the fake survivor for the shared cleanup hook
+    }
+    expect(scans).toBeGreaterThanOrEqual(3) // load, initial unload, final verification
+  })
+
+  it('T2: a reused intermediate parent invalidates its foreign subtree', async () => {
+    const startedAt = new Date().toISOString()
+    const root = { pid: child.pid, name: 'fake-root', startedAt }
+    const oldParent = { pid: 424245, parentPid: child.pid, name: 'helper', startedAt }
+    const reusedParent = { ...oldParent, startedAt: new Date(Date.now() + 5_000).toISOString() }
+    const foreignChild = { pid: 424249, parentPid: oldParent.pid, name: 'helper-child', startedAt: new Date().toISOString() }
+    let loaded = false, foreignAlive = true
+    const killed: number[] = []
+    const processTree: ProcessTree = {
+      descendants: async () => loaded ? [oldParent, ...(foreignAlive ? [foreignChild] : [])] : [oldParent],
+      inspect: async (pid) => pid === root.pid ? root : pid === oldParent.pid ? reusedParent : pid === foreignChild.pid && foreignAlive ? foreignChild : null,
+      killVerified: async (record) => { killed.push(record.pid); if (record.pid === root.pid) child.kill(); if (record.pid === foreignChild.pid) foreignAlive = false; return true },
+      isAlive: async () => true,
+      kill: async () => { throw new Error('unverified PID kill') }
+    }
+    b = new LlamaCppBackend('unused', { pidFile, spawnFn: () => child as unknown as ChildProcess, processTree })
+    handler = healthy()
+    await load()
+    loaded = true // the intermediate parent has exited and its PID is now foreign
+    try {
+      await b.unloadModel()
+    } catch (error) {
+      expect(error).toBeInstanceOf(ServerStuckError)
+      expect(existsSync(pidFile)).toBe(true)
+    }
+    expect(killed).not.toContain(oldParent.pid)
+    expect(killed).not.toContain(foreignChild.pid)
+    loaded = false // release the fake foreign subtree for shared cleanup
+  })
+
   it('does not kill a foreign process that reuses an exited owned descendant PID', async () => {
     const pid = 424245, startedAt = new Date().toISOString()
     const root = { pid: child.pid, name: 'fake-root', startedAt }
