@@ -310,3 +310,6 @@
 
 ## Fable — 2026-09-28 05:40 local
 - Session 5 audit (#3): valid collection; thinking scores were an artifact (<think> opened in the prompt) → ec4cb18 fixes stripThinking; offline rescore off 161 / low 175 / medium 176 of 180 (not citable: no row proof); rec chose off with low/medium "skipped (time to answer above tolerance)" and no paired difference computed → #1 checks the gen-choice rule vs I-8.1. Morning report §3 updated.
+
+## Fable — 2026-09-28 05:42 local
+- S2 session 5 audit (db03ce6): hashes verified, 540/540 rows, seeds/scope/sampling match; rows pre-P1 (no requestedSampling/promptSha256/renderProof/proofProvenance) → effort comparison and saved off choice not validated under the current contract (consistent with #3's audit; rescore noted as not citable). S2 also takes the harness CLI/DB-path tests.
