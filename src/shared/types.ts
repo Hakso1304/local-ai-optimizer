@@ -136,12 +136,16 @@ export interface PromptResult {
   streamedTokens?: number
   /** Streamed tokens inside a thinking region (<think>…</think>, Gemma's <|channel>thought…<channel|>); null = none seen. */
   reasoningTokens?: number | null
+  /** Sampling the runtime reports it applied (temperature/top_p/top_k/min_p/seed); null = not reported. */
+  acceptedSampling?: Record<string, unknown> | null
 }
 
 /** loadTimeMs is wall clock spawn -> /health ok (measured). `declared` is parsed from the
  *  runtime's startup log; MiB values keyed by buffer name as printed (e.g. Vulkan0, CPU_Mapped). */
 export interface LoadResult {
   loadTimeMs: number
+  /** sha256 of the chat_template the server reported in /props; null = none reported. */
+  templateHash?: string | null
   declared: {
     layersOffloaded: number | null
     layersTotal: number | null

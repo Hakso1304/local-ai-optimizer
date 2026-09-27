@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { createWriteStream, existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, mkdirSync } from 'node:fs'
 import { findGgufModels } from '../../models/gguf'
 import { createServer, type AddressInfo } from 'node:net'
@@ -12,7 +13,7 @@ import { runPowerShell, runProcess } from '../../exec'
 import type { GpuVendor, RuntimeDetection } from '../../../shared/types'
 import { pickReleaseAsset, type ReleaseAsset } from './assets'
 import { getJson, type HealthStatus, type InferenceBackend, type LoadConfig, type LoadResult, type ModelInfo, type PromptRequest, type PromptResult, type RuntimeStats } from '../types'
-import { classifyExit, emptyDeclared, parseDevices, parseLogLine, parseSse, toPromptResult, type CompletionChunk, type ExitReason, type LlamaDevice } from './parse'
+import { acceptedSampling, classifyExit, emptyDeclared, parseDevices, parseLogLine, parseSse, toPromptResult, type CompletionChunk, type ExitReason, type LlamaDevice } from './parse'
 
 const RELEASES_URL = 'https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=20'
 export const VULKAN_ASSET = /^llama-.+-bin-win-vulkan-x64\.zip$/
@@ -153,6 +154,8 @@ export class LlamaCppBackend implements InferenceBackend {
   readonly log: string[] = []
   /** Set when the server exits on its own (not via unloadModel). */
   lastExit: ExitInfo | null = null
+  /** sha256 of the loaded model's chat_template (/props, read once per load); null = none reported / not loaded. */
+  templateHash: string | null = null
 
   /** pidFile: where the running server's pid is persisted (see killStaleServer). spawnFn: test seam. */
   constructor(private vendorDir: string, opts: { exePath?: string; pidFile?: string; spawnFn?: SpawnFn } = {}) {
@@ -260,6 +263,7 @@ export class LlamaCppBackend implements InferenceBackend {
     this.port = cfg.port ?? (await freePort())
     this.log.length = 0
     this.lastExit = null
+    this.templateHash = null
     const args = ['-m', cfg.modelPath, '-c', String(cfg.contextSize), '-ngl', String(cfg.gpuLayers), '--host', '127.0.0.1', '--port', String(this.port)]
     // -fit off: otherwise llama-server silently changes ctx/ngl to fit. -lv 4: device/offload lines we parse.
     args.push('-fit', 'off', '--parallel', '1', '--device', cfg.device, '-lv', '4', '--metrics')
@@ -309,7 +313,7 @@ export class LlamaCppBackend implements InferenceBackend {
       throw new Error('llama-server did not become healthy within 120s')
     }
     const loadTimeMs = performance.now() - t0
-    const props = await getJson<{ model_path?: string; default_generation_settings?: { n_ctx?: number } }>(`http://127.0.0.1:${this.port}/props`, 2_000).catch(() => null)
+    const props = await getJson<{ model_path?: string; chat_template?: string; default_generation_settings?: { n_ctx?: number } }>(`http://127.0.0.1:${this.port}/props`, 2_000).catch(() => null)
     if (exited) throw new Error(`${exited}; last log: ${this.log.slice(-10).join(' | ')}`)
     const same = (a: string) => resolve(a).toLowerCase() === resolve(cfg.modelPath).toLowerCase()
     if (!props?.model_path || !same(props.model_path)) {
@@ -322,7 +326,9 @@ export class LlamaCppBackend implements InferenceBackend {
       await this.unloadModel()
       throw new ConfigDriftError(`config_drift: requested -c ${cfg.contextSize} but server serves n_ctx ${nCtx}`)
     }
-    return { loadTimeMs, declared }
+    // I-8.0: identity of the template the server renders with (read once per load; null = /props had none).
+    this.templateHash = typeof props.chat_template === 'string' ? createHash('sha256').update(props.chat_template).digest('hex') : null
+    return { loadTimeMs, declared, templateHash: this.templateHash }
   }
 
   /** Kill the server; escalate to taskkill /T /F after 5s. Throws if it is still alive afterwards. */
@@ -437,7 +443,7 @@ export class LlamaCppBackend implements InferenceBackend {
     const f = final as CompletionChunk | null
     const needPrompt = !error && f !== null && f.timings?.prompt_n == null && f.tokens_evaluated == null
     const promptTokens = needPrompt ? await this.tokenize(req.prompt).catch(() => null) : null
-    return { ...toPromptResult(final, { ttftMs, totalMs, text, timedOut, error, streamedTokens: streamed, promptTokens }), streamedTokens: streamed, reasoningTokens: think.seen ? think.tokens : null }
+    return { ...toPromptResult(final, { ttftMs, totalMs, text, timedOut, error, streamedTokens: streamed, promptTokens }), streamedTokens: streamed, reasoningTokens: think.seen ? think.tokens : null, acceptedSampling: acceptedSampling(f) }
   }
 
   /** One short discarded request so the measured run doesn't pay first-dispatch costs. Pass the measured

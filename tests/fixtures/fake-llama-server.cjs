@@ -18,7 +18,7 @@ http
     if (req.url === '/health') return mode === 'slow' ? res.writeHead(503).end('{"error":"loading model"}') : res.end(JSON.stringify({ status: 'ok' }))
     if (req.url === '/props') {
       const nCtx = mode === 'drift' ? Number(arg('-c')) / 2 : Number(arg('-c'))
-      return res.end(JSON.stringify({ model_path: modelPath, default_generation_settings: { n_ctx: nCtx } }))
+      return res.end(JSON.stringify({ model_path: modelPath, default_generation_settings: { n_ctx: nCtx }, ...(mode === 'notemplate' ? {} : { chat_template: '{{ messages }}' }) }))
     }
     if (req.url === '/completion' && mode === 'http400') {
       return res.writeHead(400).end(JSON.stringify({ error: { code: 400, type: 'exceed_context_size_error', message: 'request (40000 tokens) exceeds the available context size (32768 tokens)' } }))
@@ -29,9 +29,16 @@ http
       return res.end('data: {"content":"","stop":true,"stop_type":"limit"}\n\n')
     }
     if (req.url === '/completion') {
-      res.writeHead(200, { 'content-type': 'text/event-stream' })
-      res.write('data: {"content":"Hi","stop":false}\n\n')
-      res.end('data: {"content":"","stop":true,"stop_type":"limit","timings":{"prompt_n":3,"prompt_ms":1.5,"prompt_per_second":2000,"predicted_n":1,"predicted_ms":2,"predicted_per_second":500}}\n\n')
+      let body = ''
+      req.on('data', (d) => (body += d))
+      req.on('end', () => {
+        const b = JSON.parse(body)
+        // Echo the sampling like llama-server's final chunk does, except top_k which this fake "clamps" (applied ≠ requested).
+        const gs = { temperature: b.temperature, top_p: b.top_p ?? 0.95, top_k: 40, min_p: b.min_p ?? 0.05, seed: b.seed, n_predict: b.n_predict }
+        res.writeHead(200, { 'content-type': 'text/event-stream' })
+        res.write('data: {"content":"Hi","stop":false}\n\n')
+        res.end(`data: ${JSON.stringify({ content: '', stop: true, stop_type: 'limit', generation_settings: gs, timings: { prompt_n: 3, prompt_ms: 1.5, prompt_per_second: 2000, predicted_n: 1, predicted_ms: 2, predicted_per_second: 500 } })}\n\n`)
+      })
       return
     }
     if (req.url === '/apply-template') {

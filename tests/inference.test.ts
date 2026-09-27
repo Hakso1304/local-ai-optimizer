@@ -2,6 +2,7 @@
 // no model, no GPU) and, in one test, a child that ignores kill(). REAL — node processes, sockets, the SSE parser,
 // the stderr classifier, tasklist/taskkill/PowerShell on Windows. Proves process/HTTP orchestration, not inference.
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -157,6 +158,23 @@ describe('LlamaCppBackend process handling (fake server, no GPU)', { timeout: 20
     const r = await b.runPrompt({ prompt: 'x', maxTokens: 1 })
     expect(r.error).toMatch(/HTTP 400: exceed_context_size_error: request \(40000 tokens\) exceeds/)
     expect(b.lastExit).toBeNull() // server still alive: runner classifies this as request_error, never crash
+  })
+
+  it('templateHash = sha256 of /props chat_template, per load; acceptedSampling = what the server reports applying (F5)', async () => {
+    b = backend('ok')
+    const lr = await b.loadModel(cfg)
+    expect(lr.templateHash).toBe(createHash('sha256').update('{{ messages }}').digest('hex'))
+    expect(b.templateHash).toBe(lr.templateHash)
+    const r = await b.runPrompt({ prompt: 'x', maxTokens: 1, temperature: 0.6, topK: 20, seed: 7 })
+    // the fake applies top_k 40 whatever is asked: applied ≠ requested must be visible
+    expect(r.acceptedSampling).toEqual({ temperature: 0.6, top_p: 0.95, top_k: 40, min_p: 0.05, seed: 7 })
+    await b.unloadModel()
+    b = backend('notemplate')
+    expect((await b.loadModel(cfg)).templateHash).toBeNull()
+    await b.unloadModel()
+    b = backend('notimings') // a final chunk without generation_settings → not reported, never guessed
+    await b.loadModel(cfg)
+    expect((await b.runPrompt({ prompt: 'x', maxTokens: 1 })).acceptedSampling).toBeNull()
   })
 
   it('without timings, token counts fall back to streamed chunks and /tokenize (W4 F12)', async () => {

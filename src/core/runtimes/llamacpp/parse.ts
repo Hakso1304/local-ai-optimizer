@@ -34,7 +34,17 @@ export interface CompletionChunk {
   timings?: LlamaTimings
   tokens_predicted?: number
   tokens_evaluated?: number
+  /** Final chunk: the sampling the server actually used for this request. */
+  generation_settings?: Record<string, unknown>
   error?: { message?: string } | string
+}
+
+/** The sampling fields llama-server reports it applied (final chunk generation_settings); null if not reported. */
+export function acceptedSampling(f: CompletionChunk | null): Record<string, unknown> | null {
+  const g = f?.generation_settings
+  if (!g || typeof g !== 'object') return null
+  const out = Object.fromEntries((['temperature', 'top_p', 'top_k', 'min_p', 'seed'] as const).filter((k) => k in g).map((k) => [k, g[k]]))
+  return Object.keys(out).length ? out : null
 }
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
