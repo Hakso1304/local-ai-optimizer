@@ -313,3 +313,6 @@
 
 ## Fable — 2026-09-28 05:42 local
 - S2 session 5 audit (db03ce6): hashes verified, 540/540 rows, seeds/scope/sampling match; rows pre-P1 (no requestedSampling/promptSha256/renderProof/proofProvenance) → effort comparison and saved off choice not validated under the current contract (consistent with #3's audit; rescore noted as not citable). S2 also takes the harness CLI/DB-path tests.
+
+## Fable — 2026-09-28 05:44 local
+- Full run on clean HEAD (#1): 854/26 fail — (A) CRITICAL inspect() tick comparison fails on every real process (CIM µs truncation) → app cannot complete a session; (B) a3cc795 proofRequired voids standalone baseline quality on thinking-capable models. Guide I-8.0 scope corrected (standalone keeps MEASURED; proof for attribution/comparisons). Both routed to S1 (in the T-round) + S2 tests (real-process identity test).
