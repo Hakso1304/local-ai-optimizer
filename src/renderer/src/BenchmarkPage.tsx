@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { WorkloadId, WorkloadProfile } from '../../shared/bench-types'
 import type { ModelInfo } from '../../shared/types'
 import type { LiveState } from './benchState'
-import type { BenchPreset } from './LargeCodingCard'
+import { presetFor, type BenchPreset } from './LargeCodingCard'
 import { fmtCtx, gib, num } from './ui'
 
 const v = (x: number | null | undefined, f: (n: number) => string) => (x == null ? '—' : f(x))
@@ -21,15 +21,32 @@ export function BenchmarkPage({ live, preset, onDownload }: { live: LiveState; p
   const [qualityMode, setQualityMode] = useState<'thorough' | 'quick'>('thorough')
   const [reqCtx, setReqCtx] = useState(0) // 0 = Auto (workload default)
   const [minDec, setMinDec] = useState('') // blank = workload default
+  // Choosing a workload with a preset applies it like the Dashboard button; leaving it restores what the user had.
+  const beforePreset = useRef<{ heavy: boolean; reqCtx: number } | null>(null)
+  const pickWorkload = (w: WorkloadId) => {
+    const p = presetFor(w)
+    if (p) {
+      beforePreset.current ??= { heavy, reqCtx }
+      setHeavy(p.heavyMode)
+      setReqCtx(p.requiredContext ?? 0)
+    } else if (beforePreset.current) {
+      setHeavy(beforePreset.current.heavy)
+      setReqCtx(beforePreset.current.reqCtx)
+      beforePreset.current = null
+    }
+    setWorkload(w)
+  }
   const [fit, setFit] = useState<Record<string, string | null>>({})
   const [vram, setVram] = useState<{ inUse: number | null; total: number | null }>({ inUse: null, total: null })
 
   useEffect(() => {
     void Promise.all([window.api.listWorkloads(), window.api.getSettings()]).then(([ws, s]) => { setWorkloads(ws)
       // A preset (e.g. Dashboard "Benchmark for large-scale coding") wins over the saved choices.
-      setWorkload(preset?.workload ?? s.workload ?? ws[0]?.id ?? null)
-      setReqCtx(preset ? preset.requiredContext ?? 0 : s.requiredContext ?? 0)
-      if (preset) setHeavy(preset.heavyMode)
+      const w = preset?.workload ?? s.workload ?? ws[0]?.id ?? null
+      const p = preset ?? presetFor(w) // a saved preset workload (e.g. large_coding) applies its preset too
+      setWorkload(w)
+      setReqCtx(p ? p.requiredContext ?? 0 : s.requiredContext ?? 0)
+      if (p) { beforePreset.current = { heavy: false, reqCtx: s.requiredContext ?? 0 }; setHeavy(p.heavyMode) }
     })
     window.api.listModels().then(setModels, (e: Error) => setMsg(e.message))
   }, [])
@@ -62,7 +79,7 @@ export function BenchmarkPage({ live, preset, onDownload }: { live: LiveState; p
       <header className="bar">
         <h1>Benchmark</h1>
         <label>Workload{' '}
-          <select value={workload ?? ''} onChange={(e) => setWorkload(e.target.value as WorkloadId)} disabled={running}>
+          <select value={workload ?? ''} onChange={(e) => pickWorkload(e.target.value as WorkloadId)} disabled={running}>
             {workloads.map((w) => <option key={w.id} value={w.id}>{w.label}</option>)}
           </select>
         </label>

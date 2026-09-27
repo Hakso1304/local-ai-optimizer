@@ -8,3 +8,12 @@ describe('required context', () => {
     expect(sloDefaults(WORKLOADS.coding, null).minPracticalCtx).toBe(WORKLOADS.coding.targetContext / 2)
   })
 })
+
+describe('workload presets (W4c D10)', () => {
+  it('large_coding implies heavy mode + 64K required context; other workloads have no preset', async () => {
+    const { presetFor } = await import('../src/renderer/src/LargeCodingCard')
+    expect(presetFor('large_coding')).toEqual({ workload: 'large_coding', heavyMode: true, requiredContext: 65536 })
+    expect(presetFor('coding')).toBeNull()
+    expect(presetFor(null)).toBeNull()
+  })
+})

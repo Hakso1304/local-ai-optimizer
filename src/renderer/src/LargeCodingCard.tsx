@@ -7,6 +7,10 @@ export const LARGE: WorkloadId = 'large_coding'
 export interface BenchPreset { workload: WorkloadId; heavyMode: boolean; requiredContext: number | null }
 export const LARGE_PRESET: BenchPreset = { workload: LARGE, heavyMode: true, requiredContext: 65536 }
 
+/** The one place that says which workload implies which Benchmark settings (Dashboard button and the Benchmark
+ *  dropdown both use it; W4c D10). null = no preset: keep the user's own choices. */
+export const presetFor = (w: WorkloadId | null): BenchPreset | null => (w === LARGE ? LARGE_PRESET : null)
+
 const decodeOf = (d: SessionDetail, configId: string | undefined, ctx: number | null | undefined) =>
   d.candidates.find((c) => c.config.id === configId)?.runs.find((r) => r.ctx === ctx)?.decodeTps.value ?? null
 

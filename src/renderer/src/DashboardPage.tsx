@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { WorkloadId, WorkloadProfile } from '../../shared/bench-types'
 import type { SessionDetail, SystemProfile } from '../../shared/types'
-import { LARGE, LARGE_PRESET, LargeCodingCard, type BenchPreset } from './LargeCodingCard'
+import { LARGE, LARGE_PRESET, LargeCodingCard, presetFor, type BenchPreset } from './LargeCodingCard'
 import { COMPONENT_LABEL, CtxPick, DemoBanner, M, ScoreBar, fmtCtx, gib } from './ui'
 
 type Go = (section: 'Benchmark' | 'Results', sessionId?: number, preset?: BenchPreset) => void
@@ -109,7 +109,7 @@ export function DashboardPage({ go }: { go: Go }) {
         </>
       )}
         {workload !== LARGE && (
-          <LargeCodingCard fastDecode={fastDecode} onBenchmark={() => go('Benchmark', undefined, LARGE_PRESET)} onDetails={(id) => go('Results', id)} />
+          <LargeCodingCard fastDecode={fastDecode} onBenchmark={() => go('Benchmark', undefined, presetFor(LARGE) ?? LARGE_PRESET)} onDetails={(id) => go('Results', id)} />
         )}
       </div>
     </section>
