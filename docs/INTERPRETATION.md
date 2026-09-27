@@ -185,12 +185,16 @@ parameter count is shown only if the file declares it.
 ## 4. Memory
 
 Rule I-4.0 (`mem.effective-budget`, info, origin measured-calibration cal-2026-09-27 +
-2026-09-28): on Windows a single process is given a VRAM budget below the card's total
-(WDDM/DXGI per-process budget; observed here 11.6–13.3 GiB of 15.9). The planner uses
-`vramEffectiveBudgetBytes` = min over observed per-PID dedicated ceilings at spill onset
-(MEASURED, per GPU identity + driver), else 0.80 × total (ESTIMATED). Insight text:
-"usable VRAM for one model on this machine ≈ <x> GiB of <total> (per-process budget,
-<kind>)". A 16 GB card behaves like a ~12–13 GB card for a single model.
+2026-09-28): the VRAM one process can actually keep in dedicated memory is specific to
+the GPU, driver, backend build and allocation pattern — observed here 13.3 GiB (14B) and
+11.6 GiB (8B f16 64K) of 15.9, while an RX 6800 with a different runtime fills all 16 GB.
+The planner therefore uses `vramEffectiveBudgetBytes` learned from this machine's own
+observations (ceiling at spill onset, with model, KV bytes and largest single buffer;
+keyed by GPU identity + driver + backend build; the most conservative comparable
+observation wins, MEASURED). With no observation: 0.80 × total, ESTIMATED, worded "no
+measured budget on this machine yet; assuming 80 % (some GPUs/backends allow 100 %)".
+Never stated as a Windows or vendor rule. A ROCm/HIP backend may place memory
+differently from Vulkan; the app measures only the backend it runs.
 Rule I-4.1 (`mem.budget-basis`, info): headroom is always stated with its basis:
 (a) planning budget remaining = min(planningVramBudgetBytes − planningReserveBytes,
 vramEffectiveBudgetBytes) − peak dedicated (from the persisted planning snapshot),
