@@ -231,7 +231,71 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     let gpuLost = false
     const paused = () => !signal?.aborted && !!deps.pauseSignal?.aborted
 
-    for (const { cand, model } of plan) {
+    const passRungs = (i: CandidateInput): number[] => {
+      const c = detectCliffs(i.runs, vramTotal)
+      const first = c.steps.findIndex((x) => x.verdict !== 'pass')
+      return (first < 0 ? c.steps : c.steps.slice(0, first)).filter((x) => i.runs.some((r) => r.ctx === x.ctx && isUsable(r))).map((x) => x.ctx)
+    }
+    /** Quality once per model, as soon as its last planned config finished its ladder, on its best-offload passing config. */
+    const qualityFor = async (modelId: string): Promise<void> => {
+      const decode = (i: CandidateInput) => Math.max(0, ...i.runs.filter(isUsable).map((r) => val(r.decodeTps, true) ?? 0))
+      // D09: only a config with a measured PASS rung, and never a CPU baseline or -nkvo probe unless it is the only one.
+      const passing = inputs.filter((i) => i.model.id === modelId && passRungs(i).length)
+      const gpuKv = passing.filter((i) => i.config.gpuLayers > 0 && i.config.kvOffload !== false)
+      const pool = gpuKv.length ? gpuKv : passing
+      const best = [...pool].sort((a, b) => b.config.gpuLayers - a.config.gpuLayers || decode(b) - decode(a) || (a.config.id < b.config.id ? -1 : 1))[0]
+      if (!best) { log('warn', `${modelId}: no configuration passed a context rung; quality suite not run`); return }
+      if (!gpuKv.length && machine.gpuDevice !== null) longNotes.push(`[I-3.5] Quality for ${best.model.name} ran on ${best.config.id} (CPU / KV-in-RAM): the only configuration that passed a context rung`)
+      const gens = genConfigsFor(best.model, req)
+      const samplesOf = (g: GenConfig) => (g.temperature > 0 && req.qualityMode !== 'quick' ? cfg.thoroughSamples : 1)
+      // Reuse stored quality only when it is the COMPLETE current suite (every test id × sample for every gen config,
+      // same suite version). Rows without genId are the baseline (stored before the gen-config search).
+      const stored = (req.resumeSessionId ? await storage.listQuality(sessionId, modelId) : []) as GenRow[]
+      const rowsOf = (g: GenConfig) => stored.filter((r) => (r.genId ?? BASELINE_GEN.id) === g.id)
+      const complete = stored.length > 0 && stored.every((r) => (r as { suite?: string }).suite === defaultTestSet.suite) &&
+        gens.every((g) => defaultTestSet.tests.every((t) => rowsOf(g).filter((r) => r.testId === t.id).length >= samplesOf(g)))
+      if (complete) {
+        const list = gens.map((g) => summarizeGen(g, rowsOf(g), samplesOf(g)))
+        quality.set(modelId, list[0].results)
+        if (gens.length > 1) genQ.set(modelId, list)
+        return
+      }
+      if (stored.length) log('warn', `${modelId}: stored quality results are incomplete or from another suite version; re-running the suite`)
+      const cliff = detectCliffs(best.runs, vramTotal)
+      // D09: min(target, ceiling) snapped down to a rung that actually passed.
+      const rungs = passRungs(best)
+      const qctx = rungs.filter((c) => c <= profile.targetContext).at(-1) ?? rungs[0]
+      const perGen = await runQuality(best.config, best.model, qctx, gens.map((g) => ({ gen: g, samples: samplesOf(g) })))
+      const results = perGen[0]?.gen.id === BASELINE_GEN.id ? perGen[0].results : []
+      await unload((e) => log('error', `unload failed: ${(e as Error).message}`))
+      // One long-context retrieval test at the required ctx (a full prefill of it), on a config that reached it.
+      if (required && required >= 32768 && results.length && !signal?.aborted && !paused()) {
+        const reach = inputs.filter((i) => i.model.id === modelId && (val(detectCliffs(i.runs, vramTotal).practicalContextCeiling) ?? 0) >= required)
+          .sort((a, b) => b.config.gpuLayers - a.config.gpuLayers || decode(b) - decode(a) || (a.config.id < b.config.id ? -1 : 1))[0]
+        if (reach) {
+          const r = await runLongNeedle(reach.config, reach.model, required)
+          await unload()
+          if (r) for (const g of perGen) g.results.push({ ...r, genId: g.gen.id, sample: 1 } as GenRow)
+        } else {
+          longNotes.push(`[I-2.5] Long-context needle CR-04-long at ${fmtCtx(required)} skipped for ${best.model.name}: practical context ${fmtCtx(val(cliff.practicalContextCeiling) ?? 0)} < ${fmtCtx(required)}`)
+        }
+      }
+      if (results.length) {
+        quality.set(modelId, results)
+        if (gens.length > 1) genQ.set(modelId, perGen)
+        // One transaction for every gen config of the model (resume needs all of them or re-runs).
+        await storage.saveQuality(sessionId, modelId, best.config.id, qctx, perGen.flatMap((g) => g.results).map((r) => ({ ...r, suite: defaultTestSet.suite })))
+      }
+    }
+    const withQuality = () => {
+      for (const i of inputs) {
+        i.quality = quality.get(i.model.id) ?? []
+        const g = genQ.get(i.model.id)
+        if (g) i.genQuality = g
+      }
+    }
+
+    for (const [planIdx, { cand, model }] of plan.entries()) {
       checkStuck()
       if (signal?.aborted || paused()) break
       send({ type: 'candidate:started', configId: cand.id, model: model.id, gpuLayers: cand.gpuLayers, ctxSteps: cand.ctxSteps })
@@ -284,56 +348,17 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       inputs.push({ config: cand, model, runs, quality: [] })
       const status = signal?.aborted ? 'cancelled' : paused() ? 'paused' : anyUsable ? 'done' : 'failed'
       send({ type: 'candidate:done', configId: cand.id, status, reason: stopReason })
-    }
-
-    // Quality once per model, after all ladders, on its best-offload usable candidate (most GPU layers, then fastest
-    // decode) — never on a CPU baseline or -nkvo probe just because the plan sorted it first.
-    if (req.runQuality !== false) {
-      for (const modelId of [...new Set(inputs.map((i) => i.model.id))]) {
+      const rest = plan.slice(planIdx + 1)
+      if (req.runQuality !== false && !rest.some((p) => p.model.id === model.id) && !signal?.aborted && !paused()) {
         checkStuck()
-        if (signal?.aborted || paused()) break
-        const decode = (i: CandidateInput) => Math.max(0, ...i.runs.filter(isUsable).map((r) => val(r.decodeTps, true) ?? 0))
-        const best = inputs.filter((i) => i.model.id === modelId && i.runs.some(isUsable))
-          .sort((a, b) => b.config.gpuLayers - a.config.gpuLayers || decode(b) - decode(a) || (a.config.id < b.config.id ? -1 : 1))[0]
-        if (!best) continue
-        const gens = genConfigsFor(best.model, req)
-        const samplesOf = (g: GenConfig) => (g.temperature > 0 && req.qualityMode !== 'quick' ? cfg.thoroughSamples : 1)
-        // Reuse stored quality only when it is the COMPLETE current suite (every test id × sample for every gen config,
-        // same suite version). Rows without genId are the baseline (stored before the gen-config search).
-        const stored = (req.resumeSessionId ? await storage.listQuality(sessionId, modelId) : []) as GenRow[]
-        const rowsOf = (g: GenConfig) => stored.filter((r) => (r.genId ?? BASELINE_GEN.id) === g.id)
-        const complete = stored.length > 0 && stored.every((r) => (r as { suite?: string }).suite === defaultTestSet.suite) &&
-          gens.every((g) => defaultTestSet.tests.every((t) => rowsOf(g).filter((r) => r.testId === t.id).length >= samplesOf(g)))
-        if (complete) {
-          const list = gens.map((g) => summarizeGen(g, rowsOf(g), samplesOf(g)))
-          quality.set(modelId, list[0].results)
-          if (gens.length > 1) genQ.set(modelId, list)
-          continue
-        }
-        if (stored.length) log('warn', `${modelId}: stored quality results are incomplete or from another suite version; re-running the suite`)
-        const cliff = detectCliffs(best.runs, vramTotal)
-        const usable = best.runs.filter(isUsable).map((r) => r.ctx)
-        const qctx = Math.min(profile.targetContext, val(cliff.practicalContextCeiling) ?? Math.max(...usable))
-        const perGen = await runQuality(best.config, best.model, qctx, gens.map((g) => ({ gen: g, samples: samplesOf(g) })))
-        const results = perGen[0]?.gen.id === BASELINE_GEN.id ? perGen[0].results : []
-        await unload((e) => log('error', `unload failed: ${(e as Error).message}`))
-        // One long-context retrieval test at the required ctx (a full prefill of it), on a config that reached it.
-        if (required && required >= 32768 && results.length && !signal?.aborted && !paused()) {
-          const reach = inputs.filter((i) => i.model.id === modelId && (val(detectCliffs(i.runs, vramTotal).practicalContextCeiling) ?? 0) >= required)
-            .sort((a, b) => b.config.gpuLayers - a.config.gpuLayers || decode(b) - decode(a) || (a.config.id < b.config.id ? -1 : 1))[0]
-          if (reach) {
-            const r = await runLongNeedle(reach.config, reach.model, required)
-            await unload()
-            if (r) for (const g of perGen) g.results.push({ ...r, genId: g.gen.id, sample: 1 } as GenRow)
-          } else {
-            longNotes.push(`Long-context needle CR-04-long at ${fmtCtx(required)} skipped for ${best.model.name}: practical context ${fmtCtx(val(cliff.practicalContextCeiling) ?? 0)} < ${fmtCtx(required)}`)
-          }
-        }
-        if (results.length) {
-          quality.set(modelId, results)
-          if (gens.length > 1) genQ.set(modelId, perGen)
-          // One transaction for every gen config of the model (resume needs all of them or re-runs).
-          await storage.saveQuality(sessionId, modelId, best.config.id, qctx, perGen.flatMap((g) => g.results).map((r) => ({ ...r, suite: defaultTestSet.suite })))
+        await qualityFor(model.id)
+        // D05: persist a provisional recommendation after each model, so a later cancel/abort still leaves one.
+        if (rest.length && !signal?.aborted && !paused()) {
+          withQuality()
+          const pro = recommend(inputs, machine, req.workload, scoringCfg, unplanned, req)
+          pro.provisional = true
+          pro.reasons.unshift(`[I-1.1] Provisional: saved after ${model.name}; ${rest.length} configuration${rest.length > 1 ? 's' : ''} still to run`)
+          await storage.saveRecommendation(sessionId, pro)
         }
       }
     }
@@ -349,12 +374,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       send({ type: 'session:paused' })
       return null
     }
-    for (const i of inputs) {
-      i.quality = quality.get(i.model.id) ?? []
-      const g = genQ.get(i.model.id)
-      if (g) i.genQuality = g
-    }
-    const rec = recommend(inputs, machine, req.workload, scoringCfg, unplanned)
+    withQuality()
+    const rec = recommend(inputs, machine, req.workload, scoringCfg, unplanned, req)
     rec.reasons.push(...longNotes)
     await storage.saveRecommendation(sessionId, rec)
     await storage.setSessionStatus(sessionId, 'done')
@@ -443,10 +464,12 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     let guard: string | null = null
     let loading = true
     let blindPolls = 0
+    let minRam: number | null = null // lowest RAM available seen by the guard (OS reading, else telemetry rows)
     const flush = () => {
       restartIfBlind()
       // Independent of typeperf: OS free RAM every poll (typeperf may be slow, localized, or not running at all).
       const os = osRam()
+      if (os !== null) minRam = Math.min(minRam ?? os, os)
       if (!guard && os !== null && os + mmapCredit < ramFloor) {
         guard = `RAM available ${(os / GiB).toFixed(1)} GiB (OS) fell below the floor`
         void (loading ? unload() : backend.cancel())
@@ -462,6 +485,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       for (; emitted < xs.length; emitted++) {
         const s = xs[emitted]
         send({ type: 'telemetry', configId: cand.id, ctx, sample: s })
+        if (s.ramAvailBytes != null) minRam = Math.min(minRam ?? s.ramAvailBytes, s.ramAvailBytes)
         // Heavy (partial-offload) configs: a shared-memory spill is a measurement (degraded + spill reason, then the
         // ladder moves on), not an abort. The RAM floor always aborts.
         const spillAbort = !cand.expectDegraded && s.procVramSharedBytes != null && s.procVramSharedBytes - pinned - spillBase > cfg.sharedSpillAbortBytes
@@ -576,6 +600,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
 
     return result(f?.status ?? 'pass', f?.kind ?? null, f?.reason ?? null, {
       warm,
+      repDecodeTps: reps.map((r) => r.decodeTps).filter((x): x is number => typeof x === 'number'),
+      minRamAvailBytes: minRam === null ? { value: null, kind: 'unavailable', reason: 'no RAM reading during the step' } : { value: minRam, kind: 'measured', source: 'RAM guard: OS free RAM / typeperf' },
       promptTokens: median(reps.map((r) => r.promptTokens)),
       loadTimeMs: measured(load.loadTimeMs, 'spawn → /health ok'),
       ttftMs: measured(ttft, 'client wall clock, request → first token', 'no successful request'),
@@ -702,9 +728,10 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
               }
               const r = await backend.runPrompt(preq)
               const split = splitReasoning(r.text ?? '')
-              const toks = r.decodeTokens ?? (r as PromptResult & { streamedTokens?: number | null }).streamedTokens ?? null
+              const toks = r.decodeTokens ?? r.streamedTokens ?? null
               const chars = split.reasoningChars + split.answerChars
-              const reasoningTokens = toks === null ? null : chars > 0 ? Math.round((toks * split.reasoningChars) / chars) : 0
+              // Prefer the runtime's own reasoning count (reasoning_content / thought channel); else split by text length.
+              const reasoningTokens = r.reasoningTokens !== undefined ? r.reasoningTokens ?? 0 : toks === null ? null : chars > 0 ? Math.round((toks * split.reasoningChars) / chars) : 0
               const counts = { answerTokens: toks === null || reasoningTokens === null ? null : toks - reasoningTokens, reasoningTokens, totalMs: r.totalMs ?? null }
               rows.push(r.error
                 ? { testId: test.id, category: test.category, weight: test.weight, pass: false, score: 0, detail: `request failed: ${r.error}`, ...tag, ...counts }

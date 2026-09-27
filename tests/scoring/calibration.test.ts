@@ -6,7 +6,7 @@ import { detectCliffs } from '../../src/core/scoring/cliff'
 import { componentScores } from '../../src/core/scoring/components'
 import { recommend } from '../../src/core/scoring/recommend'
 import { WORKLOADS } from '../../src/core/scoring/workloads'
-import { inputs, load, machine, toRun } from './helpers'
+import { inputs, load, machine, toRun, withQuality } from './helpers'
 
 const MiB = 1024 ** 2
 const f = load('calib-8b-rx9070.json') as ReturnType<typeof load> & { vramInUseBytes: number }
@@ -17,7 +17,8 @@ const FULL = 'llama8b|ngl=all'
 /** Fixture runs + the config the generator really produces (so skippedSteps/notes are real). */
 function candidates(workload: WorkloadId) {
   const gen = generateCandidates(M, llama, { backend: 'vulkan' }, WORKLOADS[workload]).candidates[0]
-  return inputs(f).map((c) => (c.config.id === FULL ? { ...c, config: { ...gen, id: FULL } } : c))
+  // Measured quality (Q 60) so quality-weighted workloads have an eligible candidate (D07: priors never pass their gate).
+  return withQuality(inputs(f).map((c) => (c.config.id === FULL ? { ...c, config: { ...gen, id: FULL } } : c)))
 }
 
 describe('calibration: 8B Q4_K_M full offload 2K→64K', () => {
@@ -53,17 +54,17 @@ describe('calibration: 8B Q4_K_M full offload 2K→64K', () => {
       expect(rec.best?.configId).toBe(FULL)
       expect(rec.best?.score.recommendedCtx).toBe(ctx)
       expect(rec.best?.score.referenceCtx).toBe(Math.min(ctx, WORKLOADS[w].targetContext)) // scoring stays at target
-      expect(rec.reasons.some((x) => x.startsWith(`Recommended context ${ctx / 1024}K: TTFT`))).toBe(true)
+      expect(rec.reasons.some((x) => x.startsWith(`[I-3.3] Recommended context ${ctx / 1024}K: TTFT`))).toBe(true)
     })
   }
 
   it('reasons name the TTFT at the chosen ctx and the memory bound (not "no cliff")', () => {
     const rec = recommend(candidates('coding'), M, 'coding')
     // Scored at the workload target (16K) but recommended at 32K: the reason shows both.
-    expect(rec.reasons).toContain('Recommended context 32K: TTFT 12.0 s for a full prompt (tolerance 15 s), decode 72.0 t/s (scored at 16K: TTFT 4.9 s, decode 88.1 t/s)')
+    expect(rec.reasons.find((x) => x.startsWith('[I-3.3] Recommended context 32K'))).toMatch(/^\[I-3\.3\] Recommended context 32K: TTFT 12\.0 s for a full prompt \(tolerance 15 s; \d+ tokens, noticeable\), decode 72\.0 t\/s \(scored at 16K: TTFT 4\.9 s, decode 88\.1 t\/s\)\.$/)
     const fast = recommend(candidates('fast_assistant'), M, 'fast_assistant') // recommended = scored = 4K → no suffix
-    expect(fast.reasons.find((x) => x.startsWith('Recommended context 4K'))).not.toMatch(/scored at/)
-    expect(rec.reasons.find((x) => x.startsWith('Practical context 64K'))).toMatch(/memory-bound at 64K \(128K: est\. VRAM .* > budget/)
+    expect(fast.reasons.find((x) => x.startsWith('[I-3.3] Recommended context 4K'))).not.toMatch(/scored at/)
+    expect(rec.reasons.find((x) => x.startsWith('[I-2.1] Practical context 64K'))).toMatch(/memory-bound at 64K \(128K: est\. VRAM .* > budget/)
   })
 
   it('partial offload (ngl 20: 17.5 t/s; ngl 0: 7.1 t/s) is never recommended over a passing full offload', () => {
@@ -72,7 +73,7 @@ describe('calibration: 8B Q4_K_M full offload 2K→64K', () => {
       for (const id of ['llama8b|ngl=20', 'llama8b|ngl=0']) {
         const s = rec.ranked.find((x) => x.configId === id)!
         expect(s.eligible, `${w} ${id}`).toBe(false)
-        expect(s.gateFailures).toContain('partial offload; a full-offload config of this model passed')
+        expect(s.gateFailures.join(' ')).toMatch(/\[I-3\.9\] partial offload; a full-offload config of this model ran/)
       }
     }
   })
@@ -122,8 +123,12 @@ describe('calibration: Qwen2.5-14B Q4_K_M real spill cliff at 32K (per-PID telem
     expect(rec.ranked.find((s) => s.configId === FULL14)!.gateFailures.join(' ')).toMatch(/practical context 16K is below 32K/)
   })
 
-  it('Document Analysis on priors only: 8B wins (64K ceiling + faster prefill outweigh the 14B quality prior)', () => {
-    expect(recommend(both(), M, 'document_analysis').best?.configId).toBe(FULL)
+  it('D07: an unmeasured 14B (quality prior only) is ineligible for quality-weighted Document Analysis; the result is provisional', () => {
+    const rec = recommend(both(), M, 'document_analysis')
+    expect(rec.best?.configId).toBe(FULL)
+    expect(rec.ranked.find((s) => s.configId === FULL14)!.gateFailures.join(' ')).toMatch(/\[I-5\.9\] no measured quality/)
+    expect(rec.provisional).toBe(true)
+    expect(rec.reasons.join(' ')).toMatch(/\[I-5\.5\] No measured quality for Qwen2\.5-14B/)
   })
 
   it('Fast Assistant never picks the 14B, even with higher quality', () => {

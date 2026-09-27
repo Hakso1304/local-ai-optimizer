@@ -4,7 +4,7 @@ import type {
   BenchmarkRunResult, CandidateInput, CliffReport, ComponentId, ComponentScore, ComponentScores,
   GenQuality, MachineLimits, Metric, QualityCategory, QualityResult, WorkloadProfile
 } from '../../shared/bench-types'
-import { detectCliffs, isUsable, val } from './cliff'
+import { detectCliffs, fmtCtx, isUsable, val } from './cliff'
 import { DEFAULT_SCORING_CONFIG, type ScoringConfig } from './workloads'
 
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x))
@@ -26,25 +26,41 @@ export function linScore(x: number, floor: number, target: number): number {
   return 100 * clamp01((x - floor) / (target - floor))
 }
 
-/** Without `limits`: the scoring step. With `limits`: the recommended context.
- *  With `limits`: the largest PASS step ≤ maxContext whose full-prompt TTFT ≤ latencyToleranceMs (steps with unknown
- *  TTFT qualify only up to target). Otherwise / if none qualifies: largest PASS step ≤ target, else the smallest PASS
- *  step, else the smallest usable step. Never beyond the practical ceiling when a step passed (X9). */
-export function referenceStep(
-  runs: BenchmarkRunResult[],
-  cliff: CliffReport,
-  target: number,
-  limits?: { maxContext?: number; latencyToleranceMs?: number }
-): BenchmarkRunResult | null {
+/** The PASS prefix (practical ceiling and below) that has a usable row, ascending. */
+function passRungs(runs: BenchmarkRunResult[], cliff: CliffReport): { byCtx: Map<number, BenchmarkRunResult>; pass: number[] } {
   const byCtx = new Map(runs.filter(isUsable).map((r) => [r.ctx, r] as const))
   const firstNonPass = cliff.steps.findIndex((s) => s.verdict !== 'pass')
   const pass = (firstNonPass < 0 ? cliff.steps : cliff.steps.slice(0, firstNonPass)).filter((s) => byCtx.has(s.ctx)).map((s) => s.ctx)
-  const fits = (c: number) => {
-    const t = val(byCtx.get(c)!.ttftMs, true)
-    return c <= (limits?.maxContext ?? target) && (t === null || limits?.latencyToleranceMs === undefined ? c <= target : t <= limits.latencyToleranceMs)
+  return { byCtx, pass }
+}
+
+/** Scoring step (rule I-2.8): the largest PASS rung ≤ target, else the smallest PASS rung, else the smallest usable
+ *  rung — so candidates are compared at the workload's need, never beyond the practical ceiling (X9). */
+export function referenceStep(runs: BenchmarkRunResult[], cliff: CliffReport, target: number): { run: BenchmarkRunResult; why: string } | null {
+  const { byCtx, pass } = passRungs(runs, cliff)
+  const le = pass.filter((c) => c <= target).at(-1)
+  if (le !== undefined) return { run: byCtx.get(le)!, why: `largest passing rung ≤ target ${fmtCtx(target)}` }
+  if (pass.length) return { run: byCtx.get(pass[0])!, why: `no passing rung ≤ target ${fmtCtx(target)}; smallest passing rung` }
+  const u = cliff.steps.find((s) => byCtx.has(s.ctx))
+  return u ? { run: byCtx.get(u.ctx)!, why: 'no passing rung; smallest usable (degraded) rung' } : null
+}
+
+/** Recommended -c (rule I-3.10, audit D06): always a measured PASS rung. Latency advisory → the largest PASS rung ≤
+ *  maxContext. Otherwise the largest PASS rung ≤ maxContext whose measured TTFT ≤ tolerance (unknown TTFT never
+ *  qualifies, D07); if none, the smallest PASS rung with fits=false (the TTFT gate then fails). null without a PASS rung. */
+export function recommendedStep(runs: BenchmarkRunResult[], cliff: CliffReport, profile: WorkloadProfile):
+  { run: BenchmarkRunResult; fits: boolean; why: string } | null {
+  const { byCtx, pass } = passRungs(runs, cliff)
+  const max = profile.maxContext ?? profile.targetContext
+  const tol = profile.latencyToleranceMs
+  if (!pass.length) return null
+  if (profile.latencyAdvisory) {
+    const c = pass.filter((x) => x <= max).at(-1) ?? pass[0]
+    return { run: byCtx.get(c)!, fits: true, why: `largest passing rung ≤ ${fmtCtx(max)} (latency advisory)` }
   }
-  const ctx = (limits ? pass.filter(fits).at(-1) : undefined) ?? pass.filter((c) => c <= target).at(-1) ?? pass[0] ?? cliff.steps.find((s) => byCtx.has(s.ctx))?.ctx
-  return ctx === undefined ? null : byCtx.get(ctx)!
+  const fit = pass.filter((c) => { const t = val(byCtx.get(c)!.ttftMs, true); return c <= max && t !== null && t <= tol }).at(-1)
+  if (fit !== undefined) return { run: byCtx.get(fit)!, fits: true, why: `largest passing rung ≤ ${fmtCtx(max)} with measured TTFT within the ${(tol / 1000).toFixed(0)} s tolerance` }
+  return { run: byCtx.get(pass[0])!, fits: false, why: `no passing rung has a measured TTFT within the ${(tol / 1000).toFixed(0)} s tolerance; smallest passing rung` }
 }
 
 /** Category-weighted pass rate (0–100) with a 95 % half-width, for any suite size: per category an Agresti–Coull
@@ -121,8 +137,9 @@ export function componentScores(
   const n = cfg.norm
   const cliff = detectCliffs(input.runs, val(machine.vramBytes, true), cfg.cliff)
   // Score at the workload's target (comparable across candidates); recommend the largest ctx the latency budget allows.
-  const ref = referenceStep(input.runs, cliff, profile.targetContext)
-  const rec = referenceStep(input.runs, cliff, profile.targetContext, { maxContext: profile.maxContext, latencyToleranceMs: profile.latencyAdvisory ? undefined : profile.latencyToleranceMs })
+  const refStep = referenceStep(input.runs, cliff, profile.targetContext)
+  const ref = refStep?.run ?? null
+  const rec = recommendedStep(input.runs, cliff, profile)
   const none = zero(NA('no usable context step'))
 
   const fromRef = (m: Metric | undefined, f: (v: number) => number, what: string): ComponentScore => {
@@ -174,5 +191,8 @@ export function componentScores(
     stability,
     context
   }
-  return { components, cliff, referenceCtx: ref?.ctx ?? null, recommendedCtx: rec?.ctx ?? null, usable: ref !== null }
+  return {
+    components, cliff, referenceCtx: ref?.ctx ?? null, recommendedCtx: rec?.run.ctx ?? null, usable: ref !== null,
+    ...(rec ? { recommendedFits: rec.fits, recommendedWhy: rec.why } : {}), ...(refStep ? { referenceWhy: refStep.why } : {})
+  }
 }

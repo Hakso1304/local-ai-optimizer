@@ -5,14 +5,14 @@ import { WORKLOADS } from '../src/core/scoring/workloads'
 import {
   exportConfigFrom, provenanceNote, toJson, toLlamaServerArgs, toLlamaServerCommand, toLmStudioSettings, toOllamaModelfile, type ExportConfig
 } from '../src/core/export/config'
-import { inputs, load, machine } from './scoring/helpers'
+import { inputs, load, machine, withQuality } from './scoring/helpers'
 
 // Best config for Coding on the real RX 9070 XT 8B measurements (tests/scoring/calibration.test.ts: 32K).
 const f = load('calib-8b-rx9070.json') as ReturnType<typeof load> & { vramInUseBytes: number }
 const M = { ...machine(f.vramBytes), vramInUseBytes: { value: f.vramInUseBytes, kind: 'measured' as const } }
 const model = { ...f.models[0], id: 'D:\\llm-models\\Meta Llama\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf' }
 const gen = generateCandidates(M, model, { backend: 'vulkan' }, WORKLOADS.coding).candidates[0]
-const cands = inputs(f).map((c) => (c.config.id === 'llama8b|ngl=all' ? { ...c, model, config: { ...gen, id: 'llama8b|ngl=all' } } : c))
+const cands = withQuality(inputs(f)).map((c) => (c.config.id === 'llama8b|ngl=all' ? { ...c, model, config: { ...gen, id: 'llama8b|ngl=all' } } : c))
 const rec = recommend(cands, M, 'coding')
 const cfg = exportConfigFrom(rec, cands.find((c) => c.config.id === rec.best!.configId)!.config, model, '42')!
 
@@ -64,8 +64,10 @@ describe('export', () => {
     const note = provenanceNote(rec)
     expect(note).toMatch(/^Context: recommended 32768 \(measured/)
     expect(note).toMatch(/practical ceiling 65536 \(measured\); model declares 131072 \(declared\)/)
-    expect(note).toMatch(/Measured: genSpeed, prefillSpeed, latency, memory, stability, context\./)
-    expect(note).toMatch(/Estimated: quality \(quality prior/)
+    expect(note).toMatch(/Measured: quality, genSpeed, prefillSpeed, latency, memory, stability, context\./)
+    // Without a quality run (General Chat still recommends on the prior, provisionally): quality is named as estimated.
+    const prior = recommend(inputs(f).map((c) => (c.config.id === 'llama8b|ngl=all' ? { ...c, model, config: { ...gen, id: 'llama8b|ngl=all' } } : c)), M, 'general_chat')
+    expect(provenanceNote(prior)).toMatch(/Estimated: quality \(quality prior/)
     expect(provenanceNote({ ...rec, best: null })).toBe('No recommendation: nothing to export.')
   })
 })

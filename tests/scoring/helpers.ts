@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type {
-  BenchmarkRunResult, CandidateConfig, CandidateInput, FailureKind, MachineLimits, Metric, ModelMeta, RunStatus
+  BenchmarkRunResult, CandidateConfig, CandidateInput, FailureKind, MachineLimits, Metric, ModelMeta, QualityResult, RunStatus
 } from '../../src/shared/bench-types'
 
 export interface FixtureRun {
@@ -51,3 +51,12 @@ export function inputs(f: Fixture): CandidateInput[] {
     return { config, model, runs: rows.map(toRun), quality: [] }
   })
 }
+
+/** Synthetic measured quality: 5 items per category, the first `rate × 5` pass (policy tests, not measurements). */
+export const q5 = (modelId: string, rate: number): QualityResult[] =>
+  (['instruction', 'reasoning', 'coding', 'structured', 'extraction', 'context'] as const).flatMap((category) => [0, 1, 2, 3, 4].map((i) => ({
+    testId: `${modelId}-${category}-${i}`, category, weight: 1, pass: i < rate * 5, score: i < rate * 5 ? 1 : 0, detail: ''
+  })))
+/** Give every candidate measured quality (rate per model id; default 0.6 = Q 60). */
+export const withQuality = (list: CandidateInput[], rate: number | ((modelId: string) => number) = 0.6): CandidateInput[] =>
+  list.map((c) => ({ ...c, quality: q5(c.model.id, typeof rate === 'number' ? rate : rate(c.model.id)) }))

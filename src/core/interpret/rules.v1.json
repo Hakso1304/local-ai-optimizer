@@ -1,0 +1,65 @@
+{
+  "version": "interp-1",
+  "source": "docs/INTERPRETATION.md v1 + review-w4c policy findings (D03, D06, D07, D09)",
+  "rules": [
+    { "id": "I-0.1", "key": "panel.order", "section": 0, "severity": "info", "metric": "order", "params": {}, "text": "Insights lead with the practical context ceiling and quality; speed comes after." },
+
+    { "id": "I-1.1", "key": "prov.estimated-in-ranking", "section": 1, "severity": "warn", "metric": "provenance", "params": {}, "text": "Provisional: the winner's {components} {verb} ESTIMATED, not measured.", "action": "run-thorough-quality" },
+    { "id": "I-1.2", "key": "prov.unavailable-memory", "section": 1, "severity": "note", "metric": "peakVramBytes", "params": {}, "text": "{what} for {config} at {ctx} was not observed (step shorter than the 1 s sampler or counter missing); no penalty applied." },
+
+    { "id": "I-2.1", "key": "ctx.ceiling", "section": 2, "severity": "info", "metric": "practicalContextCeiling", "params": {}, "text": "Practical context {practical} (measured); {declared}; {limit}." },
+    { "id": "I-2.2", "key": "ctx.spill", "section": 2, "severity": "warn", "metric": "peakSharedGpuBytes", "params": { "spillBytes": 268435456 }, "text": "Above {clean} {config} no longer fits in VRAM: {spill} moved to shared GPU memory at {ctx}{decodeDrop}.", "action": "use-context" },
+    { "id": "I-2.3", "key": "ctx.memory-bound", "section": 2, "severity": "note", "metric": "estVramBytes", "params": {}, "text": "Larger contexts were not attempted for {config}: {next}: {reason}.", "action": "enable-kv-q8" },
+    { "id": "I-2.4", "key": "ctx.declared-vs-practical", "section": 2, "severity": "warn", "metric": "practicalContextCeiling", "params": { "fraction": 0.25 }, "text": "{model} advertises {declared} but on this machine {practical} is the usable limit.", "action": "use-context" },
+    { "id": "I-2.5", "key": "ctx.required-not-met", "section": 2, "severity": "critical", "metric": "practicalContextCeiling", "params": {}, "text": "No configuration reaches the required {required}: {ceilings}.", "action": "lower-required-context" },
+    { "id": "I-2.6", "key": "ctx.transient-dip", "section": 2, "severity": "note", "metric": "decodeTps", "params": { "dropRatio": 0.6, "minDropTps": 2 }, "text": "Transient dip at {ctx} for {config} ({a} → {b} → {c} t/s; likely contention), not a cliff." },
+    { "id": "I-2.7", "key": "gate.context-floor", "section": 2, "severity": "warn", "metric": "practicalContextCeiling", "params": { "minCtxFraction": 0.5 }, "text": "practical context {practical} is below {floor}", "action": "use-context" },
+    { "id": "I-2.8", "key": "ctx.reference", "section": 2, "severity": "info", "metric": "referenceCtx", "params": {}, "text": "Scored at {ctx}: {why}." },
+    { "id": "I-2.9", "key": "gate.required-context", "section": 2, "severity": "critical", "metric": "practicalContextCeiling", "params": {}, "text": "practical context {practical} < required {required} (limited by {limit})", "action": "lower-required-context" },
+    { "id": "I-2.10", "key": "fallback.required-context", "section": 2, "severity": "warn", "metric": "decodeTps", "params": {}, "text": "Meets required context; below preferred speed: {config} (fastest config reaching {required}; {failures}).", "action": "lower-required-context" },
+
+    { "id": "I-3.1", "key": "speed.decode-band", "section": 3, "severity": "info", "metric": "decodeTps", "params": { "unusable": 3, "patient": 8, "usable": 20, "comfortable": 40, "snappy": 100 }, "text": "Decode {decode} t/s at {ctx} — {band} ({gate})." },
+    { "id": "I-3.2", "key": "speed.thinking-effective", "section": 3, "severity": "warn", "metric": "effectiveTps", "params": { "ratio": 0.5 }, "text": "Reasoning consumes {reasoning} tokens per answer ({gen}); effective {effective} t/s vs {decode} t/s raw.", "action": "try-thinking-config" },
+    { "id": "I-3.3", "key": "speed.ttft-band", "section": 3, "severity": "info", "metric": "ttftMs", "params": { "immediate": 1000, "short": 5000, "noticeable": 20000, "long": 60000 }, "text": "Recommended context {ctx}: TTFT {ttft} for a full prompt (tolerance {tol}{accepted}; {tokens} tokens, {band}), decode {decode} t/s{scoredAt}." },
+    { "id": "I-3.4", "key": "speed.prefill-scaling", "section": 3, "severity": "note", "metric": "prefillTps", "params": {}, "text": "{message} — prompt processing slows super-linearly; expect TTFT to grow faster than context." },
+    { "id": "I-3.5", "key": "speed.partial-offload", "section": 3, "severity": "warn", "metric": "decodeTps", "params": {}, "text": "Partial GPU offload ({layers}) for {config} — degraded speed expected: decode {decode} t/s{vs}{nkvo}.", "action": "try-smaller-quant" },
+    { "id": "I-3.6", "key": "speed.moe-note", "section": 3, "severity": "info", "metric": "expertCount", "params": {}, "text": "{model} is a mixture-of-experts ({used} of {experts} experts per token): partial offload costs less than for a dense model." },
+    { "id": "I-3.7", "key": "gate.decode", "section": 3, "severity": "warn", "metric": "decodeTps", "params": {}, "text": "decode {decode} t/s at {ctx} is below {whose} {min} t/s", "action": "raise-min-decode" },
+    { "id": "I-3.8", "key": "gate.ttft", "section": 3, "severity": "warn", "metric": "ttftMs", "params": {}, "text": "{what} at {ctx} {how} the {tol} tolerance", "action": "use-context" },
+    { "id": "I-3.9", "key": "gate.partial-offload", "section": 3, "severity": "note", "metric": "gpuLayers", "params": {}, "text": "partial offload; a full-offload config of this model ran ({full})" },
+    { "id": "I-3.10", "key": "ctx.recommended", "section": 3, "severity": "info", "metric": "recommendedCtx", "params": {}, "text": "Recommended -c {ctx}: {why}." },
+
+    { "id": "I-4.1", "key": "mem.headroom", "section": 4, "severity": "info", "metric": "peakVramBytes", "params": { "warnBytes": 536870912 }, "text": "VRAM headroom at {ctx}: {headroom} ({peak} of {budget} budget){warn}.", "action": "use-context" },
+    { "id": "I-4.2", "key": "mem.in-use-at-plan", "section": 4, "severity": "note", "metric": "vramInUseBytes", "params": { "bytes": 1610612736 }, "text": "Planned while {inUse} of VRAM was already in use by other apps; results may improve on an idle GPU." },
+    { "id": "I-4.3", "key": "mem.ram-floor", "section": 4, "severity": "warn", "metric": "minRamAvailBytes", "params": { "marginBytes": 1073741824 }, "text": "{config} at {ctx} {what}.", "action": "enable-heavy-mode" },
+    { "id": "I-4.4", "key": "mem.mmap-note", "section": 4, "severity": "info", "metric": "ramAvailBytes", "params": {}, "text": "Available RAM drops by about the file size ({file}) while {config} runs: that is the mmap file cache, reclaimable — not a leak." },
+    { "id": "I-4.5", "key": "mem.wddm-83", "section": 4, "severity": "note", "metric": "peakVramBytes", "params": {}, "text": "Spill began with dedicated VRAM at {pct} % for {config}: on Windows (WDDM) spill starts before VRAM is full." },
+
+    { "id": "I-5.1", "key": "quality.band", "section": 5, "severity": "info", "metric": "quality", "params": { "weak": 40, "limited": 60, "solid": 80, "strong": 95 }, "text": "Quality {q} ± {ci} ({n} graded items{samples}) — {band}; {categories}." },
+    { "id": "I-5.2", "key": "quality.ci-overlap", "section": 5, "severity": "warn", "metric": "quality", "params": {}, "text": "Quality {qa} ± {ca} vs {qb} ± {cb} ({other}): {verdict}.", "action": "run-thorough-quality" },
+    { "id": "I-5.3", "key": "quality.category-gap", "section": 5, "severity": "note", "metric": "quality", "params": { "weak": 0.34, "codingWarn": 0.67 }, "text": "{model}: weak {categories}." },
+    { "id": "I-5.4", "key": "quality.thinking-off", "section": 5, "severity": "note", "metric": "gen", "params": {}, "text": "{model}: quality measured with thinking disabled (chat template enable_thinking=false){also}." },
+    { "id": "I-5.5", "key": "quality.estimated", "section": 5, "severity": "warn", "metric": "quality", "params": {}, "text": "No measured quality for {models}: quality there is a prior (parameters × quantization); the recommendation is provisional.", "action": "run-thorough-quality" },
+    { "id": "I-5.6", "key": "quality.small-suite", "section": 5, "severity": "note", "metric": "quality", "params": { "minItems": 30 }, "text": "Small quality suite ({n} graded items): ±{ci} is wide." },
+    { "id": "I-5.7", "key": "quality.not-a-leaderboard", "section": 5, "severity": "info", "metric": "quality", "params": {}, "text": "Quality is a relative signal for these candidates on this suite, not a leaderboard score." },
+    { "id": "I-5.8", "key": "gate.quality-min", "section": 5, "severity": "warn", "metric": "quality", "params": {}, "text": "quality {q} < {min}", "action": "run-thorough-quality" },
+    { "id": "I-5.9", "key": "gate.quality-unmeasured", "section": 5, "severity": "warn", "metric": "quality", "params": {}, "text": "no measured quality ({workload} decides on quality)", "action": "run-thorough-quality" },
+
+    { "id": "I-6.1", "key": "stab.rep-variance", "section": 6, "severity": "warn", "metric": "decodeTps", "params": { "spread": 0.15 }, "text": "Measurements for {config} at {ctx} are noisy (reps {reps} t/s, {spread} % apart); rerun on an idle system.", "action": "rerun-idle" },
+    { "id": "I-6.2", "key": "stab.versions", "section": 6, "severity": "warn", "metric": "versions", "params": {}, "text": "Results mix {what} versions ({versions}); comparisons may not be like-for-like.", "action": "rerun-idle" },
+    { "id": "I-6.3", "key": "stab.failures", "section": 6, "severity": "warn", "metric": "failureKind", "params": {}, "text": "{config} at {ctx}: {kind}{detail}.", "action": "use-context" },
+    { "id": "I-6.4", "key": "stab.cold-run", "section": 6, "severity": "note", "metric": "warm", "params": {}, "text": "{config} at {ctx} ran without a successful warmup; excluded from speed scoring." },
+    { "id": "I-6.5", "key": "gate.stability", "section": 6, "severity": "warn", "metric": "stability", "params": { "min": 50 }, "text": "stability {s} < {min}", "action": "rerun-idle" },
+
+    { "id": "I-7.1", "key": "cmp.winner", "section": 7, "severity": "info", "metric": "total", "params": {}, "text": "{text}" },
+    { "id": "I-7.2", "key": "cmp.why-not", "section": 7, "severity": "info", "metric": "total", "params": {}, "text": "{summary}" },
+    { "id": "I-7.3", "key": "cmp.quality-vs-speed", "section": 7, "severity": "info", "metric": "quality", "params": { "slowerRatio": 1.5 }, "text": "{text}" },
+    { "id": "I-7.4", "key": "cmp.same-model-quant", "section": 7, "severity": "note", "metric": "quality", "params": {}, "text": "{a} vs {b}: quality {qa} ± {ca} vs {qb} ± {cb} — quantization difference not measurable on this suite; prefer the smaller ({smaller})." },
+
+    { "id": "I-8.1", "key": "gen.best-config", "section": 8, "severity": "info", "metric": "gen", "params": {}, "text": "{model}: {gen}: quality {q} ± {ci} vs {qo} ± {co} with thinking off; answers {speed}." },
+    { "id": "I-8.2", "key": "gen.stochastic", "section": 8, "severity": "note", "metric": "gen", "params": {}, "text": "{gen} is sampled (seeded), {samples} per item; expect ±{ci} run to run." },
+    { "id": "I-8.3", "key": "gen.effort-saturation", "section": 8, "severity": "note", "metric": "gen", "params": {}, "text": "{model}: effort {hi} adds reasoning ({rhi} vs {rlo} tokens) without a quality gain beyond the band ({qhi} vs {qlo}); prefer effort {lo}." },
+
+    { "id": "I-9.1", "key": "panel.actions", "section": 9, "severity": "info", "metric": "action", "params": {}, "text": "Every warn/critical insight carries an action." }
+  ]
+}

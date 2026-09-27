@@ -1,8 +1,8 @@
 // Rank candidates for one workload and explain the pick in plain English. Pure and deterministic (A19).
-import type {
-  BreakdownRow, CandidateInput, CliffReport, ComponentId, MachineLimits, Metric, Recommendation, WorkloadId, WorkloadScore
-} from '../../shared/bench-types'
-import { componentScores } from './components'
+// Every decision comes from the interpretation rules (core/interpret verdicts); every reason cites its rule id.
+import type { CandidateInput, ComponentId, MachineLimits, Recommendation, WorkloadId } from '../../shared/bench-types'
+import { cite, interpret, label, rule, RULES_VERSION, verdicts, type CandidateVerdict, type Insight } from '../interpret'
+import { genLabel } from '../benchmark/gen'
 import { fmtCtx, val } from './cliff'
 import { DEFAULT_SCORING_CONFIG, effectiveProfile, withProfile, type ScoringConfig } from './workloads'
 
@@ -11,92 +11,50 @@ const LABEL: Record<ComponentId, string> = {
   memory: 'memory headroom', stability: 'stability', context: 'context capability'
 }
 
-interface Scored {
-  input: CandidateInput
-  score: WorkloadScore
-  cs: ReturnType<typeof componentScores>
-  decode: number | null
-  vram: number | null
-  ram: number | null
-}
-
-const byId = (a: Scored, b: Scored) => (a.input.config.id < b.input.config.id ? -1 : a.input.config.id > b.input.config.id ? 1 : 0)
-/** Missing values sort last in both directions. */
-const cmp = (a: number | null, b: number | null, desc: boolean) =>
-  a === b ? 0 : a === null ? 1 : b === null ? -1 : desc ? b - a : a - b
-
-/** What bounded the practical ceiling, in words (calibration: 8B on 16 GB is memory-bound, not cliff-bound). */
-function limitText(input: CandidateInput, cliff: CliffReport, ceiling: number): string {
-  if (cliff.limitedBy === 'cliff') return 'limited by a performance cliff above it'
-  if (cliff.limitedBy === 'failure') return 'limited by a failed run above it'
-  const next = input.config.skippedSteps.find((s) => s.ctx > ceiling)
-  if (next && /VRAM|RAM/.test(next.reason)) return `memory-bound at ${fmtCtx(ceiling)} (${fmtCtx(next.ctx)}: ${next.reason})`
-  if (next) return `${fmtCtx(next.ctx)} not tested (${next.reason})`
-  return `largest step tested`
-}
-
-/** One word for what capped the practical ceiling (for the required-context gate). */
-function limitWord(input: CandidateInput, cliff: CliffReport, ceiling: number | null): string {
-  if (cliff.steps.some((s) => s.reasons.some((r) => r.code === 'shared_spill' || r.code === 'vram_spill'))) return 'spill'
-  if (cliff.limitedBy === 'cliff') return 'cliff'
-  if (cliff.limitedBy === 'failure') return 'failure'
-  const next = input.config.skippedSteps.find((s) => s.ctx > (ceiling ?? 0))
-  if (next && /VRAM|RAM/.test(next.reason)) return 'memory'
-  if (next) return 'declared context'
-  return 'largest step tested'
-}
-
-/** "Qwen3.8-27B Q4_K_M (54/65 layers)": model, quant (unless the name has it), and what differs from a plain full offload. */
-function label(i: CandidateInput): string {
-  const { model: m, config: c } = i
-  const name = m.quant && !m.name.includes(m.quant) ? `${m.name} ${m.quant}` : m.name
-  const extra = [
-    c.gpuLayersAll ? null : c.gpuLayers === 0 ? 'CPU only' : `${c.gpuLayers}/${m.layers} layers`,
-    c.kvType === 'q8_0' ? 'KV q8_0' : null,
-    c.kvOffload === false ? 'KV in RAM' : null
-  ].filter((x): x is string => x !== null)
-  return extra.length ? `${name} (${extra.join(', ')})` : name
-}
-
 const t1 = (x: number) => x.toFixed(1)
 const gib2 = (b: number) => `${(b / 1024 ** 3).toFixed(2)} GiB`
-const qText = (s: Scored) => `${Math.round(s.cs.components.quality.score)}${s.cs.components.quality.input.kind === 'estimated' ? ' (estimated)' : ''}`
+const byId = (a: CandidateVerdict, b: CandidateVerdict) => (a.input.config.id < b.input.config.id ? -1 : a.input.config.id > b.input.config.id ? 1 : 0)
+const cmp = (a: number | null, b: number | null, desc: boolean) =>
+  a === b ? 0 : a === null ? 1 : b === null ? -1 : desc ? b - a : a - b
+const Q = (v: CandidateVerdict) => v.cs.components.quality
+const qText = (v: CandidateVerdict) => `${Math.round(Q(v).score)}${Q(v).ci95 !== undefined ? ` ± ${Math.round(Q(v).ci95!)}` : Q(v).input.kind === 'estimated' ? ' (estimated)' : ' (unknown)'}`
+const id = (key: string) => `[${rule(key).id}]`
 
-function headline(s: Scored): string {
-  const ctx = s.score.recommendedCtx ?? s.score.referenceCtx
+function headline(s: CandidateVerdict): string {
+  const ctx = s.cs.recommendedCtx ?? s.cs.referenceCtx
   const run = s.input.runs.find((r) => r.ctx === ctx)
   const dec = val(run?.decodeTps, true)
   const cliff = s.cs.cliff
   const firstSpill = cliff.steps.find((st) => st.reasons.some((r) => r.code === 'shared_spill' || r.code === 'vram_spill'))
   const spill = cliff.spillFreeUpTo !== null ? `no spill up to ${fmtCtx(cliff.spillFreeUpTo)}` : firstSpill ? `VRAM spill from ${fmtCtx(firstSpill.ctx)}` : 'spill not measured'
-  return `${label(s.input)}${ctx !== null ? ` @ ${fmtCtx(ctx)}` : ''} — ${dec === null ? 'decode unknown' : `${t1(dec)} t/s`}, quality ${qText(s)}, ${spill}`
+  const gen = s.gen?.gq.gen.thinking ? `, ${genLabel(s.gen.gq.gen)}` : ''
+  return `${label(s.input)}${ctx !== null ? ` @ ${fmtCtx(ctx)}` : ''} — ${dec === null ? 'decode unknown' : `${t1(dec)} t/s`}, quality ${qText(s)}${gen}, ${spill}`
 }
 
-/** One sentence per runner-up, from the same facts the score used: gates, quality delta, decode at the scoring step,
- *  the first decode cliff / spill, practical context and the totals. */
-function whyNotText(s: Scored, top: Scored, profileLabel: string): string {
-  const name = label(s.input)
-  if (!s.score.eligible) return `${name}: ineligible — ${s.score.gateFailures.join('; ')}`
-  const pros: string[] = [], cons: string[] = []
-  const dq = Math.round(s.cs.components.quality.score) - Math.round(top.cs.components.quality.score)
-  if (dq > 0) pros.push(`quality +${dq} pts`)
-  if (dq < 0) cons.push(`quality −${-dq} pts`)
+/** I-7.2: quality delta, speed at the scoring contexts, ceiling (with its cliff), then the failed gate or the totals. */
+function whyNotText(s: CandidateVerdict, top: CandidateVerdict, profileLabel: string): string {
+  const parts: string[] = []
+  const dq = Math.round(Q(s).score) - Math.round(Q(top).score)
+  parts.push(dq === 0 ? `same quality (${qText(s)} vs ${qText(top)})` : `quality ${dq > 0 ? '+' : '−'}${Math.abs(dq)} pts (${qText(s)} vs ${qText(top)})`)
   if (s.decode !== null && top.decode !== null) {
-    const a = s.score.referenceCtx, b = top.score.referenceCtx
-    const vs = a === b ? `${t1(s.decode)} vs ${t1(top.decode)} t/s${a !== null ? ` at ${fmtCtx(a)}` : ''}`
-      : `${t1(s.decode)} t/s at ${a !== null ? fmtCtx(a) : '?'} vs ${t1(top.decode)} at ${b !== null ? fmtCtx(b) : '?'}`
-    if (s.decode >= top.decode * 1.1) pros.push(`faster (${vs})`)
-    else if (s.decode * 1.1 <= top.decode) cons.push(`slower (${vs})`)
+    const a = s.cs.referenceCtx, b = top.cs.referenceCtx
+    parts.push(a === b ? `decode ${t1(s.decode)} vs ${t1(top.decode)} t/s${a !== null ? ` at ${fmtCtx(a)}` : ''}`
+      : `decode ${t1(s.decode)} t/s at ${a !== null ? fmtCtx(a) : '?'} vs ${t1(top.decode)} at ${b !== null ? fmtCtx(b) : '?'}`)
   }
   const reasons = s.cs.cliff.steps.flatMap((st) => st.reasons)
   const drop = reasons.find((r) => r.code === 'decode_drop')
   const spill = reasons.find((r) => r.code === 'shared_spill')
-  if (drop) cons.push(`decode fell ${t1(drop.from!)} → ${t1(drop.to!)} t/s after ${fmtCtx(drop.fromCtx!)}${spill ? ` (shared-VRAM spill ${gib2(spill.to!)} at ${fmtCtx(spill.toCtx!)})` : ''}`)
-  else if (spill) cons.push(`shared-VRAM spill ${gib2(spill.to!)} at ${fmtCtx(spill.toCtx!)}`)
+  const why = drop ? ` (decode fell ${t1(drop.from!)} → ${t1(drop.to!)} t/s after ${fmtCtx(drop.fromCtx!)}${spill ? `, shared-VRAM spill ${gib2(spill.to!)} at ${fmtCtx(spill.toCtx)}` : ''})`
+    : spill ? ` (shared-VRAM spill ${gib2(spill.to!)} at ${fmtCtx(spill.toCtx)})` : ''
   const pc = val(s.cs.cliff.practicalContextCeiling), pt = val(top.cs.cliff.practicalContextCeiling)
-  if (pc !== null && pt !== null && pc !== pt) (pc > pt ? pros : cons).push(`practical context ${fmtCtx(pc)} vs ${fmtCtx(pt)}`)
-  const body = pros.length && cons.length ? `${pros.join(', ')} but ${cons.join(', ')}` : [...pros, ...cons].join(', ')
-  return `${name}: ${body ? `${body}; ` : ''}${profileLabel} total ${Math.round(s.score.total)} vs ${Math.round(top.score.total)}`
+  parts.push(`practical context ${pc === null ? 'none' : fmtCtx(pc)} vs ${pt === null ? 'none' : fmtCtx(pt)}${why}`)
+  parts.push(!s.eligible ? `ineligible — ${s.failures.map((f) => f.text).join('; ')}`
+    : `${profileLabel} total ${Math.round(s.total)} vs ${Math.round(top.total)}${s.total > top.total ? ` — outranked because quality decides (bands apart, ${id('quality.ci-overlap')})` : ''}`)
+  return `${label(s.input)}: ${parts.join('; ')}`
+}
+
+const CLIFF_RULE: Record<string, string> = {
+  decode_drop: 'ctx.ceiling', prefill_drop: 'speed.prefill-scaling', shared_spill: 'ctx.spill', vram_spill: 'mem.wddm-83', run_failed: 'stab.failures', invalid_metrics: 'stab.failures'
 }
 
 export function recommend(
@@ -105,175 +63,109 @@ export function recommend(
   workload: WorkloadId,
   cfg: ScoringConfig = DEFAULT_SCORING_CONFIG,
   /** Models the planner produced no candidates for, with its reason — surfaced in reasons, not just the log. */
-  unplanned: { model: string; reason: string }[] = []
+  unplanned: { model: string; reason: string }[] = [],
+  /** The session request (only to word the user's own speed preference, I-3.7). */
+  request: { requiredContext?: number | null; minDecodeTps?: number | null } = {}
 ): Recommendation {
-  const profile = cfg.profiles[workload]
-  const round = (x: number) => Number(x.toFixed(cfg.tieDecimals))
-  const excluded: Recommendation['excluded'] = []
-  const scored: Scored[] = []
-
-  for (const input of inputs) {
-    const cs = componentScores(input, machine, profile, cfg)
-    if (!cs.usable) {
-      const why = cs.cliff.steps.flatMap((s) => s.reasons.map((r) => r.message))
-      excluded.push({ configId: input.config.id, reasons: why.length ? why : ['no runs recorded'] })
-      continue
-    }
-    const breakdown: BreakdownRow[] = (Object.keys(profile.weights) as ComponentId[]).map((k) => {
-      const c = cs.components[k]
-      const weight = profile.weights[k]
-      return { component: k, input: c.input, score: c.score, weight, contribution: weight * c.score }
-    })
-    const total = breakdown.reduce((s, r) => s + r.contribution, 0)
-    const gateFailures: string[] = []
-    const ceil = val(cs.cliff.practicalContextCeiling)
-    if (profile.requiredContext) {
-      if (ceil === null || ceil < profile.requiredContext) {
-        gateFailures.push(`practical context ${ceil === null ? 'none' : fmtCtx(ceil)} < required ${fmtCtx(profile.requiredContext)} (limited by ${limitWord(input, cs.cliff, ceil)})`)
-      }
-    } else if (ceil === null || ceil < profile.targetContext * cfg.gates.minCtxFraction) {
-      gateFailures.push(`practical context ${ceil === null ? 'none' : fmtCtx(ceil)} is below ${fmtCtx(profile.targetContext * cfg.gates.minCtxFraction)}`)
-    }
-    if (cs.components.stability.score < cfg.gates.minStability) gateFailures.push(`stability ${cs.components.stability.score.toFixed(0)} < ${cfg.gates.minStability}`)
-    const q = cs.components.quality
-    if (q.score < profile.minQuality) gateFailures.push(`${q.input.kind === 'estimated' ? 'estimated ' : ''}quality ${q.score.toFixed(0)} < ${profile.minQuality}`)
-    const ref = input.runs.find((r) => r.ctx === cs.referenceCtx)
-    const refDecode = val(ref?.decodeTps, true)
-    if (profile.minDecodeTps !== undefined && refDecode !== null && refDecode < profile.minDecodeTps) {
-      gateFailures.push(`decode ${refDecode.toFixed(1)} t/s at ${fmtCtx(ref!.ctx)} is below the ${profile.minDecodeTps} t/s minimum`)
-    }
-    const refTtft = val(ref?.ttftMs, true)
-    if (refTtft !== null && refTtft > profile.latencyToleranceMs && !profile.latencyAdvisory) {
-      gateFailures.push(`TTFT ${(refTtft / 1000).toFixed(1)} s at ${fmtCtx(ref!.ctx)} exceeds the ${(profile.latencyToleranceMs / 1000).toFixed(0)} s tolerance`)
-    }
-    scored.push({
-      input, cs,
-      score: { configId: input.config.id, workload, total, eligible: gateFailures.length === 0, gateFailures, breakdown, referenceCtx: cs.referenceCtx, recommendedCtx: cs.recommendedCtx },
-      decode: val(ref?.decodeTps, true),
-      vram: input.config.gpuLayers === 0 ? 0 : val(ref?.peakVramBytes),
-      ram: val(ref?.peakRamBytes)
-    })
-  }
-
-  // Calibration: partial offload collapsed decode −83% (ngl 20) on 8B; ngl 0 on Vulkan still uses the GPU for prefill.
-  // 14B @32K: a 1 GiB spill (26.4 t/s) still beat ngl 30 (5.6 t/s). So a partial config is never recommended for a model
-  // whose full-offload config has any usable step — even if that one is gated or degraded by a spill.
-  const fullOk = new Set(scored.filter((s) => s.input.config.gpuLayersAll).map((s) => s.input.model.id))
-  for (const s of scored) {
-    if (!s.input.config.gpuLayersAll && machine.gpuDevice !== null && fullOk.has(s.input.model.id)) {
-      s.score.eligible = false
-      s.score.gateFailures.push('partial offload; a full-offload config of this model passed')
-    }
-  }
-
-  // Tie-break chain (X3): eligible, total (rounded) desc, lower peak VRAM, lower peak RAM, configId asc.
-  scored.sort((a, b) =>
-    Number(b.score.eligible) - Number(a.score.eligible) ||
-    round(b.score.total) - round(a.score.total) ||
-    cmp(a.vram, b.vram, false) || cmp(a.ram, b.ram, false) || byId(a, b))
-  excluded.sort((a, b) => (a.configId < b.configId ? -1 : a.configId > b.configId ? 1 : 0))
-
-  const eligible = scored.filter((s) => s.score.eligible)
-  const pick = (f: (a: Scored, b: Scored) => number) => [...eligible].sort((a, b) => f(a, b) || byId(a, b))[0]?.input.config.id ?? null
+  const v = verdicts({ candidates: inputs, machine }, workload, request, cfg)
+  const { profile } = v
+  const insights: Insight[] = interpret(v)
+  const said = (key: string, configId?: string) => insights.filter((i) => i.key === key && (configId === undefined || i.configId === configId)).map((i) => i.text)
+  const eligible = v.ranked.filter((s) => s.eligible)
+  const pick = (f: (a: CandidateVerdict, b: CandidateVerdict) => number) => [...eligible].sort((a, b) => f(a, b) || byId(a, b))[0]?.input.config.id ?? null
   const alternatives = {
     fastest: pick((a, b) => cmp(a.decode, b.decode, true)),
-    bestQuality: pick((a, b) => b.cs.components.quality.score - a.cs.components.quality.score),
+    bestQuality: pick((a, b) => Q(b).score - Q(a).score),
     bestLongContext: pick((a, b) => cmp(val(a.cs.cliff.practicalContextCeiling), val(b.cs.cliff.practicalContextCeiling), true) || cmp(a.decode, b.decode, true)),
     lowestMemory: pick((a, b) => cmp(a.vram, b.vram, false) || cmp(a.ram, b.ram, false))
   }
 
-  // Explicit required context: never "no recommendation" just because everything is slow — fall back to the fastest
-  // config that reaches it and fails only speed gates.
-  let top = eligible[0]
-  let fallback = false
-  if (!top && profile.requiredContext) {
-    top = scored.filter((s) => (val(s.cs.cliff.practicalContextCeiling) ?? 0) >= profile.requiredContext! && s.score.gateFailures.every((g) => /decode|TTFT/.test(g)))
-      .sort((a, b) => cmp(a.decode, b.decode, true) || byId(a, b))[0]
-    fallback = !!top
-  }
+  const top = v.winner
   const reasons: string[] = []
-  if (!inputs.length) reasons.push('No recommendation: no candidates were benchmarked')
-  else if (!scored.length) {
+  const win = (text: string) => reasons.push(cite('cmp.winner', { text }))
+  if (!inputs.length) win('No recommendation: no candidates were benchmarked')
+  else if (!v.ranked.length) {
     const all = inputs.flatMap((i) => i.runs)
     if (all.length && all.every((r) => r.failureKind === 'skipped_memory')) {
-      reasons.push('No recommendation: nothing was run — the RAM guard skipped every step before loading')
-      for (const why of [...new Set(all.map((r) => r.reason).filter((x): x is string => !!x))]) reasons.push(why)
-    } else reasons.push('No recommendation: no successful runs')
+      win('No recommendation: nothing was run — the RAM guard skipped every step before loading')
+      for (const why of [...new Set(all.map((r) => r.reason).filter((x): x is string => !!x))]) reasons.push(`${id('mem.ram-floor')} ${why}`)
+    } else win('No recommendation: no successful runs')
+  } else if (!top || v.fallback) {
+    win(`No recommendation: no candidate meets the ${profile.label} requirements`)
+    for (const s of v.ranked) reasons.push(`${id('cmp.winner')} ${s.input.config.id}: ${s.failures.map((f) => f.text).join('; ')}`)
   }
-  else if (!top || fallback) {
-    reasons.push(`No recommendation: no candidate meets the ${profile.label} requirements`)
-    for (const s of scored) reasons.push(`${s.score.configId}: ${s.score.gateFailures.join('; ')}`)
-  }
-
-  // X17: only compare like with like; say so when rows come from different runtimes/procedures.
-  const vers = [...new Set(inputs.flatMap((i) => i.runs).map((r) => (r.versions ? `${r.versions.runtime ?? '?'}/${r.versions.benchmark}/${r.versions.prompts}` : null)).filter((v): v is string => v !== null))].sort()
-  if (vers.length > 1) reasons.push(`Warning: results mix runtime/benchmark versions (${vers.join(', ')}); comparisons may not be like-for-like`)
-
-  for (const u of unplanned) reasons.push(`Not benchmarked: ${u.model} — ${u.reason}`)
+  reasons.push(...said('ctx.required-not-met'), ...said('stab.versions'))
+  for (const u of unplanned) reasons.push(`${id('ctx.memory-bound')} Not benchmarked: ${u.model} — ${u.reason}`)
 
   let best: Recommendation['best'] = null
+  const whyNot: NonNullable<Recommendation['whyNot']> = []
   if (top) {
-    const { cliff, components } = top.cs
+    const cid = top.input.config.id
+    const { cliff } = top.cs
     const declared = top.input.model.ctxTrain
-    const declaredContext: Metric = declared ? { value: declared, kind: 'declared', source: 'GGUF context_length' } : { value: null, kind: 'unavailable', reason: 'GGUF has no context_length' }
-    best = { configId: top.score.configId, headline: headline(top), score: top.score, practicalContext: cliff.practicalContextCeiling, declaredContext, cliff, ...(fallback ? { fallback: 'meets required context; below preferred speed' as const } : {}) }
-    reasons.push(fallback
-      ? `Meets required context; below preferred speed: ${top.score.configId} (fastest config reaching ${fmtCtx(profile.requiredContext!)}; ${top.score.gateFailures.join('; ')})`
-      : `Best for ${profile.label}: ${top.score.configId} scores ${top.score.total.toFixed(1)}/100`)
-    // Quality over speed: say how much slower the pick is than the fastest eligible alternative.
-    const fast = scored.find((s) => s.input.config.id === alternatives.fastest)
-    if (fast && fast !== top && fast.decode && top.decode && fast.decode / top.decode >= 1.5) {
-      reasons.push(`Chosen for quality over speed: decode ${top.decode.toFixed(1)} t/s (${(fast.decode / top.decode).toFixed(1)}× slower than ${fast.input.config.id})`)
+    const genReason = said('gen.best-config', cid)[0]
+    best = {
+      configId: cid, headline: headline(top),
+      score: { configId: cid, workload, total: top.total, eligible: top.eligible, gateFailures: top.failures.map((f) => f.text), breakdown: top.breakdown, referenceCtx: top.cs.referenceCtx, recommendedCtx: top.cs.recommendedCtx, ...(top.gen ? { gen: top.gen.gq.gen } : {}) },
+      practicalContext: cliff.practicalContextCeiling,
+      declaredContext: declared ? { value: declared, kind: 'declared', source: 'GGUF context_length' } : { value: null, kind: 'unavailable', reason: 'GGUF has no context_length' },
+      cliff,
+      ...(v.fallback ? { fallback: 'meets required context; below preferred speed' as const } : {}),
+      ...(top.gen?.gq.gen.thinking && genReason ? { gen: { config: top.gen.gq.gen, reason: genReason } } : {})
     }
+    if (v.fallback) {
+      reasons.push(cite('fallback.required-context', { config: cid, required: fmtCtx(profile.requiredContext!), failures: top.failures.map((f) => f.text).join('; ') }))
+    } else win(`Best for ${profile.label}: ${cid} scores ${top.total.toFixed(1)}/100`)
+    reasons.push(...v.provisional.map((p) => p.text))
+    if (v.quality) reasons.push(v.quality.text)
+    // I-7.3: how much speed the quality pick costs.
+    const fast = v.ranked.find((s) => s.input.config.id === alternatives.fastest)
+    if (fast && fast !== top && fast.decode && top.decode && fast.decode / top.decode >= rule('cmp.quality-vs-speed').params.slowerRatio) {
+      reasons.push(cite('cmp.quality-vs-speed', { text: `Chosen for quality over speed: quality ${qText(top)} vs ${qText(fast)}; decode ${t1(top.decode)} vs ${t1(fast.decode)} t/s (${(fast.decode / top.decode).toFixed(1)}× slower than ${fast.input.config.id})` }))
+    }
+    if (genReason) reasons.push(genReason)
     if (profile.requiredContext) {
       const at = top.input.runs.find((r) => r.ctx === profile.requiredContext && r.status !== 'fail')
       const t = val(at?.ttftMs, true)
       const over = t !== null && t > profile.latencyToleranceMs
-      reasons.push(`Required context ${fmtCtx(profile.requiredContext)}: TTFT ${t === null ? 'not measured' : `${(t / 1000).toFixed(1)} s`} at ${fmtCtx(profile.requiredContext)}` +
+      reasons.push(`${id('speed.ttft-band')} Required context ${fmtCtx(profile.requiredContext)}: TTFT ${t === null ? 'not measured' : `${(t / 1000).toFixed(1)} s`} at ${fmtCtx(profile.requiredContext)}` +
         (over ? ` (above the profile's ${(profile.latencyToleranceMs / 1000).toFixed(0)} s tolerance; accepted because you required ${fmtCtx(profile.requiredContext)})` : ''))
     }
-    if (scored.length === 1) reasons.push('Only one candidate; not compared')
-    const leaders = [...top.score.breakdown].sort((a, b) => b.contribution - a.contribution || (a.component < b.component ? -1 : 1)).slice(0, 2)
-    reasons.push(`Largest contributions: ${leaders.map((r) => `${LABEL[r.component]} ${r.contribution.toFixed(1)}`).join(', ')}`)
-    const pc = val(cliff.practicalContextCeiling)!
-    const cfgTop = top.input.config
-    if (!cfgTop.gpuLayersAll && machine.gpuDevice !== null) {
-      reasons.push(`Partial GPU offload (${cfgTop.gpuLayers}/${top.input.model.layers} layers${cfgTop.kvOffload === false ? ', KV cache in RAM' : ''}) — ` +
-        `degraded speed expected: decode ${top.decode!.toFixed(1)} t/s${cfgTop.degradedReason ? ` (${cfgTop.degradedReason})` : ''}`)
-    }
-    const rc = top.input.runs.find((r) => r.ctx === top.score.recommendedCtx)
-    // Speed/latency are scored at the workload target (referenceCtx); say so when that differs from the recommended -c.
-    const sc = top.input.runs.find((r) => r.ctx === top.score.referenceCtx)
-    const scoredAt = () => {
-      if (!sc || sc.ctx === rc?.ctx) return ''
-      const t = val(sc.ttftMs, true)
-      return ` (scored at ${fmtCtx(sc.ctx)}: TTFT ${t === null ? 'unknown' : `${(t / 1000).toFixed(1)} s`}, decode ${val(sc.decodeTps, true)!.toFixed(1)} t/s)`
-    }
-    const ttft = val(rc?.ttftMs, true)
-    if (rc) {
-      reasons.push(`Recommended context ${fmtCtx(rc.ctx)}: TTFT ${ttft === null ? 'unknown' : `${(ttft / 1000).toFixed(1)} s`} for a full prompt ` +
-        `(tolerance ${(profile.latencyToleranceMs / 1000).toFixed(0)} s), decode ${val(rc.decodeTps, true)!.toFixed(1)} t/s` + scoredAt())
-    }
-    reasons.push(`Practical context ${fmtCtx(pc)} (measured)${declared ? `; model declares ${fmtCtx(declared)}` : ''}; ${limitText(top.input, cliff, pc)}`)
-    if (cliff.spillFreeUpTo !== null) reasons.push(`No VRAM spill up to ${fmtCtx(cliff.spillFreeUpTo)}`)
-    for (const s of cliff.steps) for (const r of s.reasons) if (r.code !== 'beyond_limit') reasons.push(r.message)
-    if (components.quality.note) reasons.push(components.quality.note)
-    else if (top.input.model.supportsThinking) reasons.push('Quality measured with thinking disabled (chat template enable_thinking=false)')
-  }
+    if (v.ranked.length === 1) win('Only one candidate; not compared')
+    const leaders = [...top.breakdown].sort((a, b) => b.contribution - a.contribution || (a.component < b.component ? -1 : 1)).slice(0, 2)
+    win(`Largest contributions: ${leaders.map((r) => `${LABEL[r.component]} ${r.contribution.toFixed(1)}`).join(', ')}`)
+    reasons.push(...said('speed.partial-offload', cid), ...said('speed.ttft-band', cid), ...said('ctx.ceiling', cid), ...said('ctx.recommended', cid))
+    if (cliff.spillFreeUpTo !== null) reasons.push(`${id('ctx.spill')} No VRAM spill up to ${fmtCtx(cliff.spillFreeUpTo)}`)
+    for (const s of cliff.steps) for (const r of s.reasons) if (r.code !== 'beyond_limit') reasons.push(`${id(CLIFF_RULE[r.code] ?? 'ctx.ceiling')} ${r.message}`)
+    const qn = top.cs.components.quality.note
+    if (qn) reasons.push(`${id('quality.estimated')} ${qn}`)
+    reasons.push(...said('quality.thinking-off', cid))
 
-  const whyNot: NonNullable<Recommendation['whyNot']> = []
-  if (top) {
-    const qTop = top.cs.components.quality.score
-    const others = scored.filter((s) => s !== top)
+    // Why not: the top 2 other candidates by rank, plus the best config of each other model with higher measured quality.
+    const others = v.ranked.filter((s) => s !== top)
     const picks = others.slice(0, 2)
-    // Plus the best-ranked config of each other model with higher measured quality (one per model, not every ngl).
     for (const s of others) {
-      if (s.cs.components.quality.input.kind === 'measured' && s.cs.components.quality.score > qTop && !picks.some((p) => p.input.model.id === s.input.model.id)) picks.push(s)
+      if (s.qualityMeasured && Q(s).score > Q(top).score && !picks.some((p) => p.input.model.id === s.input.model.id)) picks.push(s)
     }
-    for (const s of picks) whyNot.push({ configId: s.score.configId, model: s.input.model.name, summary: whyNotText(s, top, profile.label) })
+    for (const s of picks) whyNot.push({ configId: s.input.config.id, model: s.input.model.name, summary: whyNotText(s, top, profile.label) })
+    // …and the winner's other generation configs.
+    for (const g of top.genOptions) {
+      if (g === top.gen) continue
+      const a = val(g.gq.effectiveAnswerLatencyMs, true), b = top.gen ? val(top.gen.gq.effectiveAnswerLatencyMs, true) : null
+      const dq = Math.round(g.cs.components.quality.score) - Math.round(Q(top).score)
+      whyNot.push({
+        configId: cid, genId: g.gq.gen.id, model: top.input.model.name,
+        summary: `${genLabel(g.gq.gen)}: quality ${dq > 0 ? '+' : dq < 0 ? '−' : '±'}${Math.abs(dq)} pts (${Math.round(g.cs.components.quality.score)} ± ${Math.round(g.cs.components.quality.ci95 ?? 0)} vs ${qText(top)})` +
+          `${a && b ? `; answers ${t1(a >= b ? a / b : b / a)}× ${a >= b ? 'slower' : 'faster'}` : ''}${g.withinTolerance ? '' : `; time to answer above the ${(profile.latencyToleranceMs / 1000).toFixed(0)} s tolerance`}`
+      })
+    }
   }
 
-  return { workload, scoringVersion: cfg.version, best, alternatives, ranked: scored.map((s) => s.score), excluded, reasons, whyNot }
+  return {
+    workload, scoringVersion: cfg.version, rulesVersion: RULES_VERSION, best, alternatives,
+    ranked: v.ranked.map((s) => ({ configId: s.input.config.id, workload, total: s.total, eligible: s.eligible, gateFailures: s.failures.map((f) => f.text), breakdown: s.breakdown, referenceCtx: s.cs.referenceCtx, recommendedCtx: s.cs.recommendedCtx, ...(s.gen ? { gen: s.gen.gq.gen } : {}) })),
+    excluded: v.excluded, reasons, whyNot, insights, provisional: v.provisional.length > 0
+  }
 }
 
 /** Recommendation for any workload from stored session data — no re-run. Same scoring as the runner (effective
@@ -285,6 +177,5 @@ export function recommendForWorkload(
   unplanned: { model: string; reason: string }[] = [],
   cfg: ScoringConfig = DEFAULT_SCORING_CONFIG
 ): Recommendation {
-  return recommend(data.candidates, data.machine, workload, withProfile(cfg, effectiveProfile(cfg.profiles[workload], request)), unplanned)
+  return recommend(data.candidates, data.machine, workload, withProfile(cfg, effectiveProfile(cfg.profiles[workload], request)), unplanned, request)
 }
-

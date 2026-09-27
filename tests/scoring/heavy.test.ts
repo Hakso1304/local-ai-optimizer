@@ -78,14 +78,14 @@ describe('heavy-model recommendation (27B partial @ ~8 t/s vs 8B full offload)',
   it('Maximum Quality: the 27B partial offload wins on measured quality, with a degraded-speed reason', () => {
     const rec = recommend(all, M, 'max_quality')
     expect(rec.best?.configId).toBe(cand27.id)
-    expect(rec.reasons).toContain(`Partial GPU offload (${cand27.gpuLayers}/64 layers) — degraded speed expected: decode 7.8 t/s (${cand27.degradedReason})`)
+    expect(rec.reasons).toContain(`[I-3.5] Partial GPU offload (${cand27.gpuLayers}/64 layers) for ${cand27.id} — degraded speed expected: decode 7.8 t/s.`)
   })
 
   it('Fast Assistant and Coding: the 27B fails the decode gate; the 8B wins', () => {
     for (const w of ['fast_assistant', 'coding'] as const) {
       const rec = recommend(all, M, w)
       expect(rec.best?.configId, w).toBe('llama8b|ngl=all')
-      expect(rec.ranked.find((s) => s.configId === cand27.id)!.gateFailures.join(' '), w).toMatch(/below the \d+ t\/s minimum/)
+      expect(rec.ranked.find((s) => s.configId === cand27.id)!.gateFailures.join(' '), w).toMatch(/\[I-3\.7\] decode [\d.]+ t\/s at \d+K is below the .* minimum \d+ t\/s/)
     }
   })
 })
@@ -108,22 +108,24 @@ describe('heavy-model calibration: Qwen3.8-27B 55/65 layers vs Llama-3.1-8B full
   it('Maximum Quality: the 27B wins when its measured quality is higher', () => {
     const rec = recommend(withQ(1, 0.6), MH, 'max_quality')
     expect(rec.best?.configId).toBe(Q)
-    expect(rec.reasons.join('\n')).toMatch(/Partial GPU offload \(55\/65 layers\) — degraded speed expected: decode 13\.0 t\/s/)
-    expect(rec.reasons).toContain('Quality measured with thinking disabled (chat template enable_thinking=false)')
+    expect(rec.reasons.join('\n')).toMatch(/\[I-3\.5\] Partial GPU offload \(55\/65 layers\) for qwen38\|ngl=55 — degraded speed expected: decode 13\.0 t\/s/)
+    expect(rec.reasons.join('\n')).toMatch(/\[I-5\.4\] Qwen3\.8-27B-UD-Q4_K_M: quality measured with thinking disabled/)
   })
 
-  it('Coding: the 27B passes the 10 t/s gate but the 8B wins on speed, even at quality 100 vs 60', () => {
-    for (const [a, b] of [[0.8, 0.8], [1, 0.6]]) {
-      const rec = recommend(withQ(a, b), MH, 'coding')
-      expect(rec.ranked.find((s) => s.configId === Q)!.eligible).toBe(true)
-      expect(rec.best?.configId, `${a}/${b}`).toBe(L8)
-    }
+  it('Coding: equal quality → the 8B wins on speed; quality 100 vs 60 (bands apart) → quality decides (I-5.2)', () => {
+    const same = recommend(withQ(0.8, 0.8), MH, 'coding')
+    expect(same.ranked.find((s) => s.configId === Q)!.eligible).toBe(true) // 13 t/s passes the 10 t/s Coding gate
+    expect(same.best?.configId).toBe(L8)
+    const apart = recommend(withQ(1, 0.6), MH, 'coding')
+    expect(apart.best?.configId).toBe(Q)
+    expect(apart.reasons.join('\n')).toMatch(/\[I-5\.2\] Quality 100 ± \d+ vs 60 ± \d+ \(llama8b\|ngl=all\): outside the confidence band — quality decides/)
+    expect(apart.reasons.join('\n')).toMatch(/\[I-7\.3\] Chosen for quality over speed/)
   })
 
   it('Fast Assistant rejects the 27B on the decode gate (13 < 30 t/s)', () => {
     const rec = recommend(withQ(1, 0.6), MH, 'fast_assistant')
     expect(rec.best?.configId).toBe(L8)
-    expect(rec.ranked.find((s) => s.configId === Q)!.gateFailures.join(' ')).toMatch(/decode 1[23]\.\d t\/s .* below the 30 t\/s minimum/)
+    expect(rec.ranked.find((s) => s.configId === Q)!.gateFailures.join(' ')).toMatch(/\[I-3\.7\] decode 1[23]\.\d t\/s at \d+K is below the Fast Assistant minimum 30 t\/s/)
   })
 })
 

@@ -1,10 +1,10 @@
 // Required context (64K–128K large-scale coding), advisory latency, user decode gate, fallback, large_coding profile.
 import { describe, expect, it } from 'vitest'
-import type { CandidateInput, QualityResult } from '../../src/shared/bench-types'
+import type { CandidateInput } from '../../src/shared/bench-types'
 import { generateCandidates } from '../../src/core/benchmark/candidates'
 import { recommendForWorkload } from '../../src/core/scoring/recommend'
 import { WORKLOADS, effectiveProfile } from '../../src/core/scoring/workloads'
-import { inputs, load, machine, toRun } from './helpers'
+import { inputs, load, machine, q5, toRun } from './helpers'
 
 const f8 = load('calib-8b-rx9070.json') as ReturnType<typeof load> & { vramInUseBytes: number }
 const M = { ...machine(f8.vramBytes), vramInUseBytes: { value: f8.vramInUseBytes, kind: 'measured' as const } }
@@ -12,7 +12,7 @@ const llama = f8.models[0]
 const FULL = 'llama8b|ngl=all'
 // Real config (so skippedSteps carry the planner's memory reasons), real 8B runs 2K→64K.
 const gen = generateCandidates(M, llama, { backend: 'vulkan' }, effectiveProfile(WORKLOADS.long_context_coding, { requiredContext: 131072 })).candidates[0]
-const eight = (): CandidateInput[] => inputs(f8).filter((c) => c.config.id === FULL).map((c) => ({ ...c, config: { ...gen, id: FULL } }))
+const eight = (): CandidateInput[] => inputs(f8).filter((c) => c.config.id === FULL).map((c) => ({ ...c, config: { ...gen, id: FULL }, quality: q5(c.model.id, 0.6) }))
 const data = (cs: CandidateInput[]) => ({ candidates: cs, machine: M })
 
 describe('required context', () => {
@@ -20,19 +20,19 @@ describe('required context', () => {
     const rec = recommendForWorkload(data(eight()), 'long_context_coding', { requiredContext: 65536 })
     expect(rec.best?.configId).toBe(FULL)
     expect(rec.best?.score.recommendedCtx).toBe(65536)
-    expect(rec.reasons).toContain('Required context 64K: TTFT 32.4 s at 64K')
+    expect(rec.reasons).toContain('[I-3.3] Required context 64K: TTFT 32.4 s at 64K')
   })
 
   it('…ineligible for required 128K, with what limited it', () => {
     const rec = recommendForWorkload(data(eight()), 'long_context_coding', { requiredContext: 131072 })
     expect(rec.best).toBeNull()
-    expect(rec.ranked[0].gateFailures).toContain('practical context 64K < required 128K (limited by memory)')
+    expect(rec.ranked[0].gateFailures).toContain('[I-2.9] practical context 64K < required 128K (limited by memory)')
   })
 
   it('an explicit required context makes TTFT advisory: eligible, and the reason says it was accepted', () => {
     const rec = recommendForWorkload(data(eight()), 'coding', { requiredContext: 65536 }) // coding tolerance 15 s
     expect(rec.best?.configId).toBe(FULL)
-    expect(rec.reasons).toContain("Required context 64K: TTFT 32.4 s at 64K (above the profile's 15 s tolerance; accepted because you required 64K)")
+    expect(rec.reasons).toContain("[I-3.3] Required context 64K: TTFT 32.4 s at 64K (above the profile's 15 s tolerance; accepted because you required 64K)")
   })
 
   it('a user minDecodeTps replaces the profile gate (raise or lower)', () => {
@@ -44,7 +44,7 @@ describe('required context', () => {
   it('never empty just because everything is slow: falls back to the fastest config reaching the required context', () => {
     const rec = recommendForWorkload(data(eight()), 'long_context_coding', { requiredContext: 65536, minDecodeTps: 500 })
     expect(rec.best).toMatchObject({ configId: FULL, fallback: 'meets required context; below preferred speed' })
-    expect(rec.reasons.join('\n')).toMatch(/^Meets required context; below preferred speed: llama8b\|ngl=all \(fastest config reaching 64K; decode .* below the 500 t\/s minimum\)$/m)
+    expect(rec.reasons.join('\n')).toMatch(/^\[I-2\.10\] Meets required context; below preferred speed: llama8b\|ngl=all \(fastest config reaching 64K; \[I-3\.7\] decode .* below your preferred 500 t\/s\)\.$/m)
   })
 
   it('16 GB GPU, target 128K: q8_0 and -nkvo full-offload variants are generated, each noted', () => {
@@ -60,10 +60,6 @@ describe('required context', () => {
 
 describe('large_coding profile (quality over speed)', () => {
   const fh = load('calib-heavy-qwen38-rx9070.json')
-  const q5 = (id: string, rate: number): QualityResult[] =>
-    ['instruction', 'reasoning', 'coding', 'structured', 'extraction', 'context'].flatMap((category) => [0, 1, 2, 3, 4].map((i) => ({
-      testId: `${id}-${category}-${i}`, category: category as QualityResult['category'], weight: 1, pass: i < rate * 5, score: 1, detail: ''
-    })))
   // Qwen3.8-27B 55/65: measured 2K–8K; 16K–64K extrapolated flat (decode is set by the CPU-side layers), prefill ~600 t/s.
   const q = inputs(fh).find((c) => c.config.id === 'qwen38|ngl=55')!
   const extra = [16384, 32768, 65536].map((ctx) => toRun({ ...fh.runs.find((r) => r.configId === 'qwen38|ngl=55' && r.ctx === 8192)!, ctx, ttftMs: ((ctx * 0.75) / 600) * 1000, prefillTps: 600, decodeTps: 12.4 }))
@@ -73,12 +69,14 @@ describe('large_coding profile (quality over speed)', () => {
   it('picks the 27B (Q 100 at 12 t/s) over the 8B (Q 60 at ~100 t/s) when both reach 64K, and says why', () => {
     const rec = recommendForWorkload(data(all()), 'large_coding', { requiredContext: 65536 })
     expect(rec.best?.configId).toBe('qwen38|ngl=55')
-    expect(rec.reasons.join('\n')).toMatch(/Chosen for quality over speed: decode 12\.4 t\/s \([\d.]+× slower than llama8b\|ngl=all\)/)
-    expect(rec.reasons.join('\n')).toMatch(/Required context 64K: TTFT 81\.9 s at 64K \(above the profile's 180 s|Required context 64K: TTFT 81\.9 s at 64K$/m)
+    expect(rec.reasons.join('\n')).toMatch(/\[I-7\.3\] Chosen for quality over speed: quality 100 ± \d+ vs 60 ± \d+; decode 12\.4 vs [\d.]+ t\/s \([\d.]+× slower than llama8b\|ngl=all\)/)
+    expect(rec.reasons.join('\n')).toMatch(/\[I-3\.3\] Required context 64K: TTFT 81\.9 s at 64K$/m)
   })
 
-  it('plain Coding still picks the 8B on the same data', () => {
-    expect(recommendForWorkload(data(all()), 'coding').best?.configId).toBe(FULL)
+  it('plain Coding picks the 8B: the 27B misses the 15 s TTFT tolerance at 16K (20.5 s), so quality cannot decide', () => {
+    const rec = recommendForWorkload(data(all()), 'coding')
+    expect(rec.best?.configId).toBe(FULL)
+    expect(rec.ranked.find((s) => s.configId === 'qwen38|ngl=55')!.gateFailures.join(' ')).toMatch(/\[I-3\.8\] TTFT 20\.5 s at 16K exceeds the 15 s tolerance/)
   })
 
   it('large_coding: latency is advisory, gates are 8 t/s decode and quality 50', () => {

@@ -1,5 +1,6 @@
 // Benchmark / scoring / recommendation types. Pure data, no runtime code. See docs/DESIGN.md §5.
 import type { QualityCategory, QualityResult } from '../core/quality'
+import type { Insight } from '../core/interpret'
 export type { QualityCategory, QualityResult }
 
 /** Where a value came from (ACCEPTANCE R1).
@@ -218,6 +219,10 @@ export interface BenchmarkRunResult {
   reason?: string | null
   /** true = measured after a successful size-matched warmup (X13). Absent in pre-1.0 data. */
   warm?: boolean
+  /** Decode t/s of each measured rep (server timings), for the rep-variance rule. */
+  repDecodeTps?: number[]
+  /** Lowest RAM available the guard saw during the step (load + requests). */
+  minRamAvailBytes?: Metric
   /** What produced this row (X17), all declared. runtime null = not reported by detect(). */
   versions?: { benchmark: string; prompts: string; quality: string; runtime: string | null }
 }
@@ -272,8 +277,15 @@ export interface ComponentScores {
   cliff: CliffReport
   /** ctx of the step whose metrics feed speed/latency/memory (≈ targetContext); null when no usable step. */
   referenceCtx: number | null
-  /** Context to configure for this workload: largest PASS step ≤ maxContext whose full-prompt TTFT is within tolerance. */
+  /** Context to configure (rule I-3.10): always a measured PASS rung — the largest ≤ maxContext whose measured
+   *  full-prompt TTFT is within tolerance (advisory latency: the largest PASS rung ≤ maxContext); if none is within
+   *  tolerance, the smallest PASS rung with recommendedFits=false; null without a PASS rung. */
   recommendedCtx: number | null
+  /** false = the recommended rung is outside the latency tolerance (or its TTFT is unknown) and not advisory. */
+  recommendedFits?: boolean
+  /** Why these rungs were chosen (rules I-2.8 / I-3.10). */
+  referenceWhy?: string
+  recommendedWhy?: string
   usable: boolean
 }
 
@@ -284,6 +296,9 @@ export interface BreakdownRow {
   weight: number
   /** weight × score; rows sum to WorkloadScore.total. */
   contribution: number
+  /** Quality row: graded items and the 95 % half-width ("Q ± ci (n)"). */
+  n?: number
+  ci95?: number
 }
 
 export interface WorkloadScore {
@@ -336,6 +351,10 @@ export interface Recommendation {
   /** Why the runners-up lost: the top 2 non-winners by rank, plus any with higher measured quality than the winner.
    *  One sentence each, built only from the numbers the score used. Empty when there is no winner. */
   whyNot?: { configId: string; model: string; summary: string; /** set for the winner's other generation configs */ genId?: string }[]
-  /** Some candidate's quality is an estimated prior (no quality run): the ranking may change once it is measured. */
+  /** Some candidate's quality is an estimated prior (no quality run), or the winner was decided on an estimated
+   *  component (rules I-1.1 / I-5.5): the ranking may change once it is measured. */
   provisional?: boolean
+  /** Interpretation rules version (core/interpret rules.v1.json) and the insight panel they produced. */
+  rulesVersion?: string
+  insights?: Insight[]
 }

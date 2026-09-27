@@ -11,7 +11,7 @@ import { recommend } from '../../src/core/scoring/recommend'
 import { DEFAULT_SCORING_CONFIG, WORKLOADS } from '../../src/core/scoring/workloads'
 import { estimateMemory, generateCandidates, machineFromProfile } from '../../src/core/benchmark/candidates'
 import { scanSystem } from '../../src/core/system/scanner'
-import { inputs, load, machine, toRun, type Fixture, type FixtureRun } from './helpers'
+import { inputs, load, machine, toRun, withQuality, type Fixture, type FixtureRun } from './helpers'
 
 const GiB = 1024 ** 3
 const calib = load('calib-rx9070-2026-09-27.json')
@@ -138,7 +138,7 @@ describe('calibration (b): TTFT 32 s at 64K vs workload latency tolerance', () =
   })
 
   it('...but stays eligible for Document Analysis (32 s < 60 s tolerance)', () => {
-    expect(recommend([only64()], M, 'document_analysis').ranked[0].eligible).toBe(true)
+    expect(recommend(withQuality([only64()]), M, 'document_analysis').ranked[0].eligible).toBe(true)
   })
 })
 
@@ -147,7 +147,7 @@ describe('calibration (c): partial offload vs full offload (real numbers: decode
   const f = sub(calib, ['llama8b|all', 'llama8b|ngl20', 'llama8b|ngl0'])
 
   it.each(ALL_WORKLOADS)('%s: never recommends partial/CPU offload when full offload passes', (w) => {
-    const r = recommend(inputs(f), M, w)
+    const r = recommend(withQuality(inputs(f)), M, w)
     expect(r.best?.configId).toBe('llama8b|all')
   })
 
@@ -237,7 +237,8 @@ describe('calibration (e) + X3/X16: determinism', () => {
 
   it('the full calibration set ranks sensibly: fast_assistant → qwen (366 t/s), max_quality → 8B', () => {
     expect(recommend(inputs(f), M, 'fast_assistant').best?.configId).toBe('qwen|all')
-    expect(recommend(inputs(f), M, 'max_quality').best?.configId).toBe('llama8b|all')
+    // Measured quality 8B 80 vs Qwen-1.5B 60 (bands overlap at 5 items/category → the score decides; quality weighs 0.7).
+    expect(recommend(withQuality(inputs(f), (m) => (m.startsWith('llama') ? 0.8 : 0.6)), M, 'max_quality').best?.configId).toBe('llama8b|all')
   })
 })
 
@@ -369,11 +370,18 @@ describe('X19: candidate explosion is bounded', () => {
 
 // ---------------------------------------------------------------------------------------------------------------
 describe('X20: quality with no measured results is labelled ESTIMATED', () => {
-  it('max_quality without a quality run: quality input kind estimated, note surfaces in the recommendation', () => {
+  it('max_quality without a quality run: quality input kind estimated; D07: ineligible (quality-weighted), provisional', () => {
     const r = recommend(inputs(sub(calib, ['llama8b|all'])), M, 'max_quality')
-    const q = r.best!.score.breakdown.find((b) => b.component === 'quality')!
+    const q = r.ranked[0].breakdown.find((b) => b.component === 'quality')!
     expect(q.input.kind).toBe('estimated')
-    expect(r.reasons.join('\n')).toMatch(/ESTIMATED/)
+    expect(r.ranked[0].gateFailures.join(' ')).toMatch(/\[I-5\.9\] no measured quality/)
+    expect(r.best).toBeNull()
+    expect(r.provisional).toBe(true)
+    // General Chat is not quality-weighted: the prior stays usable there, labelled ESTIMATED and provisional.
+    const chat = recommend(inputs(sub(calib, ['llama8b|all'])), M, 'general_chat')
+    expect(chat.best?.configId).toBe('llama8b|all')
+    expect(chat.reasons.join(' ')).toMatch(/ESTIMATED/)
+    expect(chat.provisional).toBe(true)
   })
 
   it('measured quality replaces the prior', () => {
