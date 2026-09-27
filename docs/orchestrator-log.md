@@ -322,3 +322,6 @@
 
 ## Fable — 2026-09-28 05:46 local
 - Heartbeat: pushed e25d119/64cdf3c (S2 harness CLI/DB + A/B ownership tests). Waiting: S1 critical commit (CIM µs identity + standalone baseline + T-round + G08); S3 Q2/Q3/Q5–Q7; Astra partial harness review.
+
+## Fable — 2026-09-28 05:50 local
+- Pushed b647ed9 (S3 Q5 atomic dumps) + 85df974 (S2 tests); tip 85df974. Astra w4u: CLI caps/--db/--reps/--backend hip closed; U1 HIGH (replacement listener after readiness accepted), U2 MED (owner query fails open), U3 MED (device metadata vs HIP gate) -> S3; RED negatives -> S2; Astra now gating Q5 (w4v). S1 still on CIM µs identity fix. Lane HELD.
