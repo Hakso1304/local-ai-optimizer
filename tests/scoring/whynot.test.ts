@@ -2,7 +2,7 @@
 // gate / totals) on the real calibration fixtures (8B/14B full offload, heavy Qwen3.8-27B) with synthetic measured quality.
 import { describe, expect, it } from 'vitest'
 import { recommend } from '../../src/core/scoring/recommend'
-import { inputs, load, machine, q5 } from './helpers'
+import { inputs, load, machine, q5, withOffProof } from './helpers'
 
 describe('14B (spill cliff at 32K) vs 8B full offload', () => {
   const f8 = load('calib-8b-rx9070.json'), f14 = load('calib-14b-rx9070.json')
@@ -33,7 +33,7 @@ describe('14B (spill cliff at 32K) vs 8B full offload', () => {
 describe('heavy: Qwen3.8-27B 55/65 layers vs Llama-3.1-8B', () => {
   const fh = load('calib-heavy-qwen38-rx9070.json') as ReturnType<typeof load> & { vramInUseBytes: number }
   const MH = { ...machine(fh.vramBytes), vramInUseBytes: { value: fh.vramInUseBytes, kind: 'measured' as const } }
-  const withQ = () => inputs(fh).map((c) => ({ ...c, quality: q5(c.model.id, c.model.id.startsWith('qwen') ? 1 : 0.6) }))
+  const withQ = () => inputs(fh).map((c) => withOffProof({ ...c, quality: q5(c.model.id, c.model.id.startsWith('qwen') ? 1 : 0.6) }))
 
   it('Coding: the 27B (clean only to 8K) is provisional below the common 16K rung; its why-not says so', () => {
     const r = recommend(withQ(), MH, 'coding')

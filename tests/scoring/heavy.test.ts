@@ -4,7 +4,7 @@ import type { CandidateInput, ModelMeta, QualityResult } from '../../src/shared/
 import { DEFAULT_CANDIDATE_RULES, generateCandidates, rulesForRequest } from '../../src/core/benchmark/candidates'
 import { recommend } from '../../src/core/scoring/recommend'
 import { WORKLOADS } from '../../src/core/scoring/workloads'
-import { inputs, load, machine, toRun } from './helpers'
+import { inputs, load, machine, toRun, withOffProof } from './helpers'
 
 const GiB = 1024 ** 3
 const f8 = load('calib-8b-rx9070.json') as ReturnType<typeof load> & { vramInUseBytes: number }
@@ -98,7 +98,7 @@ describe('heavy-model calibration: Qwen3.8-27B 55/65 layers vs Llama-3.1-8B full
     ['instruction', 'reasoning', 'coding', 'structured', 'extraction', 'context'].flatMap((category) => [0, 1, 2, 3, 4].map((i) => ({
       testId: `${category}-${i}`, category: category as QualityResult['category'], weight: 1, pass: i < rate * 5, score: 1, detail: ''
     })))
-  const withQ = (qQwen: number, q8: number) => inputs(fh).map((c) => ({ ...c, quality: q5(c.model.id, c.model.id.startsWith('qwen') ? qQwen : q8) }))
+  const withQ = (qQwen: number, q8: number) => inputs(fh).map((c) => withOffProof({ ...c, quality: q5(c.model.id, c.model.id.startsWith('qwen') ? qQwen : q8) }))
 
   it('the 55/65 partial offload (decode 12–13 t/s, no spill) stays eligible for Maximum Quality', () => {
     const r = recommend(withQ(1, 0.6), MH, 'max_quality').ranked.find((s) => s.configId === Q)!

@@ -4,7 +4,7 @@ import type { CandidateInput } from '../../src/shared/bench-types'
 import { generateCandidates } from '../../src/core/benchmark/candidates'
 import { recommendForWorkload } from '../../src/core/scoring/recommend'
 import { WORKLOADS, effectiveProfile } from '../../src/core/scoring/workloads'
-import { inputs, load, machine, q5, toRun } from './helpers'
+import { inputs, load, machine, q5, toRun, withOffProof } from './helpers'
 
 const f8 = load('calib-8b-rx9070.json') as ReturnType<typeof load> & { vramInUseBytes: number }
 const M = { ...machine(f8.vramBytes), vramInUseBytes: { value: f8.vramInUseBytes, kind: 'measured' as const } }
@@ -64,7 +64,7 @@ describe('large_coding profile (quality over speed)', () => {
   // Qwen3.8-27B 55/65: measured 2K–8K; 16K–64K extrapolated flat (decode is set by the CPU-side layers), prefill ~600 t/s.
   const q = inputs(fh).find((c) => c.config.id === 'qwen38|ngl=55')!
   const extra = [16384, 32768, 65536].map((ctx) => toRun({ ...fh.runs.find((r) => r.configId === 'qwen38|ngl=55' && r.ctx === 8192)!, ctx, promptTokens: ctx * 0.75, ttftMs: ((ctx * 0.75) / 600) * 1000, prefillTps: 600, decodeTps: 12.4 })) // synthetic: 0.75·ctx prompt
-  const big: CandidateInput = { ...q, runs: [...q.runs, ...extra], quality: q5(q.model.id, 1) }
+  const big: CandidateInput = withOffProof({ ...q, runs: [...q.runs, ...extra], quality: q5(q.model.id, 1) })
   const all = () => [big, ...eight().map((c) => ({ ...c, quality: q5(c.model.id, 0.6) }))]
 
   it('picks the 27B (Q 100 at 12 t/s) over the 8B (Q 60 at ~100 t/s) when both reach 64K, and says why', () => {

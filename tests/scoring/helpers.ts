@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import type {
   BenchmarkRunResult, CandidateConfig, CandidateInput, FailureKind, MachineLimits, Metric, ModelMeta, QualityResult, RunStatus
 } from '../../src/shared/bench-types'
+import { proofRowId } from '../../src/core/benchmark/gen'
 
 export interface FixtureRun {
   configId: string; model: string; ctx: number; gpuLayers: number; threads: number; status: string
@@ -65,6 +66,23 @@ export const q5 = (modelId: string, rate: number): QualityResult[] =>
   (['instruction', 'reasoning', 'coding', 'structured', 'extraction', 'context'] as const).flatMap((category) => [0, 1, 2, 3, 4].map((i) => ({
     testId: `${category}-${i}`, category, weight: 1, pass: i < rate * 5, score: i < rate * 5 ? 1 : 0, detail: ''
   })))
+/** Synthetic off-template proof for policy fixtures that use a thinking-capable model but do not compare gen options. */
+export const withOffProof = (c: CandidateInput): CandidateInput => {
+  if (!(c.model.supportsThinking || c.model.genKnobs?.supportsThinking) || !c.quality.length) return c
+  const hash = 'a'.repeat(64), alt = 'b'.repeat(64)
+  return { ...c, quality: c.quality.map((r) => {
+    const tagged = { ...r, configId: c.config.id, genId: 'off', sample: 1 }
+    return { ...tagged, templateHash: 'synthetic-off-template', runtimeVersion: 'fixture',
+      modelFingerprint: `${c.model.id}#${c.model.fileBytes}`, promptSha256: hash,
+      requestedSampling: { temperature: 0, topP: null, topK: null, minP: null, seed: 1 },
+      acceptedSampling: { temperature: 0, seed: 1 }, appliedTemplateKwargs: { enable_thinking: false },
+      templateKwargProof: { enable_thinking: { requested: false, counterfactual: true,
+        requestedSha256: hash, counterfactualSha256: alt, status: 'proved' } },
+      renderProof: { rowId: proofRowId(tagged), promptSha256: hash, renderedSha256: hash,
+        counterfactualSha256: alt, counterfactuals: { enable_thinking: alt }, keys: ['enable_thinking'], status: 'proved' }
+    } as QualityResult
+  }) }
+}
 /** Give every candidate measured quality (rate per model id; default 0.6 = Q 60). */
 export const withQuality = (list: CandidateInput[], rate: number | ((modelId: string) => number) = 0.6): CandidateInput[] =>
-  list.map((c) => ({ ...c, quality: q5(c.model.id, typeof rate === 'number' ? rate : rate(c.model.id)) }))
+  list.map((c) => withOffProof({ ...c, quality: q5(c.model.id, typeof rate === 'number' ? rate : rate(c.model.id)) }))
