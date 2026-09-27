@@ -24,6 +24,8 @@ export interface Insight {
   /** Action vocabulary of §9, e.g. "enable-heavy-mode", "use-context 32768", "download <model>". */
   action?: string
   configId?: string
+  /** false = the rule could not be evaluated from the stored data (shown greyed, never guessed). */
+  evaluable?: boolean
 }
 
 /** Guide section of a rule id ("I-3.1" → 3); null when unparseable. */

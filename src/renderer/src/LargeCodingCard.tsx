@@ -46,6 +46,7 @@ export function LargeCodingCard({ fastDecode, onBenchmark, onDetails }: { fastDe
         : !state ? <p>No benchmark session reached 32K context yet.</p>
         : !best || !c ? (
           <><p>No configuration in session #{state.r.sessionId} meets the large-scale coding requirements.</p>
+            {state.r.recommendation.provisionalBest && <p><span className="pill warn-pill">provisional — not a recommendation</span> {state.r.recommendation.provisionalBest.headline}</p>}
             <ul>{state.r.recommendation.reasons.slice(0, 4).map((x) => <li key={x}><Reason text={x} /></li>)}</ul></>
         ) : (
           <>

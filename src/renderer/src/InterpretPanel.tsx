@@ -38,7 +38,10 @@ function actionButton(i: Insight, a: InsightActions): ReactNode {
   const arg = rest.join(' ')
   // use-context = stay at or below the last clean rung: an explicit arg, else the smallest context in the evidence.
   const ctxs = i.evidence.map((e) => e.ctx).filter((c): c is number => c != null)
-  const ctx = Number(arg) || (ctxs.length ? Math.min(...ctxs) : undefined)
+  // typed action "<type>[ <arg>]": sizes may be written as 16K / 32768
+  const k = /^(\d+)\s*K$/i.exec(arg)
+  const argCtx = k ? Number(k[1]) * 1024 : Number(arg)
+  const ctx = argCtx || (ctxs.length ? Math.min(...ctxs) : undefined)
   switch (name) {
     case 'enable-heavy-mode': return <button className="mini" onClick={a.enableHeavyMode}>Enable heavy mode</button>
     case 'run-thorough-quality': return <button className="mini" onClick={a.runThoroughQuality}>Run thorough quality</button>
@@ -65,8 +68,9 @@ export function InterpretPanel({ insights, actions, tag = '' }: { insights: Insi
           <h3>§{s} {SECTIONS[s] ?? ''}</h3>
           <ul>
             {groups.get(s)!.sort((x, y) => SEV_ORDER[x.severity] - SEV_ORDER[y.severity]).map((i, k) => (
-              <li key={`${i.ruleId}-${k}`} className={`sev-${i.severity}`}>
-                <span className={`sev sev-${i.severity}`}>{i.severity}</span> <Reason text={i.text} /> {actionButton(i, actions)}
+              <li key={`${i.ruleId}-${k}`} className={`sev-${i.severity}${i.evaluable === false ? ' not-evaluable' : ''}`}>
+                <span className={`sev sev-${i.severity}`}>{i.severity}</span> <Reason text={i.text} />
+                {i.evaluable === false ? <span className="muted"> (not evaluable from stored data)</span> : actionButton(i, actions)}
                 {i.evidence.length > 0 && (
                   <details>
                     <summary className="muted">evidence ({i.evidence.length})</summary>
@@ -104,6 +108,6 @@ export function cardInsights(insights: Insight[] | undefined) {
     ceiling: list.find((i) => sectionOf(i.ruleId) === 2 && /ceiling/i.test(i.key ?? i.metric)) ?? list.find((i) => sectionOf(i.ruleId) === 2) ?? null,
     decode: list.find((i) => i.ruleId === 'I-3.1') ?? null,
     // every critical insight, then at most 2 warnings (W4f: criticals are never capped)
-    alerts: [...list.filter((i) => i.severity === 'critical'), ...list.filter((i) => i.severity === 'warn').slice(0, 2)]
+    alerts: [...list.filter((i) => i.severity === 'critical' && i.evaluable !== false), ...list.filter((i) => i.severity === 'warn' && i.evaluable !== false).slice(0, 2)]
   }
 }

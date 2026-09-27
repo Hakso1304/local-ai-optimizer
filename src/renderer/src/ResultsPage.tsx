@@ -6,6 +6,7 @@ import type { TelemetrySample } from '../../shared/bench-events'
 import { WORKLOADS } from '../../core/scoring/workloads'
 import { genLabel, type GenRow } from '../../core/benchmark/gen'
 import { ExportMenu } from './ExportMenu'
+import { DecisionTrace } from './DecisionTrace'
 import { ENGINE_RULES, InterpretPanel, Reason, insightsOf, rulesOf, type InsightActions } from './InterpretPanel'
 import type { BenchPreset } from './LargeCodingCard'
 import { LineChart, type Band } from './LineChart'
@@ -196,6 +197,16 @@ function Detail({ d, onRerun, go }: { d: SessionDetail; onRerun: (configId: stri
       {rec ? (
         <div className="card">
           <p><b>{rec.best ? name(rec.best.configId) : 'No recommendation'}</b>{rec.best?.fallback && <span className="pill warn-pill">{rec.best.fallback}</span>}{rec.provisional && <span className="pill warn-pill" title="Some candidate's quality is an estimated prior (no quality run): the ranking may change once it is measured">provisional</span>}{rec.best && <> — {rec.best.score.total.toFixed(1)}/100, context <CtxPick recommended={rec.best.score.recommendedCtx} scored={rec.best.score.referenceCtx} /></>}</p>
+          {!rec.best && rec.provisionalBest && (
+            <div className="provisional">
+              <p><span className="pill warn-pill">provisional pick — not a recommendation</span> <b>{rec.provisionalBest.headline}</b></p>
+              <p className="muted"><Reason text={rec.provisionalBest.reason} />{rec.provisionalBest.estimatedTerms.length ? ` · estimated: ${rec.provisionalBest.estimatedTerms.join(', ')}` : ''}</p>
+            </div>
+          )}
+          {!!rec.unmetAlternatives?.length && (
+            <><h3>Not eligible</h3><ul>{rec.unmetAlternatives.map((u) => <li key={u.configId}>{name(u.configId)}: {u.unmet.map((x, i) => <span key={i}><Reason text={x} />{i < u.unmet.length - 1 ? '; ' : ''}</span>)}</li>)}</ul></>
+          )}
+          {rec.decisionTrace && <DecisionTrace trace={rec.decisionTrace} />}
           {rec.best?.gen && <p>Generation: <b>{genLabel(rec.best.gen.config)}</b> <span className="muted">— {rec.best.gen.reason}</span></p>}
           {!!rec.whyNot?.length && (
             <>

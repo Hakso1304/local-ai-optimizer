@@ -41,7 +41,13 @@ function RecommendedCard({ d, go }: { d: SessionDetail; go: Go }) {
       {d.session.demo && <DemoBanner what={`DEMO DATA (workload ${d.session.workload})`} />}
       <h2>Recommended configuration</h2>
       {!rec?.best || !c ? (
-        <><p>No candidate met this workload's requirements.</p><ul>{rec?.reasons.map((r) => <li key={r}><Reason text={r} /></li>)}</ul>
+        <><p>No candidate met this workload's requirements.</p>{rec?.provisionalBest && (
+            <div className="provisional">
+              <p><span className="pill warn-pill">provisional — not a recommendation</span> {rec.provisionalBest.headline}</p>
+              <p className="muted"><Reason text={rec.provisionalBest.reason} /></p>
+            </div>
+          )}
+          <ul>{rec?.reasons.map((r) => <li key={r}><Reason text={r} /></li>)}</ul>
           {cardInsights(reinterp ?? insightsOf(rec)).alerts.map((i, k) => <p key={k} className={`sev-${i.severity}`}><span className={`sev sev-${i.severity}`}>{i.severity}</span> <Reason text={i.text} /></p>)}</>
       ) : (
         <>
