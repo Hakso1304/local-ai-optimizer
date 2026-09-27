@@ -3,7 +3,9 @@
 //   A1 fresh server after >=2 min idle GPU, 36,572-token prompt (the 0.56·ctx fill of the 09-28 runs)
 //   A2 fresh server after >=2 min idle GPU, prompt tokenized to 49,152 (0.75·ctx)
 //   B1 immediately after a q8_0 -c 131072 load of the same model, then the A1 launch
-// Identical argv: -c 65536 -ngl 999 -dev Vulkan0 -t 8 -b 2048 -ub 512 -fa on -fit off --parallel 1. Warmup + 2 reps.
+// Identical argv: -c 65536 -ngl 999 -dev Vulkan0 -t 8 -b 2048 -ub 512 -fa on -fit off --parallel 1
+//   -lm none --cache-ram 0. Warmup + 2 reps. The 2026-09-28 repaired run uses these app-comparable mmap/cache flags;
+//   docs/ab-spill-2026-09-28.json is the earlier partial run with different argv and is never overwritten.
 // --hip: Vulkan-vs-HIP ladder A/B instead — 8B f16 at 32K and 64K (0.56·ctx prompt), identical argv except the exe and
 //   -dev Vulkan0 / ROCm0; first reports whether the HIP build enumerates ROCm0 (stops there if not).
 // --igpu: can the iGPU's UMA memory replace the CPU layers? Qwen3.8-27B at 8K: (a) -ngl 49 on Vulkan0, rest on CPU
@@ -13,7 +15,7 @@
 // Telemetry: typeperf 1 s, per-PID dedicated/shared + adapter dedicated/shared (all LUIDs). At spill onset (per-PID shared
 // > first sample + 256 MiB) records per-PID dedicated, adapter dedicated, adapter free and adapter total.
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { writeFileSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { freemem } from 'node:os'
 import { createInterface } from 'node:readline'
 import { generateFiller } from '../src/core/quality'
@@ -70,10 +72,10 @@ const MODEL = 'D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf'
 const ADAPTER_TOTAL = 17095983104 // RX 9070 XT qwMemorySize (scanner, registry)
 const GiB = 1024 ** 3
 const MiB = 1024 ** 2
-const out = process.argv.slice(2).find((a) => !a.startsWith('--')) ?? (HIP ? 'docs/ab-hip-2026-09-28.json' : IGPU ? 'docs/ab-igpu-2026-09-28.json' : 'docs/ab-spill-2026-09-28.json')
+const out = process.argv.slice(2).find((a) => !a.startsWith('--')) ?? (HIP ? 'docs/ab-hip-2026-09-28.json' : IGPU ? 'docs/ab-igpu-2026-09-28.json' : 'docs/ab-spill-repaired-2026-09-28.json')
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const g = (b: number | null) => (b == null ? null : +(b / GiB).toFixed(2))
-const baseArgv = (ctx: number, extra: string[] = [], dev = 'Vulkan0') => ['-m', MODEL, '-c', String(ctx), '-ngl', '999', '-dev', dev, '-t', '8', '-b', '2048', '-ub', '512', '-fa', 'on', '-fit', 'off', '--parallel', '1', ...extra]
+const baseArgv = (ctx: number, extra: string[] = [], dev = 'Vulkan0') => ['-m', MODEL, '-c', String(ctx), '-ngl', '999', '-dev', dev, '-t', '8', '-b', '2048', '-ub', '512', '-fa', 'on', '-fit', 'off', '--parallel', '1', '-lm', 'none', '--cache-ram', '0', ...extra]
 
 /** Backend's own view (llama-server --list-devices): total/free MiB per device. */
 function listDevices(exe = EXE): string[] {
@@ -184,12 +186,10 @@ export async function launch(label: string, argv: string[], promptTokens: number
   const controller = new AbortController()
   // Drain both pipes: b11208 may emit load/buffer lines on stdout. Keep the text for audit, even when parsing fails.
   let stdoutLog = '', stderrLog = ''
-  const LOG_LIMIT = 8 * 1024 * 1024
-  let stdoutTruncated = false, stderrTruncated = false
   const append = (kind: 'stdout' | 'stderr', chunk: Buffer) => {
     const text = chunk.toString('utf8')
-    if (kind === 'stdout') { if (stdoutLog.length + text.length > LOG_LIMIT) stdoutTruncated = true; else stdoutLog += text }
-    else { if (stderrLog.length + text.length > LOG_LIMIT) stderrTruncated = true; else stderrLog += text }
+    if (kind === 'stdout') stdoutLog += text
+    else stderrLog += text
   }
   let error: string | null = null
   let loadMs = 0
@@ -262,7 +262,7 @@ export async function launch(label: string, argv: string[], promptTokens: number
     layersPerDevice: [...log.matchAll(/layer\s+\d+ assigned to device (\S+?),?\s/g)].reduce<Record<string, number>>((a, m) => ((a[m[1]] = (a[m[1]] ?? 0) + 1), a), {}),
     offloadLines: log.split(/\r?\n/).filter((l) => /offload(ing|ed) \d+/.test(l)).map((l) => l.trim()),
     largestBufferMiB: bufferRows.length ? Math.max(...bufferRows.map((b) => b.mib)) : null,
-    stdoutLog, stderrLog, stdoutTruncated, stderrTruncated,
+    stdoutLog, stderrLog, stdoutTruncated: false, stderrTruncated: false,
     listDevicesBefore: devicesBefore, ramAvailBeforeGiB: g(ramBefore), ramAvailMinGiB: g(ramMin)
   }
   console.log(JSON.stringify(res))
@@ -327,6 +327,7 @@ async function igpuAb() {
 
 async function main() {
   if (unifiedMemoryKeys().length) throw new Error(`${unifiedMemoryKeys().join(', ')} set in this environment; unset it first`)
+  if (existsSync(out)) throw new Error(`refusing to overwrite existing A/B artifact: ${out}`)
   if (HIP) return hipAb()
   if (IGPU) return igpuAb()
   const results = []
