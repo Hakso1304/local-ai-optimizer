@@ -135,6 +135,8 @@ export interface PromptResult {
   prefillMs: number | null
   prefillTps: number | null
   decodeTokens: number | null
+  /** Where decodeTokens came from; absent on older/custom backends. */
+  decodeTokenSource?: 'runtime' | 'streamed'
   decodeMs: number | null
   decodeTps: number | null
   totalMs: number
@@ -146,6 +148,8 @@ export interface PromptResult {
   streamedTokens?: number
   /** Streamed tokens inside a thinking region (<think>…</think>, Gemma's <|channel>thought…<channel|>); null = none seen. */
   reasoningTokens?: number | null
+  /** A stream chunk count is only a token estimate. */
+  reasoningTokenSource?: 'runtime' | 'streamed'
   /** Sampling the runtime reports it applied (temperature/top_p/top_k/min_p/seed); null = not reported. */
   acceptedSampling?: Record<string, unknown> | null
 }

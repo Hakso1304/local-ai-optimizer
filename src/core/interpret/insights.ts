@@ -3,7 +3,7 @@
 import type { CandidateInput, Metric, QualityCategory } from '../../shared/bench-types'
 import { fmtCtx, isUsable, val } from '../scoring/cliff'
 import { categoryFlags, type UncertaintyRow } from '../scoring/uncertainty'
-import { genLabel } from '../benchmark/gen'
+import { BASELINE_GEN, genLabel } from '../benchmark/gen'
 import { KV_Q8_OVER_F16, quantSuggestions } from '../benchmark/candidates'
 import { DEFAULT_SCORING_CONFIG } from '../scoring/workloads'
 import { action, cite, P, rule, RULES_VERSION, tag, type Severity } from './catalog'
@@ -231,7 +231,8 @@ export function interpret(v: Verdicts): Insight[] {
     }
     if (q.input.kind === 'estimated') add('quality.estimated', { config: id(c), basis: q.input.source ?? 'parameters × quantization' }, [ev('quality', q.input, undefined, id(c))], { configId: id(c) })
     // I-5.7 / I-5.8 over every generation config's rows
-    const sets = [{ gen: 'thinking off (T=0)', rows: c.input.quality as UncertaintyRow[] }, ...c.genOptions.filter((g) => g.gq.gen.id !== 'off').map((g) => ({ gen: genLabel(g.gq.gen), rows: g.gq.results as UncertaintyRow[] }))]
+    const off = c.genOptions.find((g) => !g.gq.gen.thinking)?.gq.gen
+    const sets = [{ gen: genLabel(off ?? BASELINE_GEN), rows: c.input.quality as UncertaintyRow[] }, ...c.genOptions.filter((g) => g.gq.gen.id !== off?.id).map((g) => ({ gen: genLabel(g.gq.gen), rows: g.gq.results as UncertaintyRow[] }))]
     for (const s of sets) {
       const infra = s.rows.filter((r) => r.evaluationStatus === 'infra_error')
       if (infra.length) add('quality.harness-invalid', { model: c.input.model.name, gen: s.gen, n: infra.length }, infra.map((r) => num('evaluationStatus', 'infra_error', 'measured', undefined, id(c), { source: r.testId })), { configId: id(c) })
@@ -252,7 +253,7 @@ export function interpret(v: Verdicts): Insight[] {
       { severity: decisive ? 'info' : 'warn', action: decisive ? null : action('run-thorough-quality') })
   }
   for (const c of firstOf(everyone.filter((x) => x.input.model.supportsThinking || x.input.model.genKnobs?.supportsThinking))) {
-    const used = c.gen ? genLabel(c.gen.gq.gen) : 'thinking off (T=0)'
+    const used = c.gen ? genLabel(c.gen.gq.gen) : genLabel(c.genOptions.find((g) => !g.gq.gen.thinking)?.gq.gen ?? BASELINE_GEN)
     const alt = c.genOptions.filter((g) => g !== c.gen && g.comparable)
     const also = alt.length ? `; also measured: ${alt.map((g) => `${genLabel(g.gq.gen)} Q ${Math.round(g.cs.components.quality.score)}, effective ${val(g.gq.effectiveTps) === null ? '?' : t1(val(g.gq.effectiveTps)!)} t/s`).join('; ')}` : ''
     add('quality.thinking', { model: c.input.model.name, gen: used, also }, [], { configId: id(c) })

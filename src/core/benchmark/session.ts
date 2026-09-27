@@ -1061,12 +1061,19 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
               const split = splitReasoning(r.text ?? '')
               const toks = r.decodeTokens ?? r.streamedTokens ?? null
               const chars = split.reasoningChars + split.answerChars
-              // Prefer the runtime's own reasoning count (reasoning_content / thought channel); else split by text length.
-              const reasoningTokens = r.reasoningTokens !== undefined ? r.reasoningTokens ?? 0 : toks === null ? null : chars > 0 ? Math.round((toks * split.reasoningChars) / chars) : 0
+              // A runtime null means the thinking split is unknown. Only an explicit
+              // numeric zero proves no reasoning tokens; off is known zero by policy.
+              const runtimeReasoning = typeof r.reasoningTokens === 'number' && Number.isFinite(r.reasoningTokens) && r.reasoningTokens >= 0 && (toks === null || r.reasoningTokens <= toks)
+                ? r.reasoningTokens : null
+              const reasoningTokens = !gen.thinking ? 0 : runtimeReasoning !== null ? runtimeReasoning
+                : r.reasoningTokens === null || toks === null || chars === 0 ? null : Math.round((toks * split.reasoningChars) / chars)
+              const runtimeTotal = r.decodeTokens != null && r.decodeTokenSource !== 'streamed'
+              const splitSource: GenRow['tokenSource'] = runtimeTotal && (!gen.thinking || (runtimeReasoning !== null && r.reasoningTokenSource !== 'streamed')) ? 'runtime' : 'estimated'
               const truncated = r.timedOut || r.stopType === 'limit'
               const counts = {
                 answerTokens: toks === null || reasoningTokens === null ? null : toks - reasoningTokens, reasoningTokens, totalMs: r.totalMs ?? null,
-                tokenSource: (r.reasoningTokens !== undefined ? 'runtime' : 'estimated') as GenRow['tokenSource'], promptTokens: r.promptTokens, ctx,
+                totalTokens: toks, totalTokenSource: runtimeTotal ? 'runtime' as const : toks != null ? 'streamed' as const : null,
+                tokenSource: splitSource, promptTokens: r.promptTokens, ctx,
                 maxTokens: preq.maxTokens, checkerVersion: suite.suite, outputTruncated: truncated,
                 // A failed request is an infrastructure failure, never a wrong answer (rule I-5.7); a budget stop is truncation (I-5.8).
                 evaluationStatus: (r.error && !r.timedOut ? 'infra_error' : truncated ? 'truncated' : 'valid') as GenRow['evaluationStatus'],

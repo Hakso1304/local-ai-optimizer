@@ -478,7 +478,8 @@ export class LlamaCppBackend implements InferenceBackend {
     const f = final as CompletionChunk | null
     const needPrompt = !error && f !== null && f.timings?.prompt_n == null && f.tokens_evaluated == null
     const promptTokens = needPrompt ? await this.tokenize(req.prompt).catch(() => null) : null
-    return { ...toPromptResult(final, { ttftMs, totalMs, text, timedOut, error, streamedTokens: streamed, promptTokens }), streamedTokens: streamed, reasoningTokens: think.seen ? think.tokens : null, acceptedSampling: acceptedSampling(f) }
+    const runtimeDecode = (typeof f?.timings?.predicted_n === 'number' && Number.isFinite(f.timings.predicted_n)) || (typeof f?.tokens_predicted === 'number' && Number.isFinite(f.tokens_predicted))
+    return { ...toPromptResult(final, { ttftMs, totalMs, text, timedOut, error, streamedTokens: streamed, promptTokens }), streamedTokens: streamed, decodeTokenSource: runtimeDecode ? 'runtime' as const : 'streamed' as const, reasoningTokens: think.seen ? think.tokens : null, reasoningTokenSource: 'streamed' as const, acceptedSampling: acceptedSampling(f) }
   }
 
   /** One short discarded request so the measured run doesn't pay first-dispatch costs. Pass the measured

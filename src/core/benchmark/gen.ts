@@ -76,6 +76,8 @@ export function splitReasoning(text: string): { reasoningChars: number; answerCh
 /** A graded quality row as stored: which gen config and sample produced it, plus that request's token/time counts. */
 export type GenRow = QualityResult & {
   genId?: string; sample?: number; answerTokens?: number | null; reasoningTokens?: number | null; totalMs?: number | null
+  /** Total decode is independent of a known reasoning/answer split. */
+  totalTokens?: number | null; totalTokenSource?: 'runtime' | 'streamed' | null
   /** Data contract §12 (rules I-5.7 / I-5.8 / I-8.0). Absent in older rows (then: valid, not evaluable for I-8.0). */
   evaluationStatus?: 'valid' | 'infra_error' | 'unrun' | 'truncated'
   outputTruncated?: boolean
@@ -108,13 +110,21 @@ export function summarizeGen(gen: GenConfig, rows: GenRow[], samples: number): G
   const ans = median(rows.map((r) => r.answerTokens)), rea = gen.thinking ? median(rows.map((r) => r.reasoningTokens)) : 0
   const ms = median(rows.map((r) => r.totalMs))
   const tps = median(rows.map((r) => (r.answerTokens != null && r.totalMs ? (r.answerTokens * 1000) / r.totalMs : null)))
-  const raw = median(rows.map((r) => (r.answerTokens != null && r.reasoningTokens != null && r.totalMs ? ((r.answerTokens + r.reasoningTokens) * 1000) / r.totalMs : null)))
+  const raw = median(rows.map((r) => {
+    const total = r.totalTokens ?? (r.answerTokens != null && r.reasoningTokens != null ? r.answerTokens + r.reasoningTokens : null)
+    return total != null && r.totalMs ? (total * 1000) / r.totalMs : null
+  }))
   const rms = gen.thinking ? median(rows.map((r) => (r.answerTokens != null && r.reasoningTokens != null && r.totalMs && r.answerTokens + r.reasoningTokens > 0
     ? (r.totalMs * r.reasoningTokens) / (r.answerTokens + r.reasoningTokens) : null))) : 0
   // Token splits are MEASURED only when the runtime reported them for every request; a text-length split is ESTIMATED.
-  const runtime = gen.thinking ? rows.length > 0 && rows.every((r) => r.tokenSource === 'runtime') : true
-  const src = `quality suite median of ${rows.length} requests${runtime ? '' : '; reasoning/answer split by text length'}`
+  const runtime = rows.length > 0 && rows.every((r) => r.tokenSource === 'runtime' && r.answerTokens != null && (!gen.thinking || r.reasoningTokens != null))
+  const src = `quality suite median of ${rows.length} requests${runtime ? '' : '; reasoning/answer split estimated or unavailable'}`
   const tok = (v: number | null, reason: string, source = src): Metric => (v === null ? { value: null, kind: 'unavailable', reason } : { value: v, kind: runtime ? 'measured' : 'estimated', source })
+  const rawMeasured = rows.length > 0 && rows.every((r) => r.totalTokens != null && r.totalTokenSource === 'runtime')
+  const legacyMeasured = rows.length > 0 && rows.every((r) => r.totalTokens == null && r.tokenSource === 'runtime' && r.answerTokens != null && r.reasoningTokens != null)
+  const rawMetric = raw === null ? { value: null, kind: 'unavailable' as const, reason: 'no total decode token counts' }
+    : { value: raw, kind: rawMeasured || legacyMeasured ? 'measured' as const : 'estimated' as const,
+        source: `quality suite median of ${rows.length} requests; ${rawMeasured ? 'runtime total decode tokens' : 'estimated or legacy token counts'} / total s` }
   return {
     gen, results: rows, samples, stochastic: gen.temperature > 0,
     answerTokens: tok(ans, 'no token counts'),
@@ -122,6 +132,6 @@ export function summarizeGen(gen: GenConfig, rows: GenRow[], samples: number): G
     effectiveAnswerLatencyMs: m(ms, src, 'no request timings'),
     effectiveTps: tok(tps, 'no token counts', `${src}; answer tokens / total s`),
     reasoningMs: gen.thinking ? tok(rms, 'no token counts', `${src}; total × reasoning share`) : { value: 0, kind: 'measured', source: 'thinking off' },
-    rawTps: tok(raw, 'no token counts', `${src}; all generated tokens / total s`)
+    rawTps: rawMetric
   }
 }
