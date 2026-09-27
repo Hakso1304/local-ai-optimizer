@@ -393,16 +393,27 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
       const quarantined = !!evaluated.cs.components.quality.quarantined
       const s = comparable ? evaluated : scoreOf({ ...scored, quality: [], genQuality: [] }, machine, profile, cfg, undefined, scoringRung)
       const lat = val(s.cs.components.latency.input, true)
+      const estimatedAnswerTime = gq.gen.thinking && gq.effectiveAnswerLatencyMs.kind !== 'measured'
       return {
         gq, cs: s.cs, total: s.total, comparable: comparable && !quarantined,
-        withinTolerance: !gq.gen.thinking || !!profile.latencyAdvisory || (lat !== null && lat <= tol),
-        ...(quarantined ? { why: 'quality quarantined (infrastructure error)' } : !comparable ? { why: `application contract not met: ${missing.join('; ')}` } : {})
+        withinTolerance: !gq.gen.thinking || !!profile.latencyAdvisory || (!estimatedAnswerTime && lat !== null && lat <= tol),
+        ...(quarantined ? { why: 'quality quarantined (infrastructure error)' } : !comparable ? { why: `application contract not met: ${missing.join('; ')}` }
+          : estimatedAnswerTime && !profile.latencyAdvisory ? { why: 'provisional: estimated answer time cannot verify the tolerance' } : {})
       }
     })
     let gen: GenOption | null = null
     const gsteps: string[] = []
     for (const g of genOptions) {
-      if (!g.comparable || !g.withinTolerance) { gsteps.push(`${g.gq.gen.id}: skipped (${g.why ?? 'time to answer above tolerance'})`); continue }
+      if (!g.comparable) { gsteps.push(`${g.gq.gen.id}: skipped (${g.why ?? 'application contract not met'})`); continue }
+      if (!g.withinTolerance) {
+        const baseline = gen ?? genOptions.find((x) => !x.gq.gen.thinking && x.comparable)
+        const paired = baseline ? difference(g.gq.results as UncertaintyRow[], baseline.gq.results as UncertaintyRow[], profile, cfg, 'gen').d : null
+        const a = val(g.gq.effectiveAnswerLatencyMs, true), b = baseline ? val(baseline.gq.effectiveAnswerLatencyMs, true) : null
+        const ratio = a !== null && b !== null && b > 0 ? `; answers ${t1(a / b)}× slower` : ''
+        const time = g.why ?? `time to answer above tolerance (${(tol / 1000).toFixed(0)} s)`
+        gsteps.push(`${g.gq.gen.id}: skipped (${paired ? `${fmtDiff(paired)} vs ${baseline!.gq.gen.id}` : 'quality difference unavailable'}${ratio}; ${time})`)
+        continue
+      }
       if (!gen) { gen = g; gsteps.push(`${g.gq.gen.id}: first comparable config`); continue }
       const { d, reason } = difference(g.gq.results as UncertaintyRow[], gen.gq.results as UncertaintyRow[], profile, cfg, 'gen')
       if (d && !includesZero(d) && d.diff > 0) { gsteps.push(`${g.gq.gen.id} over ${gen.gq.gen.id}: ${fmtDiff(d)} excludes 0`); gen = g }
