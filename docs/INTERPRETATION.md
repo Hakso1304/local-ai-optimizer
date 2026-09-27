@@ -112,6 +112,14 @@ it becomes a warn only when `limitKind` is failure/spill/cliff.
 Rule I-2.5 (`ctx.required`, critical/info): requiredContext set → state per model one
 of: reached (rung passed), tested-and-failed (reason), not-tested (why). Unmet ⇒ lead
 insight with actions.
+Rule I-2.8 (`ctx.placement-spill`, warn, origin heuristic → measured-calibration once
+the 2026-09-28 A/B confirms it; evidence so far: cal-2026-09-27 run 14): per-PID shared
+memory ≥ the spill threshold while adapter dedicated VRAM free ≥ 1 GiB in the same
+window ⇒ "<n> GiB of this process is resident in shared memory although <x> GiB of
+dedicated VRAM was free — driver placement after a previous large load, not a capacity
+limit". Action `restart-runtime` (unload, fresh server, re-measure the rung once; the
+runner does this automatically once per rung and records `placementRetry` with both
+observations). Not evaluable without a same-window adapter-free reading.
 Rule I-2.6 (`ctx.recovered-dip`, note, thresholds = cliff engine's 0.60 ratio and 2 t/s
 absolute, origin policy): "decode dipped at <ctx> and recovered on the next tested rung;
 cause unverified". Missing rungs between are disclosed.
@@ -299,7 +307,8 @@ limiting resource) · `enable-heavy-mode` · `lower-required-context` ·
 `try-smaller-quant <file>` (verified identity; "not measured here") ·
 `try-thinking-config` · `run-thorough-quality` · `rerun-idle` · `rerun-comparable`
 (version mismatch) · `retry-telemetry` / `inspect-diagnostics` (missing telemetry,
-sampler errors) · `download <model>` (labelled unmeasured).
+sampler errors) · `restart-runtime` (placement spill, I-2.8) · `download <model>`
+(labelled unmeasured).
 Rule I-9.1: warn/critical insights carry ≥ 1 action whose precondition holds; never
 suggest `raise-min-decode` as a remedy for slow hardware.
 Catalog defaults as implemented (rules.v2.json, 054a216): I-2.7, I-3.1 and I-3.5 →
