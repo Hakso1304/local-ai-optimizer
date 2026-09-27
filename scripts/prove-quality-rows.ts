@@ -21,6 +21,7 @@ if (!input || !output || !Number.isInteger(port) || port < 1 || port > 65535) {
 if (resolve(input) === resolve(output)) throw new Error('input and output must differ')
 const sha256 = (s: string | Buffer) => createHash('sha256').update(s).digest('hex')
 const raw = readFileSync(input)
+const replayId = sha256(raw)
 const artifact = JSON.parse(raw.toString('utf8')) as {
   sessionId: number
   session: { payload: { request: { qualityMode?: 'quick' | 'thorough'; qualitySeed?: number; genConfigs?: GenConfig[] }; candidates: { config: CandidateConfig; model: ModelMeta }[] } }
@@ -28,6 +29,7 @@ const artifact = JSON.parse(raw.toString('utf8')) as {
   [key: string]: unknown
 }
 if (!Array.isArray(artifact.qualityResults) || !artifact.session?.payload?.request) throw new Error('input is not a session-evidence export')
+const previousReplay = artifact.rowProofReplay as { runId?: string } | undefined
 const expectedSession = flag('--session')
 if (expectedSession && Number(expectedSession) !== artifact.sessionId) throw new Error(`session mismatch: export is ${artifact.sessionId}`)
 const request = artifact.session.payload.request
@@ -89,9 +91,23 @@ for (const q of modelRows) {
   const sample = row.sample
   if (!Number.isInteger(sample) || sample! < 1) throw new Error(`row ${q.id}: sample is missing`)
   const requestedSampling = { temperature: gen.temperature, topP: gen.topP ?? null, topK: gen.topK ?? null, minP: gen.minP ?? null, seed: sample! }
-  const originalPromptHash = row.promptSha256
-  Object.assign(row, { original: {
-    promptSha256: row.promptSha256 ?? null, renderProof: row.renderProof ?? null,
+  const prior = row.proofProvenance
+  if (previousReplay && (!prior?.origin || previousReplay.runId !== prior.origin.lineage.at(-1))) {
+    throw new Error(`row ${q.id}: replay lineage is missing or does not match the input artifact`)
+  }
+  if (!previousReplay && prior?.mode === 'live-template-replay') throw new Error(`row ${q.id}: replay provenance without artifact lineage`)
+  const origin = prior?.origin ?? {
+    generationPromptHashPresent: prior?.mode === 'runtime' && prior.originalPromptHashPresent === true && !!row.promptSha256,
+    firstReplayAt: null, lineage: [] as string[]
+  }
+  if (typeof origin.generationPromptHashPresent !== 'boolean' || !Array.isArray(origin.lineage) ||
+      (previousReplay && origin.firstReplayAt === null) ||
+      (origin.generationPromptHashPresent && prior?.status === 'reconstructed')) {
+    throw new Error(`row ${q.id}: incoherent origin provenance`)
+  }
+  const originalPromptHash = origin.generationPromptHashPresent ? row.promptSha256 : null
+  Object.assign(row, { original: (row as typeof row & { original?: unknown }).original ?? {
+    promptSha256: row.promptSha256 ?? null, renderProof: row.renderProof ?? null, proofProvenance: prior ?? null,
     appliedTemplateKwargs: row.appliedTemplateKwargs ?? null, templateKwargProof: row.templateKwargProof ?? null,
     requestedSampling: row.requestedSampling ?? null
   } })
@@ -130,12 +146,15 @@ for (const q of modelRows) {
   else delete row.appliedTemplateKwargs
   Object.assign(row, { proofProvenance: { mode: 'live-template-replay', sourceRowId: q.id,
     originalPromptHashPresent: !!originalPromptHash, status: originalPromptHash ? 'original' : 'reconstructed',
-    originalGenerationPromptMatch: originalPromptHash ? promptSha256 === renderedSha256 : null } })
+    originalGenerationPromptMatch: originalPromptHash ? promptSha256 === renderedSha256 : null,
+    origin: { generationPromptHashPresent: origin.generationPromptHashPresent,
+      firstReplayAt: origin.firstReplayAt ?? new Date().toISOString(), lineage: [...origin.lineage, replayId] } } })
   if (status === 'proved') proved++
   else if (status === 'contradicted') contradicted++
   else unproved++
 }
 Object.assign(artifact, { rowProofReplay: {
+  runId: replayId,
   sourceSha256: sha256(raw), sourcePath: resolve(input), sessionId: artifact.sessionId,
   serverModelPath: props.model_path, serverTemplateSha256: serverTemplateHash,
   promptReconstruction: 'Rows without an original prompt hash use deterministic suite re-render; original generation prompt equality cannot be independently checked.',

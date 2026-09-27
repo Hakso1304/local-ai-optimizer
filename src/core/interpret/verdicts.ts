@@ -162,8 +162,16 @@ function contractCheck(rows: ContractRow[], base: ContractRow[], gen: GenQuality
   for (const r of rows) {
     const p = r.renderProof
     if (!p || !r.promptSha256) { missing.push('row-bound render proof or prompt hash not recorded on every row'); continue }
-    if (r.proofProvenance && !r.proofProvenance.originalPromptHashPresent) {
-      missing.push('reconstructed prompt is not row-bound to the original generation request')
+    const provenance = r.proofProvenance
+    if (provenance) {
+      const origin = provenance.origin
+      const reconstructed = provenance.status === 'reconstructed' || !provenance.originalPromptHashPresent || origin?.generationPromptHashPresent === false
+      const incoherent = (provenance.status === 'original' && !provenance.originalPromptHashPresent) ||
+        (provenance.status === 'reconstructed' && provenance.originalPromptHashPresent) ||
+        (origin !== undefined && (origin.generationPromptHashPresent !== provenance.originalPromptHashPresent ||
+          !Array.isArray(origin.lineage) || (provenance.mode === 'live-template-replay' && (!origin.firstReplayAt || !origin.lineage.length)))) ||
+        (provenance.mode === 'live-template-replay' && origin === undefined)
+      if (reconstructed || incoherent) missing.push('reconstructed or incoherent prompt provenance is not row-bound to the original generation request')
     }
     if (p.status === 'contradicted' || p.rowId !== proofRowId(r) || !hash(r.promptSha256) ||
       p.promptSha256 !== r.promptSha256 || p.renderedSha256 !== r.promptSha256 ||
@@ -373,8 +381,7 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
       (r as ContractRow).renderProof?.status !== 'contradicted' || (r as ContractRow).evaluationStatus === 'infra_error') })
     const genOptions: GenOption[] = sortedGens.map((storedGq) => {
       const gq = provedView(storedGq)
-      const s = scoreOf(scored, machine, profile, cfg, gq, scoringRung)
-      const lat = val(s.cs.components.latency.input, true)
+      const evaluated = scoreOf(scored, machine, profile, cfg, gq, scoringRung)
       // F5 (I-8.0): the full application contract on every row — applied kwargs, template/runtime/model identity and
       // the sampling the runtime accepted — and the same identities as the baseline it is compared with.
       // A (w4l): every config, the baseline included — a contradiction always excludes it; absent proof excludes
@@ -386,10 +393,13 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
       // sampling and template kwargs were verified on every row. The baseline
       // may still stand alone with missing proof, but it cannot prove a delta.
       const offCheck = gq.gen.thinking ? contractCheck(base, [], off?.gen ?? BASELINE_GEN, templateKwargsFor(input.model, off?.gen ?? BASELINE_GEN), effort) : null
-      const missing = [...chk.errors, ...(gq.gen.thinking ? chk.missing : [])]
+      const proofRequired = !!templateKwargsFor(input.model, gq.gen) || sortedGens.length > 1 || sortedGens.some((x) => x.gen.thinking)
+      const missing = [...chk.errors, ...(proofRequired ? chk.missing : chk.missing.filter((x) => x.includes('seed')))]
       if (offCheck) missing.push(...offCheck.errors.map((x) => `baseline: ${x}`), ...offCheck.missing.map((x) => `baseline: ${x}`))
       const comparable = missing.length === 0
-      const quarantined = !!s.cs.components.quality.quarantined
+      const quarantined = !!evaluated.cs.components.quality.quarantined
+      const s = comparable ? evaluated : scoreOf({ ...scored, quality: [], genQuality: [] }, machine, profile, cfg, undefined, scoringRung)
+      const lat = val(s.cs.components.latency.input, true)
       return {
         gq, cs: s.cs, total: s.total, comparable: comparable && !quarantined,
         withinTolerance: !gq.gen.thinking || !!profile.latencyAdvisory || (lat !== null && lat <= tol),
@@ -417,7 +427,8 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
     // Plain quality without template kwargs or a gen comparison retains its measured status.
     // A requested/recorded seed contract, however, must be honoured even on that path.
     const seedContractApplies = !!qExpected || sortedGens.length > 1 || sortedGens.some((x) => x.gen.thinking) || qRows.some((r) => !!r.requestedSampling)
-    const qErrors = [...qCheck.errors, ...(seedContractApplies ? qCheck.missing.filter((x) => x.includes('seed')) : [])]
+    const proofRequired = !!qExpected || sortedGens.length > 1 || sortedGens.some((x) => x.gen.thinking)
+    const qErrors = [...qCheck.errors, ...(proofRequired ? qCheck.missing : seedContractApplies ? qCheck.missing.filter((x) => x.includes('seed')) : [])]
     // A contradictory baseline cannot remain a measured quality contribution merely
     // because no alternative generation config was selected. Preserve the rows for
     // audit, but score this candidate with quality unavailable.

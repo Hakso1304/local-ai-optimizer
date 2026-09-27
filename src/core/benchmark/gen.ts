@@ -104,7 +104,8 @@ export type GenRow = QualityResult & {
     keys: string[]; status: 'proved' | 'unproved' | 'contradicted' | 'reconstructed'
   }
   requestedSampling?: { temperature: number; topP: number | null; topK: number | null; minP: number | null; seed: number }
-  proofProvenance?: { mode?: 'runtime' | 'live-template-replay'; originalPromptHashPresent: boolean; status?: 'original' | 'reconstructed'; sourceRowId?: number }
+  proofProvenance?: { mode?: 'runtime' | 'live-template-replay'; originalPromptHashPresent: boolean; status?: 'original' | 'reconstructed'; sourceRowId?: number;
+    origin?: { generationPromptHashPresent: boolean; firstReplayAt: string | null; lineage: string[] } }
   /** I-8.0 application contract (F5): identities the comparison needs; absent → the gen config is not evaluable. */
   templateHash?: string | null
   runtimeVersion?: string | null

@@ -1141,7 +1141,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
                 keys: provedKeys, status: provedKeys.length === requestedKeys.length ? 'proved' : 'unproved'
               }
               proofOnError = { promptSha256, renderProof, requestedSampling,
-                proofProvenance: { mode: 'runtime', originalPromptHashPresent: true, status: 'original' },
+                proofProvenance: { mode: 'runtime', originalPromptHashPresent: true, status: 'original', origin: { generationPromptHashPresent: true, firstReplayAt: null, lineage: [] } },
                 ...(templateKwargs ? { requestedTemplateKwargs: templateKwargs, templateKwargProof: proof } : {}),
                 ...(templateKwargs && renderProof.status === 'proved' ? { appliedTemplateKwargs: templateKwargs } : {}) }
               const r = await backend.runPrompt({ ...preq, signal: g.signal })
@@ -1165,7 +1165,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
                 // A failed request is an infrastructure failure, never a wrong answer (rule I-5.7); a budget stop is truncation (I-5.8).
                 evaluationStatus: (r.error && !r.timedOut ? 'infra_error' : truncated ? 'truncated' : 'valid') as GenRow['evaluationStatus'],
                 ...(templateKwargs ? { requestedTemplateKwargs: templateKwargs, templateKwargProof: proof } : {}),
-                promptSha256, renderProof, requestedSampling, proofProvenance: { mode: 'runtime' as const, originalPromptHashPresent: true, status: 'original' as const },
+                promptSha256, renderProof, requestedSampling, proofProvenance: { mode: 'runtime' as const, originalPromptHashPresent: true, status: 'original' as const,
+                  origin: { generationPromptHashPresent: true, firstReplayAt: null, lineage: [] as string[] } },
                 ...(templateKwargs && renderProof.status === 'proved' ? { appliedTemplateKwargs: templateKwargs } : {}),
                 // F5 contract: identities + runtime-accepted sampling (null when the backend does not report them)
                 templateHash: backend.templateHash ?? null, runtimeVersion: cur.runtime, modelFingerprint: `${model.id}#${model.fileBytes}`,
