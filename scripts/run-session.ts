@@ -7,7 +7,7 @@
 //   H  custom: flags choose workload/models/ladder/heavy mode (quality on unless --no-quality)
 // Dumps everything (events, runs, quality, recommendation, raw quality prompts/replies) to docs/session-run-<scenario>-<ts>.json.
 import { execFileSync } from 'node:child_process'
-import { writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { freemem, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SessionEvent, SessionRequest } from '../src/shared/bench-events'
@@ -20,8 +20,9 @@ import { pickDiscreteDevice } from '../src/core/runtimes/llamacpp/parse'
 import { scanSystem } from '../src/core/system/scanner'
 import { readVramInUse, startSampler } from '../src/core/telemetry/sampler'
 import { openDb } from '../src/core/storage/db'
-import { getSessionResume, makeSessionStorage, type PlanFor } from '../src/core/storage/sessions'
-import { generateCandidates, machineFromProfile, rulesForRequest } from '../src/core/benchmark/candidates'
+import { getSessionResume, listVramBudget, makeSessionStorage, type PlanFor } from '../src/core/storage/sessions'
+import { applicableObservations, machineFromProfile, planCandidates, rulesForRequest, vramBudgetKey } from '../src/core/benchmark/candidates'
+import type { CandidateConfig, KvType } from '../src/shared/bench-types'
 import { WORKLOADS } from '../src/core/scoring/workloads'
 import { val } from '../src/core/scoring/cliff'
 import type { SystemProfile } from '../src/shared/types'
@@ -30,6 +31,27 @@ const scenario = (process.argv[2] ?? 'A').toUpperCase()
 const MODELS_DIR = 'D:\\llm-models'
 const flag = (k: string) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : undefined }
 const WANT = flag('--models')?.split(',') ?? ['qwen2.5-1.5b-instruct-q4_k_m', 'Meta-Llama-3.1-8B-Instruct-Q4_K_M']
+/** --request-cap-ms N: upper bound on every prompt request's timeout (overnight runs: 300000). */
+const REQUEST_CAP_MS = flag('--request-cap-ms') ? Number(flag('--request-cap-ms')) : null
+/** --pin '[{"model":"Q4_K_M","ngl":54,"kv":"f16"}]': run exactly these configs instead of the planner's pick. Each is
+ *  the planner's first candidate of a matching model (substring of name/id) with gpuLayers/kvType/id replaced and the
+ *  steps = --ladder. ponytail: estimates/notes stay the planner's (said in notes); fine for experiments, not the app. */
+const PINS: { model: string; ngl: number; kv?: KvType }[] | null = flag('--pin') ? JSON.parse(flag('--pin')!) : null
+function pin(model: ModelMeta, cands: CandidateConfig[]): CandidateConfig[] {
+  if (!PINS) return cands
+  const base = cands[0]
+  const pins = PINS.filter((p) => model.name.includes(p.model) || model.id.includes(p.model))
+  if (pins.length && !base) throw new Error(`--pin: planner produced no candidate for ${model.name} to clone`)
+  return pins.map((p) => {
+    const all = p.ngl >= model.layers, kv = p.kv ?? base.kvType
+    return {
+      ...base, id: `${model.id}|ngl=${all ? 'all' : p.ngl}|kv=${kv}|t=${base.threads}`, gpuLayers: Math.min(p.ngl, model.layers), gpuLayersAll: all, kvType: kv,
+      kvOffload: undefined, mmap: all ? base.mmap : false, ...(all ? {} : { expectDegraded: true, degradedReason: 'pinned partial offload' }),
+      ctxSteps: flag('--ladder') ? flag('--ladder')!.split(',').map(Number) : base.ctxSteps, skippedSteps: [],
+      notes: [...base.notes, `pinned by run-session --pin; estimates are the planner's for ngl ${base.gpuLayers} kv ${base.kvType}`]
+    }
+  })
+}
 const GiB = 1024 ** 3
 const t0 = Date.now()
 const el = () => `${((Date.now() - t0) / 1000).toFixed(1).padStart(7)}s`
@@ -73,7 +95,10 @@ function wrap(b: LlamaCppBackend): SessionBackend {
   const applyTemplate = b.applyTemplate.bind(b)
   const runPrompt = b.runPrompt.bind(b)
   b.applyTemplate = async (...a: Parameters<LlamaCppBackend['applyTemplate']>) => (lastTemplated = await applyTemplate(...a))
+  // --no-warmup (E3 cold vs warm): warmup is skipped but the row still says warm — persist such runs to a separate --db.
+  if (process.argv.includes('--no-warmup')) b.warmup = async () => {}
   b.runPrompt = async (...a: Parameters<LlamaCppBackend['runPrompt']>) => {
+    if (REQUEST_CAP_MS) a[0] = { ...a[0], timeoutMs: Math.min(a[0].timeoutMs ?? REQUEST_CAP_MS, REQUEST_CAP_MS) }
     const r = await runPrompt(...a)
     const req = a[0]
     if (b.log.some((l) => /prompt cache is enabled/i.test(l))) promptCacheSeen = true // read-only: b.log feeds exit classification
@@ -134,18 +159,25 @@ async function main(): Promise<void> {
     ...(process.argv.includes('--gen-search') ? { genSearch: true } : {}),
     ...(flag('--quality-mode') ? { qualityMode: flag('--quality-mode') as 'quick' | 'thorough' } : {}),
     ...(flag('--max-per-model') ? { candidateRules: { maxPerModel: Number(flag('--max-per-model')) } } : {}),
-    ...(flag('--ladder') ? { ladder: flag('--ladder')!.split(',').map(Number) } : {})
+    ...(flag('--ladder') ? { ladder: flag('--ladder')!.split(',').map(Number) } : {}),
+    ...(flag('--reps') ? { reps: Number(flag('--reps')) } : {}),
+    ...(flag('--quality-seed') ? { qualitySeed: Number(flag('--quality-seed')) } : {})
   }
   const pidFile = join(tmpdir(), `lao-session-${scenario}.pid`)
   // --db <optimizer.db>: persist through the app's own storage (makeSessionStorage + planFor, as main.ts does), so the
   // session shows up in the app (Results / Dashboard) and resume/read-time reinterpretation work on it.
   const git = (args: string[]) => { try { return execFileSync('git', args, { encoding: 'utf8', windowsHide: true }).trim() } catch { return null } }
-  const gitState = { head: git(['rev-parse', 'HEAD']), dirty: (git(['status', '--porcelain']) ?? '').split('\n').filter(Boolean) }
+  // Snapshots (git archive) have no .git: HEAD.txt records the commit.
+  const gitState = { head: git(['rev-parse', 'HEAD']) ?? (existsSync('HEAD.txt') ? readFileSync('HEAD.txt', 'utf8').trim() : null), dirty: (git(['status', '--porcelain']) ?? '').split('\n').filter(Boolean) }
+  // Same planning as the runner / main.ts: planCandidates over the (Vulkan-only) backend with the learned per-process
+  // budget observations, so the stored plan carries the configs the runner actually runs.
+  const bk = vramBudgetKey(machine, 'vulkan', det.version ?? null)
+  const observations = bk && appDb ? applicableObservations(bk, listVramBudget(appDb, bk.key)) : []
   const planFor: PlanFor = (r) => {
-    const mach = machineFromProfile(machine, dev?.id ?? null)
+    const mach = machineFromProfile(machine, dev?.id ?? null, undefined, observations)
     return {
       machine, vramBytes: val(mach.vramBytes, true),
-      candidates: models.flatMap((model) => generateCandidates(mach, model, { backend: 'vulkan' }, WORKLOADS[r.workload], rulesForRequest(r)).candidates.map((config) => ({ config, model })))
+      candidates: models.flatMap((model) => pin(model, planCandidates(machine, model, [{ kind: 'vulkan', device: dev?.id ?? null, runtimeVersion: det.version ?? null, observations }], WORKLOADS[r.workload], rulesForRequest(r)).candidates).map((config) => ({ config, model })))
     }
   }
   const appStorage = appDb ? makeSessionStorage(appDb, planFor) : null
@@ -183,7 +215,7 @@ async function main(): Promise<void> {
     clock: { now: () => Date.now() },
     readRamAvailableBytes: () => freemem(), // Windows: GlobalMemoryStatusEx ullAvailPhys = "Available"
     signal: ctl.signal,
-    ...(stored ? { plan: stored.plan, machine: stored.machine ?? machine } : {}),
+    ...(stored ? { plan: stored.plan, machine: stored.machine ?? machine } : PINS ? { plan: planFor(req).candidates.map((c) => c.config) } : {}),
     config: scenario === 'C' ? { ramFloorMinBytes: 64 * GiB } : {}
   }, (e) => {
     events.push(e)
