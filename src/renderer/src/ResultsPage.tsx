@@ -56,7 +56,7 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
           {d.candidates.map((c, i) => {
             const q = comp(c, 'quality'), st = comp(c, 'stability'), r = refRun(c), fit = slo(c)
             return (
-              <tr key={c.config.id} style={fit.ok ? undefined : { opacity: 0.45 }} title={fit.ok ? undefined : `Outside constraints: ${fit.failed.join(', ')}`}>
+              <tr key={c.config.id} id={`cand-row-${i}`} style={fit.ok ? undefined : { opacity: 0.45 }} title={fit.ok ? undefined : `Outside constraints: ${fit.failed.join(', ')}`}>
                 <td><span className="swatch" style={{ background: COLORS[i % COLORS.length] }} /></td>
                 <td>{c.model.name}{rec?.best?.configId === c.config.id && <span className="pill">best</span>}
                   {!fit.ok && <span className="pill warn-pill">{rec?.best?.configId === c.config.id ? 'outside your constraints' : 'filtered'}: {fit.failed.join(', ')}</span>}</td>
@@ -120,6 +120,23 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
       {rec ? (
         <div className="card">
           <p><b>{rec.best ? name(rec.best.configId) : 'No recommendation'}</b>{rec.best?.fallback && <span className="pill warn-pill">{rec.best.fallback}</span>}{rec.best && <> — {rec.best.score.total.toFixed(1)}/100, context <CtxPick recommended={rec.best.score.recommendedCtx} scored={rec.best.score.referenceCtx} /></>}</p>
+          {!!rec.whyNot?.length && (
+            <>
+              <h3>Why not the others</h3>
+              <ul>
+                {rec.whyNot.map((w) => {
+                  const i = d.candidates.findIndex((c) => c.config.id === w.configId)
+                  return (
+                    <li key={w.configId}>
+                      {i >= 0
+                        ? <button className="linkish" title={w.configId} onClick={() => { const el = document.getElementById(`cand-row-${i}`); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }); el?.classList.add('flash'); setTimeout(() => el?.classList.remove('flash'), 1500) }}>{w.model}</button>
+                        : <b>{w.model}</b>}: {w.summary}
+                    </li>
+                  )
+                })}
+              </ul>
+            </>
+          )}
           {reqLine && <p className={d.candidates.some(meets) ? '' : 'err'}>{reqLine}</p>}
           {(() => {
             const own = d.session.minDecodeTps

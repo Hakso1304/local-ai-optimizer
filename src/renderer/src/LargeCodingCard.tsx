@@ -43,7 +43,7 @@ export function LargeCodingCard({ fastDecode, onBenchmark, onDetails }: { fastDe
             <p className="muted">{state.r.label}</p>
             <table className="kv">
               <tbody>
-                <tr><td>Model</td><td>{c.model.name}</td></tr>
+                <tr><td>Model</td><td>{c.model.name}{best.headline && <div className="muted">{best.headline}</div>}</td></tr>
                 <tr><td>Quant</td><td>{c.model.quant ?? '—'}</td></tr>
                 <tr><td>Context</td><td><CtxPick recommended={best.score.recommendedCtx} scored={best.score.referenceCtx} /></td></tr>
                 <tr><td>Decode</td><td>{dec != null ? `${num(dec)} t/s` : '—'}
@@ -52,6 +52,9 @@ export function LargeCodingCard({ fastDecode, onBenchmark, onDetails }: { fastDe
               </tbody>
             </table>
             {best.score.breakdown.map((b) => <ScoreBar key={b.component} label={COMPONENT_LABEL[b.component]} score={b.score} kind={b.input.kind} weight={b.weight} />)}
+            {!!state.r.recommendation.whyNot?.length && (
+              <><h3>Why not the others</h3><ul>{state.r.recommendation.whyNot.map((w) => <li key={w.configId}><b>{w.model}</b>: {w.summary}</li>)}</ul></>
+            )}
           </>
         )}
       <div className="bar actions">

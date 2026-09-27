@@ -36,7 +36,7 @@ function RecommendedCard({ d, go }: { d: SessionDetail; go: Go }) {
         <>
           <table className="kv">
             <tbody>
-              <tr><td>Model</td><td>{c.model.name}</td></tr>
+              <tr><td>Model</td><td>{c.model.name}{rec.best.headline && <div className="muted">{rec.best.headline}</div>}</td></tr>
               <tr><td>Quant</td><td>{c.model.quant ?? '—'}</td></tr>
               <tr><td>Context</td><td><CtxPick recommended={rec.best.score.recommendedCtx} scored={rec.best.score.referenceCtx} /></td></tr>
               {d.session.requiredContext != null && <tr><td>Required context</td><td>{fmtCtx(d.session.requiredContext)} {(rec.best.practicalContext.value ?? 0) >= d.session.requiredContext ? <span className="pill">met</span> : <span className="pill warn-pill">not met</span>}</td></tr>}
