@@ -1,6 +1,6 @@
 // Real measurements, RX 9070 XT 16 GB (docs/calibration-2026-09-27.md → tests/fixtures/scoring/calib-8b-rx9070.json).
 import { describe, expect, it } from 'vitest'
-import type { ModelMeta, WorkloadId } from '../../src/shared/bench-types'
+import type { ModelMeta, QualityResult, WorkloadId } from '../../src/shared/bench-types'
 import { estimateMemory, generateCandidates } from '../../src/core/benchmark/candidates'
 import { detectCliffs } from '../../src/core/scoring/cliff'
 import { componentScores } from '../../src/core/scoring/components'
@@ -80,5 +80,53 @@ describe('calibration: 8B Q4_K_M full offload 2K→64K', () => {
     const mem = componentScores(blind, M, WORKLOADS.coding).components.memory
     expect(mem.score).toBe(50)
     expect(mem.note).toMatch(/^unknown \(VRAM peak unavailable\)/)
+  })
+})
+
+describe('calibration: Qwen2.5-14B Q4_K_M real spill cliff at 32K (per-PID telemetry)', () => {
+  const f14 = load('calib-14b-rx9070.json')
+  const q14 = f14.models[0]
+  const FULL14 = 'qwen14b|ngl=all'
+  const both = () => [...candidates('document_analysis'), ...inputs(f14)]
+  // Synthetic measured quality: 14B passes every test (Q 100), 8B passes 3 of 5 per category (Q 60).
+  const passAll = (modelId: string, best: boolean): QualityResult[] =>
+    ['instruction', 'reasoning', 'coding', 'structured', 'extraction', 'context'].flatMap((category) => [0, 1, 2, 3, 4].map((i) => {
+      const pass = best || i < 3
+      return { testId: `${modelId}-${category}-${i}`, category: category as QualityResult['category'], weight: 1, pass, score: pass ? 1 : 0, detail: '' }
+    }))
+
+  it('practical 16K, degraded 32K, limited by cliff; decode_drop + shared_spill fire, vram_spill corroborates (83% VRAM)', () => {
+    const r = detectCliffs(f14.runs.filter((x) => x.configId === FULL14).map(toRun), f14.vramBytes)
+    expect(r).toMatchObject({ practicalContextCeiling: { value: 16384 }, degradedContextCeiling: { value: 32768 }, limitedBy: 'cliff', spillFreeUpTo: 16384 })
+    const at32 = r.steps.find((s) => s.ctx === 32768)!
+    expect(at32.verdict).toBe('degraded')
+    expect(at32.reasons.map((x) => x.code)).toEqual(['decode_drop', 'vram_spill', 'shared_spill'])
+    expect(at32.reasons[0].message).toBe('decode TPS fell 48% between 16K and 32K (51.2 → 26.4 t/s)')
+    expect(r.steps.at(-1)!.verdict).toBe('fail')
+  })
+
+  it('Document Analysis: 14B at 16K beats 8B when its measured quality is higher', () => {
+    const inp = both().map((c) => ({ ...c, quality: passAll(c.model.id, c.model.id === q14.id) }))
+    const rec = recommend(inp, M, 'document_analysis')
+    expect(rec.best?.configId).toBe(FULL14)
+    expect(rec.best?.score.recommendedCtx).toBe(16384) // the spilled 32K step is never recommended
+  })
+
+  it('Document Analysis on priors only: 8B wins (64K ceiling + faster prefill outweigh the 14B quality prior)', () => {
+    expect(recommend(both(), M, 'document_analysis').best?.configId).toBe(FULL)
+  })
+
+  it('Fast Assistant never picks the 14B, even with higher quality', () => {
+    for (const withQuality of [false, true]) {
+      const inp = [...candidates('fast_assistant'), ...inputs(f14)].map((c) => ({ ...c, quality: withQuality ? passAll(c.model.id, c.model.id === q14.id) : [] }))
+      expect(recommend(inp, M, 'fast_assistant').best?.configId).toBe(FULL)
+    }
+  })
+
+  it('partial offload (ngl 30: 5.6 t/s) is never preferred over the spilled full offload (26.4 t/s)', () => {
+    for (const w of ['document_analysis', 'long_context_coding', 'coding', 'general_chat'] as const) {
+      const s = recommend(inputs(f14), M, w).ranked.find((x) => x.configId === 'qwen14b|ngl=30')!
+      expect(s.eligible, w).toBe(false)
+    }
   })
 })

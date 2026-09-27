@@ -38,7 +38,10 @@ export const DEFAULT_SCORING_CONFIG = {
     minDecodeDropTps: 2, // ...and the absolute drop is ≥ 2 t/s (no cliffs from tiny bases, X8)
     prefillDropPerDoubling: 0.5, // prefill(b)/prefill(a) < 0.5^log2(ctx_b/ctx_a): worse than attention cost explains
     sharedSpillBytes: 256 * MiB, // per-PID shared GPU memory above baseline → spill (F9)
-    vramSaturation: 0.95, // per-PID dedicated ≥ 95% of VRAM ...
+    // WDDM starts spilling well before "full": Qwen2.5-14B per-PID dedicated stalled at 13.25 GiB = 83% of 15.92 GiB
+    // while 1.05 GiB went to shared memory (0.95 could never fire). Corroborates shared_spill; 8B peaked at 81% with
+    // flat RAM, so the RAM-growth condition keeps it quiet there.
+    vramSaturation: 0.80, // per-PID dedicated ≥ 80% of VRAM ...
     ramGrowthBytes: 1 * GiB // ... while private RAM grows ≥ 1 GiB vs previous step → spill (never RAM alone, X11)
   },
   norm: {

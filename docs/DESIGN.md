@@ -330,7 +330,7 @@ Steps are sorted by ctx. The relative rules compare each step with the **previou
 | `minDecodeDropTps` | 2 t/s | ...and the absolute drop is ≥ 2 t/s | no cliffs from tiny bases (X8) |
 | `prefillDropPerDoubling` | 0.5 | pp_b/pp_a < 0.5^log2(ctx_b/ctx_a) → `prefill_drop` | worse than attention cost explains |
 | `sharedSpillBytes` | 256 MiB | per-PID shared GPU mem above baseline → `shared_spill` (every step, including the first) | F9: per-PID, never adapter totals |
-| `vramSaturation`, `ramGrowthBytes` | .95, 1 GiB | per-PID dedicated ≥ 95 % of VRAM **and** private RAM +1 GiB vs the previous step → `vram_spill` | A15 spill. RAM growth alone never flags (X11). Private working set excludes mmap file cache |
+| `vramSaturation`, `ramGrowthBytes` | .80 (calibrated; WDDM spills at ≈83 %), 1 GiB | per-PID dedicated ≥ 80 % of VRAM **and** private RAM +1 GiB vs the previous step → `vram_spill` | A15 spill. RAM growth alone never flags (X11). Private working set excludes mmap file cache |
 
 CPU % is never a cliff or spill signal. avgCpuUtil is decode-window only; the load spike is excluded from averages and kept in peaks (X10).
 Verdicts: **FAIL** = unusable step (§5.1). **DEGRADED** = any rule fired, or the step is `beyond_limit` (sticky: every step after the first cliff/failure is at least degraded). **PASS** = otherwise.

@@ -84,7 +84,7 @@ Steps are sorted by ctx. A step is **usable** iff its status is `pass|degraded` 
 | `decodeDropRatio`, `minDecodeDropTps` | 0.60, 2 t/s | dec_b/dec_a ≤ 0.60 **and** dec_a − dec_b ≥ 2 → `decode_drop` |
 | `prefillDropPerDoubling` | 0.5 | pp_b/pp_a < 0.5^log2(ctx_b/ctx_a) → `prefill_drop` |
 | `sharedSpillBytes` | 256 MiB | per-PID shared > 256 MiB, checked at every step including the first → `shared_spill` |
-| `vramSaturation`, `ramGrowthBytes` | 0.95, 1 GiB | per-PID dedicated ≥ 95 % of the VRAM total **and** private RAM ≥ +1 GiB vs the previous step → `vram_spill` (RAM growth alone never flags) |
+| `vramSaturation`, `ramGrowthBytes` | 0.80, 1 GiB | per-PID dedicated ≥ 80 % of the VRAM total **and** per-PID private RAM ≥ +1 GiB vs the previous step → `vram_spill`. This corroborates `shared_spill`. RAM growth alone never flags, and available-RAM deltas (mmap) must never be fed in. |
 
 - Verdicts:
   - **FAIL** = not usable (`run_failed` / `invalid_metrics`).
@@ -105,7 +105,14 @@ Steps are sorted by ctx. A step is **usable** iff its status is `pass|degraded` 
   - Per-PID shared Δ was ≤ 0.12 GiB (< 256 MiB), and dedicated peaked at 14.6 GiB (≈ 92 % < 95 %).
   - Result: no false positives on a real smooth sweep.
   - Do not lower `decodeDropRatio` below ~0.65: a 25–30 % threshold would fire at 64K.
-- **True positive not yet observed:** no calibrated run crossed into spill. The 0.60 / 256 MiB / 0.95 thresholds are still [A] for the positive direction.
+- **Real cliff observed** on Qwen2.5-14B Q4_K_M, full offload (`calib-14b-rx9070.json`):
+  - The run went 2K/8K/16K/32K: decode 61.6 / 57.1 / 51.2 / **26.4** t/s, per-PID shared 0.02 → **1.05 GiB** at 32K, TTFT 22.6 s.
+  - `decode_drop` fired (ratio 0.516 ≤ 0.60), and so did `shared_spill` (1.05 GiB > 256 MiB).
+  - Verdict: practical 16K, degraded 32K, `limitedBy: cliff`, which matches a human reading.
+  - 48K failed (the server served only n_ctx 32768 = ctx_train, HTTP 400).
+- **WDDM saturation:** per-PID dedicated stalled at 13.25 GiB = **83 %** of 15.92 GiB when the spill began, so the old 0.95 saturation rule could never fire. It is now 0.80: it fires at 14B 32K (private WS +1.02 GiB) and stays quiet on 8B 64K (81 %, flat RAM).
+- **Spill vs partial:** at 32K the spilled full offload decodes 26.4 t/s, while partial offload with ngl 30 decodes 5.6 t/s (4.7× slower). Partial offload is therefore never preferred because of a spill (§8).
+- The 0.60 decode and 256 MiB shared thresholds are confirmed in both directions on this GPU. Other GPUs are still [A].
 - **Memory-bound, not cliff-bound:** on 16 GB the 8B ceiling is 64K because 128K is estimated far over the VRAM budget and pruned. Reasons say "memory-bound at 64K (128K: est. VRAM … > budget …)" instead of "no cliff".
 - **Partial offload** (ngl 20/32 @ 8K) decodes at 17.5 t/s vs 99.9 with full offload, and ngl 0 at 7.1 t/s. That is a config difference, not a cliff. It is handled by linear genSpeed, the partial-offload memory cap and the partial-offload gate (§7, §8).
 - Tests: `tests/scoring/calibration.test.ts` (fixture `calib-8b-rx9070.json`, built from the calibration table) and `tests/scoring/adversarial.test.ts` (#3, `calib-rx9070-2026-09-27.json`).
@@ -147,7 +154,7 @@ Calibrated on the 8B full offload (TTFT 0.5 s @ 2K, 1.1 s @ 4K, 2.2 s @ 8K, 4.9 
 
 - **Excluded**: candidates with no usable step, listed with their step reasons (A17).
 - **Gates** (the candidate is still ranked, but `eligible:false`): practical ceiling < 0.5 · targetContext; stability < 50; quality < minQuality (an estimated quality also gates, and the reason says "estimated"); **TTFT at the scoring step > latencyToleranceMs**.
-- **Partial-offload gate**: on a GPU machine, a partial config (ngl < all, including ngl 0) is ineligible when a full-offload config of the **same model** is eligible. Calibration: ngl 20 decodes −83 %, and ngl 0 still uses the GPU.
+- **Partial-offload gate**: on a GPU machine, a partial config (ngl < all, including ngl 0) is ineligible whenever a full-offload config of the **same model** has any usable step, even one that is gated or degraded by a spill. Calibration: ngl 20 decodes −83 % (8B), a spilled 14B full offload beat ngl 30 by 4.7×, and ngl 0 still uses the GPU.
 - **Ranking / tie-break**: eligible first → total rounded to 1e-6, descending → lower peak VRAM (CPU-only counts as 0) → lower peak RAM → `configId` ascending (code-unit order). Unknown values sort last. Output is deep-equal for any input order.
 - **Best** = the first eligible candidate, with `practicalContext` (measured) and `declaredContext` (declared) reported separately.
 - **Alternatives**, among eligible candidates, each with a configId tie-break:
@@ -188,7 +195,7 @@ Estimates are `kind:'estimated'`, prune only, and never rank.
 
 ## 10. Known limitations
 - **GPU util outliers:** the calibration shows GPU util samples of ~1e13 % (the 8B @ 32K/64K run1 rows). The sampler does not clamp `gpuUtilPct` to 0–100, so `avgGpuUtil` can be poisoned. GPU util is not used by scoring or cliff rules today, but it is displayed.
-- **No calibrated true-positive cliff/spill yet:** the thresholds are validated only against false positives. Profiles are calibrated on one GPU and one model family.
+- **One GPU:** the thresholds and profiles are calibrated on one GPU (RX 9070 XT, WDDM) with two models (8B and 14B). NVIDIA/WDDM spill points may differ.
 - **No `ignore_eos`:** `runPrompt` doesn't send it, so short generations make decode TPS noisier. No CV-based extra reps are taken (DESIGN §3.4 is not implemented).
 - **Thinking models:** the ×4 quality token boost is off (`ModelMeta` has no `supportsThinking`).
 - **Sticky degraded verdict:** a real ≥ 40 % transient dip that recovers still ends the practical ceiling.

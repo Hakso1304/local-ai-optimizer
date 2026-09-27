@@ -201,12 +201,19 @@ describe('calibration (d) + X11: mmap RAM is not spill', () => {
     expect(r.spillFreeUpTo).toBe(4096)
   })
 
-  it('real 64K rung (VRAM 83%) + a +5 GiB RAM jump → still no spill (saturation rule needs ≥95%)', () => {
-    const r = detectCliffs([step(32768, { peakVramBytes: 8.57 * GiB }), step(65536, { peakVramBytes: 13.28 * GiB, peakRamBytes: 5.6 * GiB, decodeTps: 73 })], calib.vramBytes)
+  // Updated by #1 for vramSaturation 0.80 (WDDM spills at ≈83%, 14B calibration): the guard against mmap is now only
+  // that the runner feeds per-PID private WS (which stayed flat on 8B), never available-RAM deltas — see the contract below.
+  it('VRAM 75% + a +5 GiB RAM jump → no spill (below the 80% saturation rule)', () => {
+    const r = detectCliffs([step(32768, { peakVramBytes: 8.57 * GiB }), step(65536, { peakVramBytes: 11.9 * GiB, peakRamBytes: 5.6 * GiB, decodeTps: 73 })], calib.vramBytes)
     expect(r.steps[1].verdict).toBe('pass')
   })
 
-  it('contract: at ≥95% VRAM a ≥1 GiB growth IS spill — so the runner must feed private WS, never available-RAM deltas', () => {
+  it('real 64K rung (VRAM 83%) with flat private WS → no spill', () => {
+    const r = detectCliffs([step(32768, { peakVramBytes: 8.57 * GiB }), step(65536, { peakVramBytes: 13.28 * GiB, decodeTps: 73 })], calib.vramBytes)
+    expect(r.steps[1].verdict).toBe('pass')
+  })
+
+  it('contract: at ≥80% VRAM a ≥1 GiB growth IS spill — so the runner must feed private WS, never available-RAM deltas', () => {
     const r = detectCliffs([step(32768, { peakVramBytes: 14 * GiB }), step(65536, { peakVramBytes: 15.5 * GiB, peakRamBytes: 5.6 * GiB, decodeTps: 90 })], calib.vramBytes)
     expect(r.steps[1].reasons.map((x) => x.code)).toContain('vram_spill')
   })

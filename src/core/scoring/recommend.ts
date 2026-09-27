@@ -82,8 +82,9 @@ export function recommend(
   }
 
   // Calibration: partial offload collapsed decode −83% (ngl 20) on 8B; ngl 0 on Vulkan still uses the GPU for prefill.
-  // Never recommend a partial config of a model whose full-offload config is eligible.
-  const fullOk = new Set(scored.filter((s) => s.score.eligible && s.input.config.gpuLayersAll).map((s) => s.input.model.id))
+  // 14B @32K: a 1 GiB spill (26.4 t/s) still beat ngl 30 (5.6 t/s). So a partial config is never recommended for a model
+  // whose full-offload config has any usable step — even if that one is gated or degraded by a spill.
+  const fullOk = new Set(scored.filter((s) => s.input.config.gpuLayersAll).map((s) => s.input.model.id))
   for (const s of scored) {
     if (!s.input.config.gpuLayersAll && machine.gpuDevice !== null && fullOk.has(s.input.model.id)) {
       s.score.eligible = false
