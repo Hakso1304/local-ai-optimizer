@@ -69,7 +69,8 @@ function fakeBackend(script: (ctx: number, cfg: LoadConfig) => Step) {
     async runPrompt(req): Promise<PromptResult> {
       calls.prompts.push(req)
       const s = script(ctx, cfg!)
-      const base = { promptTokens: 100, prefillMs: 10, decodeTokens: req.maxTokens, decodeMs: 1000, text: 'BANANA', stopType: 'eos' }
+      const base = { promptTokens: 100, prefillMs: 10, decodeTokens: req.maxTokens, decodeMs: 1000, text: 'BANANA', stopType: 'eos',
+        acceptedSampling: { temperature: req.temperature ?? 0, seed: req.seed } }
       const isMeasured = req.prompt === ladderPrompt(ctx)
       if (isMeasured) s.hook?.()
       if (isMeasured && s.prompt === 'device_lost') {

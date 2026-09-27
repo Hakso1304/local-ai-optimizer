@@ -357,6 +357,15 @@ describe('A/B/C (review-w4l): generation contract strictness', () => {
     expect(V([c]).ranked[0]).toMatchObject({ qualityMeasured: false, undecided: expect.arrayContaining([expect.objectContaining({ component: 'quality', kind: 'contract-error' })]) })
     c.quality = rows.map((r, i) => i === 1 ? { ...r, acceptedSampling: { temperature: 0 } } as QualityResult : r)
     expect(V([c]).ranked[0].qualityMeasured).toBe(false)
+    const plain = candidate('plain')
+    plain.quality = plain.quality.map((r) => ({ ...r, acceptedSampling: { temperature: 0 } } as QualityResult))
+    expect(V([plain]).ranked[0].qualityMeasured).toBe(true) // no requested kwargs or gen comparison
+    const thinker = thinkModel(candidate('seed-think'))
+    thinker.quality = bound(rowsFor('off'), { enable_thinking: false })
+    const thinkRows = bound(rowsFor('think-low'), { enable_thinking: true, reasoning_effort: 'low' })
+      .map((r, i) => i === 1 ? { ...r, acceptedSampling: { temperature: 0 } } as QualityResult : r)
+    thinker.genQuality = [gq('off', false, thinker.quality), gq('think-low', true, thinkRows)]
+    expect(V([thinker]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')).toMatchObject({ comparable: false, why: expect.stringMatching(/runtime-accepted seed/) })
   })
   it('I-8.0 migrated single-toggle proof remains comparable; explicit contradictory proof rejects it', () => {
     const c = candidate('a')
