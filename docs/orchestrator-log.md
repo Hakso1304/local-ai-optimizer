@@ -262,3 +262,6 @@
 
 ## Fable — 2026-09-28 04:30 local
 - Pushed 854b133 (Q1/Q2 + req.reps) and a3cc795 (R1–R3); tsc 0; tree clean. Astra RECHECK7 dispatched. #1 verifying its pre-review points landed. Waiting: S3 session 5 export → harness round.
+
+## Fable — 2026-09-28 04:31 local
+- #1 static check of 854b133: all six Q1/Q2 pre-review points landed (isAlive batching = 2 spawns/iteration, acceptable; backend-level unloadModel has no in-flight promise, low risk; loadModel gets the session signal only — covered by the shared unload; reps rejected outside 1–5). No action needed before RECHECK7.
