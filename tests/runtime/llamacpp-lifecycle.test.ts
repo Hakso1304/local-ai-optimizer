@@ -98,7 +98,11 @@ describe('loadModel', () => {
   it('writes the pid file while running', async () => {
     handler = healthy()
     await load()
-    expect(readFileSync(pidFile, 'utf8')).toBe(String(child.pid))
+    // W4c D11: the record carries the exe path and start time so a reused pid is never killed later.
+    const rec = JSON.parse(readFileSync(pidFile, 'utf8'))
+    expect(rec.pid).toBe(child.pid)
+    expect(typeof rec.exePath).toBe('string')
+    expect(Number.isFinite(Date.parse(rec.startedAt))).toBe(true)
   })
 
   it.each([
