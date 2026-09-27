@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import type { Metric } from '../../shared/bench-types'
 import type { WorkloadId } from '../../shared/bench-types'
 import type { ComputedRecommendation, SessionCandidate, SessionDetail, SessionSummary } from '../../shared/types'
 import type { TelemetrySample } from '../../shared/bench-events'
 import { WORKLOADS } from '../../core/scoring/workloads'
-import { genLabel } from '../../core/benchmark/gen'
+import { genLabel, type GenRow } from '../../core/benchmark/gen'
 import { ExportMenu } from './ExportMenu'
 import { ENGINE_RULES, InterpretPanel, Reason, insightsOf, rulesOf, type InsightActions } from './InterpretPanel'
 import type { BenchPreset } from './LargeCodingCard'
@@ -27,6 +27,35 @@ function peak(c: SessionCandidate, k: 'peakVramBytes' | 'peakRamBytes'): Metric 
 const refRun = (c: SessionCandidate) => c.runs.find((r) => r.ctx === c.score?.referenceCtx)
 const comp = (c: SessionCandidate, id: string) => c.score?.breakdown.find((b) => b.component === id)
 
+/** Planner snapshot (§12) of the first config that has one: what the budgets were when the plan was made. */
+function PlanningLine({ d }: { d: SessionDetail }) {
+  const p = d.candidates.find((c) => c.config.planning)?.config.planning
+  if (!p) return null
+  const g = (b: number | null) => (b == null ? '—' : gib(b))
+  return (
+    <p className="muted">
+      Planned with: VRAM {g(p.vramTotalBytes)} total, <M m={p.vramInUse} fmt={gib} /> in use by other apps, budget {g(p.planningVramBudgetBytes)}
+      {' '}(reserve {gib(p.planningReserveBytes)}); RAM {g(p.ramAvailableBytes)} available (reserve {gib(p.ramReserveBytes)}); rules {p.candidateRulesVersion}
+    </p>
+  )
+}
+
+/** Structured skip (§12, rule I-2.3) when present, else the planner's text. */
+function skipText(s: SessionCandidate['config']['skippedSteps'][number]): ReactNode {
+  const k = s.skip
+  if (!k) return s.reason
+  const what = k.resource === 'declared' ? 'above the declared context' : `${k.resource.toUpperCase()} estimate ${k.estimateBytes != null ? gib(k.estimateBytes) : '?'} > budget ${k.budgetBytes != null ? gib(k.budgetBytes) : '?'}`
+  return <><Reason text={`[${k.ruleId}] ${what}`} /> <span className="muted">— {s.reason}</span></>
+}
+
+/** Quality rows that are not valid grades (§12): infra errors, truncated outputs, unrun items. */
+function EvalPills({ rows }: { rows: GenRow[] }) {
+  const n = (st: string) => rows.filter((r) => r.evaluationStatus === st).length
+  const trunc = rows.filter((r) => r.evaluationStatus === 'truncated' || r.outputTruncated).length
+  const pills = [['infra_error', n('infra_error')], ['truncated', trunc], ['unrun', n('unrun')]] as const
+  return <>{pills.filter(([, c]) => c > 0).map(([k, c]) => <span key={k} className="pill warn-pill" title={`${c} of ${rows.length} items ${k.replace('_', ' ')} — not a valid grade`}>{c} {k.replace('_', ' ')}</span>)}</>
+}
+
 /** Per model: every generation config the quality suite ran with (one row each), measured from the stored rows. */
 function GenTable({ d, chosen, tag }: { d: SessionDetail; chosen: string | null; tag: string }) {
   const models = [...new Map(d.candidates.filter((c) => (c.genQuality?.length ?? 0) > 1).map((c) => [c.model.id, c])).values()]
@@ -45,7 +74,8 @@ function GenTable({ d, chosen, tag }: { d: SessionDetail; chosen: string | null;
                 <td><M m={g.effectiveTps} /></td>
                 <td><M m={g.effectiveAnswerLatencyMs} fmt={(v) => `${(v / 1000).toFixed(1)} s`} /></td>
                 <td><M m={g.reasoningTokens} fmt={(v) => num(v, 0)} /></td>
-                <td>{g.samples}{g.stochastic && <span className="muted" title="T > 0: seeded, not bit-identical across builds/hardware"> (sampled)</span>}</td>
+                <td>{g.samples}{g.stochastic && <span className="muted" title="T > 0: seeded, not bit-identical across builds/hardware"> (sampled)</span>}
+                  <EvalPills rows={g.results as GenRow[]} /></td>
               </tr>
             ))}
           </tbody>
@@ -90,6 +120,7 @@ function Detail({ d, onRerun, go }: { d: SessionDetail; onRerun: (configId: stri
       {d.session.demo && <DemoBanner />}
       {insightsOf(rec).length > 0 && <InterpretPanel insights={insightsOf(rec)} actions={actions} tag={tag} />}
       <h2>Comparison — {d.session.workload}{tag}</h2>
+      <PlanningLine d={d} />
       <SloFilter session={d.session} candidates={d.candidates} onChange={onSlo} />
       <table>
         <thead><tr><th /><th>Model</th><th>Quant</th><th>Config</th><th>Recommended ctx</th>{req != null && <th>Required {fmtCtx(req)}</th>}<th>Practical ctx</th><th>Quality</th><th>Decode t/s</th><th>Prefill t/s</th><th>Peak VRAM</th><th>Peak RAM</th><th>Stability</th><th /></tr></thead>
@@ -149,6 +180,9 @@ function Detail({ d, onRerun, go }: { d: SessionDetail; onRerun: (configId: stri
               <li key={`${s.ctx}-${k}`}><span className={`verdict ${s.verdict}`}>{s.verdict}</span> <code>{r.code}</code> {r.message}</li>
             )))}
             {c.cliff.steps.every((s) => !s.reasons.length) && <li className="muted">No cliff reasons: every step passed.</li>}
+            {c.config.skippedSteps.map((s) => (
+              <li key={`skip-${s.ctx}`}><span className="verdict">skipped</span> {fmtCtx(s.ctx)}: {skipText(s)}</li>
+            ))}
           </ul>
           <div className="bar">{c.runs.map((r, k) => (
             <button key={r.ctx} className="mini" title="Show this step's telemetry"
