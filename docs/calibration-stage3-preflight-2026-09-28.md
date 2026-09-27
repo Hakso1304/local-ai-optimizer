@@ -26,6 +26,14 @@ npx tsx scripts/run-session.ts H --workload coding --heavy --ladder 8192 --model
 
 Leave at least 60 seconds idle between sessions. Record every session ID and dump path. If a RAM or request abort occurs, keep the partial dump and identify the incomplete config; do not turn missing items into failures [I-5.7].
 
+After each session finishes, export its persisted evidence from the app DB into a distinct owned JSON file:
+
+```powershell
+npx tsx scripts/export-session-evidence.ts --session <session-id> --db $db --out docs/session-evidence-stage3-<gemma|qwen-main|qwen-xhigh>-2026-09-28.json
+```
+
+Run this inside the same snapshot so `HEAD.txt` supplies the full source hash. `run-session.ts --db` writes to app storage, so the dump's local `db.runs` and `db.quality` arrays remain empty. The export reads `benchmark_session`, **all** `benchmark_run` attempts, `quality_result`, and recommendations read-only. Use those persisted payloads to verify `acceptedSampling`, `templateHash`, requested/applied kwargs and token-count provenance; never infer them from the summary or transcript.
+
 ## Result record for `docs/calibration-overnight-2026-09-28.md`
 
 For each session record: full snapshot HEAD, start/end time, workload, model file and fingerprint, backend/device/runtime build, VRAM in use at planning, env-key check, request cap, RAM floor, suite ID and seed, context rung and actual prompt tokens, quality item/skill/sample counts, min RAM by ladder/quality phase, `promptCacheSeen`, and abort/cleanup status.
