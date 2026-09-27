@@ -193,3 +193,6 @@
 
 ## Fable — 2026-09-28 03:33 local
 - S3 handoff ack: session 5 lease unchanged (launcher 34256 → tsx 37640 → runner 3288; quality server 34276). #2 reintegration: sibling hook + export audit OK; ONE deterministic failure: interp2-rereview G08 red since 7166792 → routed to S1 (engine or fixture) with S2 owning fixture changes. HOLD on xhigh/HIP stays until session 5 export.
+
+## Fable — 2026-09-28 03:35 local
+- Claude #1 static review of overnight src: G08 = fixture gap (S1+S2 fixing); latent legacy-cpu stateOf bug, O1 absorbed-baseline disclosure, I-2.8 cause contradicted by the repaired A/B (residency intrinsic from first sample; argv lacked -lv 4) → routed to S1/S2; guide I-2.8 reworded. S3 (when the lane is next released): add -lv 4 to A/B argv so buffers are declared.

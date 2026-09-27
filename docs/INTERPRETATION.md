@@ -114,12 +114,13 @@ it becomes a warn only when `limitKind` is failure/spill/cliff.
 Rule I-2.5 (`ctx.required`, critical/info): requiredContext set → state per model one
 of: reached (rung passed), tested-and-failed (reason), not-tested (why). Unmet ⇒ lead
 insight with actions.
-Rule I-2.8 (`ctx.placement-spill`, warn, origin heuristic → measured-calibration once
-the 2026-09-28 A/B confirms it; evidence so far: cal-2026-09-27 run 14): per-PID shared
+Rule I-2.8 (`ctx.placement-spill`, warn, origin heuristic; the 2026-09-28 A/B did NOT
+confirm a placement cause — see docs/EVIDENCE.md E-12): per-PID shared
 memory ≥ the spill threshold while adapter dedicated VRAM free ≥ 1 GiB in the same
 window ⇒ "<n> GiB of this process is resident in shared memory although <x> GiB of
-dedicated VRAM was free — driver placement after a previous large load, not a capacity
-limit". Action `restart-runtime` (unload, fresh server, re-measure the rung once; the
+dedicated VRAM was free — cause unknown — likely a host-visible buffer; the 2026-09-28 A/B showed the same
+residency from the first sample on a fresh server, so it is not a placement effect of a
+previous load — and not necessarily a capacity limit". Action `restart-runtime` (unload, fresh server, re-measure the rung once; the
 runner does this automatically once per rung and records `placementRetry` with both
 observations). Not evaluable without a same-window adapter-free reading — there is no
 fallback to budget − peak. A retry that still shows residency is classified
