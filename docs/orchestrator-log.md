@@ -244,3 +244,6 @@
 
 ## Fable — 2026-09-28 04:19 local
 - #1 pre-review of S1's Q1/Q2 diff: abort propagation correct; BUG in defaultProcessTree date parsing (PS 5.1 /Date(ms)/ → RangeError on every real unload); foreign-kill window too wide; batch isAlive; overlapping unloads; sampler.stop still sync; before-quit killSync root-only (HIP backend not killed). Routed to S1 before commit.
+
+## Fable — 2026-09-28 04:20 local
+- Pushed 412a9c0 (release-gate script: 3 STOP = WIP tsc, dirty tree, EVIDENCE lacks rules version → S2) and b013285 (GPU queue command lines). Waiting: S1 Q1/Q2 commit; S3 session 5 export; Astra RECHECK6.
