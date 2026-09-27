@@ -79,3 +79,35 @@ Telemetry: typeperf 1 s; adapter luid 0x00000000_0x00016058; shared Δ = peak ad
   - Telemetry for requests shorter than ~1 s (typeperf 1 s granularity; Qwen 2K run1 got 0 samples → n/a).
   - Load peak for loads under ~2 s.
   - GPU util returned garbage 3× (1.3e13, 5.4e12, 7.3e12 %). This is a PDH GPU Engine counter glitch; the values are left raw in the table on purpose.
+## Qwen2.5-14B Q4_K_M spill/cliff observation
+
+Per-PID telemetry (GPU Process Memory, Process V2 private WS); warm = median of run1/run2. detectCliffs with DEFAULT_SCORING_CONFIG.cliff = `{"decodeDropRatio":0.6,"minDecodeDropTps":2,"prefillDropPerDoubling":0.5,"sharedSpillBytes":268435456,"vramSaturation":0.95,"ramGrowthBytes":1073741824}`, vramTotal 17095983104.
+
+| ctx | ngl | status | load ms | layers | KV MiB | prompt_n | TTFT ms | prefill TPS | decode TPS | pid ded GiB | pid shared GiB | pid private WS GiB | adapter ded GiB | adapter shared Δ GiB | RAM min GiB | GPU util % | CPU % |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2048 | 99 | ok | 4398.1 | 49/49 | Vulkan0:384 | 1537 | 966.9 | 1596.2 | 61.6 | 8.58 | 0.02 | 0.12 | 10.35 | 0.02 | 6.41 | 95.8 | 17.0 |
+| 8192 | 99 | ok | 4566.0 | 49/49 | Vulkan0:1536 | 6151 | 4098.4 | 1503.6 | 57.1 | 9.71 | 0.03 | 0.13 | 11.35 | -0.01 | 6.51 | 97.1 | 19.6 |
+| 16384 | 99 | ok | 4685.8 | 49/49 | Vulkan0:3072 | 12288 | 9005.0 | 1366.8 | 51.2 | 11.22 | 0.04 | 0.14 | 12.74 | 0.04 | 5.97 | 97.3 | 24.3 |
+| 32768 | 99 | ok | 5449.3 | 49/49 | Vulkan0:6144 | 24588 | 22584.8 | 1089.8 | 26.4 | 13.25 | 1.05 | 1.16 | 14.76 | 1.05 | 5.59 | 95.4 | 17.6 |
+| 49152 | 99 | error: POST /completion -> HTTP 400: {"error":{"code":400,"message":"request (36879 tokens) exceeds the available context size (32768 tokens), try increasing it","type":"exceed_context_size_error","n_prompt_tokens":36879,"n_ctx":32768}} | 6821.9 | 49/49 | Vulkan0:9216 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| 32768 | 30 | ok | 4920.6 | 30/49 | CPU:2432 Vulkan0:3712 | 24588 | 31272.4 | 787.2 | 5.6 | 9.04 | 0.05 | 2.54 | 10.61 | 0.05 | 4.05 | 40.5 | 45.4 |
+
+### detectCliffs on the ngl-99 ladder
+
+practicalContextCeiling 16384, degradedContextCeiling 32768, limitedBy cliff, spillFreeUpTo 16384
+
+| ctx | verdict | reasons |
+|---|---|---|
+| 2048 | pass | — |
+| 8192 | pass | — |
+| 16384 | pass | — |
+| 32768 | degraded | decode_drop: decode TPS fell 48% between 16K and 32K (51.2 → 26.4 t/s); shared_spill: spilled 1.1 GiB into shared GPU memory at 32K |
+| 49152 | fail | run_failed: 48K: run fail (config_drift) — recomputed after fixing the script mapping; the live run labelled it `crash` |
+
+Notes (14B):
+- The rules that fired at 32K on real data are `decode_drop` (ratio 0.516 ≤ 0.60; 51.2 → 26.4 t/s) and `shared_spill` (per-PID shared 1.05 GiB > 256 MiB).
+- `vram_spill` did not fire. Per-PID dedicated plateaued at 13.25 GiB = 83% of 15.92 GiB, while the adapter showed 14.76 GiB. WDDM starts spilling this process at ≈13.2 GiB, well below the 95% saturation rule. The shared-memory rule caught it; the saturation rule would never fire here.
+- The detector verdict is: practical ceiling 16K, degraded ceiling 32K, limitedBy cliff. That matches a human reading: 16K is the last rung without spill; 32K works at half the decode speed.
+- 48K is not a real OOM. llama-server allocated the 48K KV (9216 MiB) but served only n_ctx 32768 (= Qwen2.5 ctx_train) and rejected the 36879-token prompt with HTTP 400 exceed_context_size_error. loadModel accepted the server without checking its effective n_ctx.
+- Partial offload at 32K: ngl 30 (30/49 layers) decodes 5.6 t/s vs 26.4 for the spilled full offload, which is 4.7× slower. Prefill 787 vs 1090. RAM min 4.05 GiB, at the guard edge. So a ~1 GiB spill costs less than moving 19 layers to the CPU; do not prefer partial over spilled-full on decode.
+- RAM available min was 5.6–6.5 GiB at every ngl-99 rung (9 GB GGUF mmap'd); idle baseline 14.1–15.6 GiB this run, because other workers were active.
