@@ -11,8 +11,8 @@ export interface SloFacts { ttftMs: number | null; decodeTps: number | null; pra
 export type SloCheck = (c: SessionCandidate) => { ok: boolean; failed: string[] }
 
 /** Defaults from the workload: its latency tolerance, its decode gate, and the eligibility floor (half the target ctx). */
-export function sloDefaults(p: WorkloadProfile): SloValues {
-  return { maxTtftS: p.latencyToleranceMs / 1000, minDecodeTps: p.minDecodeTps ?? null, minPracticalCtx: p.targetContext / 2, maxVramGiB: null }
+export function sloDefaults(p: WorkloadProfile, requiredContext?: number | null): SloValues {
+  return { maxTtftS: p.latencyToleranceMs / 1000, minDecodeTps: p.minDecodeTps ?? null, minPracticalCtx: requiredContext ?? p.targetContext / 2, maxVramGiB: null }
 }
 
 const ok = (c: SessionCandidate['runs'][number]) => c.status === 'pass' || c.status === 'degraded'
@@ -54,13 +54,15 @@ export const parseLimit = (text: string): number | null => {
 
 const CTX = [2048, 4096, 8192, 16384, 32768, 65536, 131072]
 
-export function SloFilter({ workload, candidates, onChange }: {
+export function SloFilter({ workload, requiredContext, candidates, onChange }: {
   workload: WorkloadId
+  /** The session's required context (if set) is the default minimum practical context. */
+  requiredContext?: number | null
   candidates: SessionCandidate[]
   onChange: (check: SloCheck) => void
 }) {
-  const [s, setS] = useState<SloValues>(() => sloDefaults(WORKLOADS[workload]))
-  useEffect(() => setS(sloDefaults(WORKLOADS[workload])), [workload])
+  const [s, setS] = useState<SloValues>(() => sloDefaults(WORKLOADS[workload], requiredContext))
+  useEffect(() => setS(sloDefaults(WORKLOADS[workload], requiredContext)), [workload, requiredContext])
   const check = useMemo<SloCheck>(() => (c) => meetsSlo(factsOf(c), s), [s])
   useEffect(() => onChange(check), [check, onChange])
   const n = candidates.filter((c) => check(c).ok).length
@@ -81,7 +83,7 @@ export function SloFilter({ workload, candidates, onChange }: {
         </select>
       </label>
       {numIn('maxVramGiB', 'Max peak VRAM GiB', '0.5')}
-      <button className="mini" onClick={() => setS(sloDefaults(WORKLOADS[workload]))}>Workload defaults</button>
+      <button className="mini" onClick={() => setS(sloDefaults(WORKLOADS[workload], requiredContext))}>Workload defaults</button>
       <span className="muted">{n} of {candidates.length} configurations meet the constraints (measured at each config's scored context)</span>
     </div>
   )

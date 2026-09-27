@@ -69,6 +69,8 @@ function summary(db: DatabaseSync, row: SessionRow): SessionSummary {
     demo: p.demo === true || row.status === 'demo',
     label: p.label ?? null,
     error: p.error ?? null,
+    requiredContext: p.request?.requiredContext ?? null,
+    minDecodeTps: p.request?.minDecodeTps ?? null,
     candidateCount: p.candidates.length,
     bestConfigId: rec ? json<Recommendation>(rec.payload).best?.configId ?? null : null
   }

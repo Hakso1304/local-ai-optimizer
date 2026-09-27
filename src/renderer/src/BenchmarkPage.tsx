@@ -16,10 +16,12 @@ export function BenchmarkPage({ live, onDownload }: { live: LiveState; onDownloa
   const [maxCtx, setMaxCtx] = useState<number>(0) // 0 = no cap (candidate rules decide)
   const [quality, setQuality] = useState(true)
   const [heavy, setHeavy] = useState(false)
+  const [reqCtx, setReqCtx] = useState(0) // 0 = Auto (workload default)
+  const [minDec, setMinDec] = useState('') // blank = workload default
   const [fit, setFit] = useState<Record<string, string | null>>({})
 
   useEffect(() => {
-    void Promise.all([window.api.listWorkloads(), window.api.getSettings()]).then(([ws, s]) => { setWorkloads(ws); setWorkload(s.workload ?? ws[0]?.id ?? null) })
+    void Promise.all([window.api.listWorkloads(), window.api.getSettings()]).then(([ws, s]) => { setWorkloads(ws); setWorkload(s.workload ?? ws[0]?.id ?? null); setReqCtx(s.requiredContext ?? 0) })
     window.api.listModels().then(setModels, (e: Error) => setMsg(e.message))
   }, [])
 
@@ -28,7 +30,7 @@ export function BenchmarkPage({ live, onDownload }: { live: LiveState; onDownloa
     if (!workload) return
     setMsg(null)
     const r = await window.api.startBench({
-      workload, modelIds: [...picked], runQuality: quality, heavyMode: heavy, ...(maxCtx ? { ladder: LADDER.filter((c) => c <= maxCtx) } : {})
+      workload, modelIds: [...picked], runQuality: quality, heavyMode: heavy, ...(reqCtx ? { requiredContext: reqCtx } : {}), ...(minDec.trim() ? { minDecodeTps: Number(minDec) } : {}), ...(maxCtx ? { ladder: LADDER.filter((c) => c <= maxCtx) } : {})
     })
     if (!r.ok) setMsg(r.error)
   }
@@ -55,6 +57,15 @@ export function BenchmarkPage({ live, onDownload }: { live: LiveState; onDownloa
             {LADDER.map((c) => <option key={c} value={c}>{fmtCtx(c)}</option>)}
           </select>
         </label>
+        <label>Required context{' '}
+          <select value={reqCtx} disabled={running} onChange={(e) => { const v = Number(e.target.value); setReqCtx(v); void window.api.setRequiredContext(v || null) }}>
+            <option value={0}>Auto (workload default)</option>
+            {[32768, 65536, 131072].map((c) => <option key={c} value={c}>{fmtCtx(c)}</option>)}
+          </select>
+        </label>
+        <label title="20–30 t/s is usable for large-scale work; blank = the workload's own gate">Min decode t/s{' '}
+          <input type="number" min={0} max={1000} step={1} value={minDec} placeholder="default" disabled={running} style={{ width: 70 }} onChange={(e) => setMinDec(e.target.value)} />
+        </label>
         <label><input type="checkbox" checked={quality} onChange={(e) => setQuality(e.target.checked)} disabled={running} /> quality suite</label>
         <label title="Models whose full GPU offload does not fit get a partial-offload ladder (slow, flagged degraded)">
           <input type="checkbox" checked={heavy} onChange={(e) => setHeavy(e.target.checked)} disabled={running} /> Include heavy models (partial GPU offload, degraded speed)
@@ -76,7 +87,8 @@ export function BenchmarkPage({ live, onDownload }: { live: LiveState; onDownloa
               <td className="muted">{m.runtime === 'llamacpp' ? 'folder' : m.runtime === 'lmstudio' ? 'LM Studio' : 'Ollama'}</td>
               <td>{v(m.meta?.parameterCount.value, (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : `${(n / 1e6).toFixed(0)}M`))}</td>
               <td>{m.meta?.quantName ?? '—'}</td>
-              <td>{v(m.meta?.contextLength, fmtCtx)}</td>
+              <td>{v(m.meta?.contextLength, fmtCtx)}
+                {reqCtx > 0 && m.meta?.contextLength != null && reqCtx > m.meta.contextLength && <span className="pill warn-pill">model declares {fmtCtx(m.meta.contextLength)}</span>}</td>
               <td>{gib(m.sizeBytes)}</td>
             </tr>
           ))}
@@ -89,7 +101,7 @@ export function BenchmarkPage({ live, onDownload }: { live: LiveState; onDownloa
       <div className="tiles">
         <div className="tile"><span className="muted">Model / config</span>{live.model ?? '—'}<span className="muted">{live.configId ?? ''}</span>{partial && <span className="pill warn-pill">partial offload — degraded</span>}</div>
         <div className="tile"><span className="muted">Phase / ctx</span>{live.phase ?? '—'} {live.ctx != null && `@ ${fmtCtx(live.ctx)}`}</div>
-        <div className="tile"><span className="muted">Progress</span>step {live.stepsDone}/{live.ctxSteps.length || '—'}, config {live.candidatesDone}/{live.candidatesTotal ?? '—'}</div>
+        <div className="tile"><span className="muted">Progress</span>step {live.stepsDone}/{live.ctxSteps.length || '—'}{live.ctxSteps.length > 0 && ` (ladder up to ${fmtCtx(Math.max(...live.ctxSteps))})`}, config {live.candidatesDone}/{live.candidatesTotal ?? '—'}</div>
       </div>
       <div className="tiles">
         <div className="tile"><span className="muted">GPU util</span>{v(t?.gpuUtilPct, (n) => `${n.toFixed(0)}%`)}</div>

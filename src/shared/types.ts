@@ -148,6 +148,8 @@ export interface SmokeResult {
 /** userData/settings.json */
 export interface AppSettings {
   workload?: WorkloadId
+  /** Last Benchmark "Required context" choice; null/absent = Auto (workload default). */
+  requiredContext?: number | null
   modelDirs?: string[]
 }
 
@@ -157,6 +159,7 @@ export type StartResult = { ok: true; sessionId: string } | { ok: false; error: 
 export interface RendererApi {
   getSettings(): Promise<AppSettings>
   setWorkload(w: WorkloadId): Promise<AppSettings>
+  setRequiredContext(ctx: number | null): Promise<AppSettings>
   listWorkloads(): Promise<WorkloadProfile[]>
   listSessions(): Promise<SessionSummary[]>
   getSession(id: number): Promise<SessionDetail | null>
@@ -211,6 +214,10 @@ export interface SessionSummary {
   demo: boolean
   label: string | null
   error: string | null
+  /** SessionRequest.requiredContext of this session; null = workload default. */
+  requiredContext: number | null
+  /** SessionRequest.minDecodeTps of this session; null = workload default gate. */
+  minDecodeTps: number | null
   candidateCount: number
   bestConfigId: string | null
 }

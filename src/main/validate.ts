@@ -12,6 +12,7 @@ export function isInside(dir: string, p: string): boolean {
 }
 
 const D = DEFAULT_CANDIDATE_RULES
+export const REQUIRED_CTX = [32768, 65536, 131072]
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 
 /** Only these rules may come from the renderer, and safety margins can only get stricter than the defaults. */
@@ -46,6 +47,10 @@ export function sanitizeRequest(raw: unknown, modelRoots: string[]): { ok: true;
     ? [...new Set((r.ladder as unknown[]).filter((c): c is number => typeof c === 'number' && D.ctxLadder.includes(c)))].sort((a, b) => a - b)
     : []
   const reps = num(r.reps)
+  // Auto (workload default) = omitted; otherwise one of the offered long-context targets.
+  if (r.requiredContext !== undefined && r.requiredContext !== null && !REQUIRED_CTX.includes(r.requiredContext as number)) return { ok: false, error: 'required context must be 32K, 64K or 128K' }
+  const minDec = num(r.minDecodeTps)
+  if (r.minDecodeTps !== undefined && r.minDecodeTps !== null && (minDec === null || minDec < 0 || minDec > 1000)) return { ok: false, error: 'minimum decode speed must be 0–1000 t/s' }
   const rerun = strings(r.rerunConfigIds)
   return {
     ok: true,
@@ -53,6 +58,8 @@ export function sanitizeRequest(raw: unknown, modelRoots: string[]): { ok: true;
       workload: r.workload as WorkloadId,
       modelIds,
       ...(ladder.length ? { ladder } : {}),
+      ...(typeof r.requiredContext === 'number' ? { requiredContext: r.requiredContext } : {}),
+      ...(minDec !== null ? { minDecodeTps: minDec } : {}),
       ...(reps !== null ? { reps: Math.min(5, Math.max(1, Math.round(reps))) } : {}),
       ...(bool(r.runQuality) !== undefined ? { runQuality: bool(r.runQuality) } : {}),
       ...(bool(r.heavyMode) !== undefined ? { heavyMode: bool(r.heavyMode) } : {}),

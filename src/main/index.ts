@@ -9,7 +9,7 @@ import { LlamaCppBackend, killStaleServer } from '../core/runtimes/llamacpp'
 import { pickDiscreteDevice } from '../core/runtimes/llamacpp/parse'
 import { openDb } from '../core/storage/db'
 import { getSession, getSessionResume, latestRecommendation, listSessions, makeSessionStorage, markInterrupted, seedDemoSession, telemetryForRun, type PlanFor } from '../core/storage/sessions'
-import { isInside, sanitizeRequest } from './validate'
+import { REQUIRED_CTX, isInside, sanitizeRequest } from './validate'
 import { registerHubIpc } from './hub'
 import { WORKLOADS } from '../core/scoring/workloads'
 import { val } from '../core/scoring/cliff'
@@ -121,6 +121,10 @@ ipcMain.handle('settings:get', () => readSettings())
 ipcMain.handle('settings:setWorkload', (_e, w: WorkloadId) => {
   if (!(w in WORKLOADS)) throw new Error(`unknown workload ${String(w)}`)
   return writeSettings({ workload: w })
+})
+ipcMain.handle('settings:setRequiredContext', (_e, ctx: unknown) => {
+  if (ctx !== null && !REQUIRED_CTX.includes(ctx as number)) throw new Error('required context must be 32K, 64K, 128K or Auto')
+  return writeSettings({ requiredContext: ctx as number | null })
 })
 ipcMain.handle('workloads:list', () => Object.values(WORKLOADS))
 ipcMain.handle('sessions:list', () => listSessions(needDb()))

@@ -16,6 +16,10 @@ export interface SessionRequest {
   reps?: number
   /** Default true. */
   runQuality?: boolean
+  /** Long-context target the user requires (32768 / 65536 / 131072); absent = workload default. */
+  requiredContext?: number
+  /** User's minimum acceptable decode speed (t/s); absent = the workload's own gate. */
+  minDecodeTps?: number
   /** Heavy-model mode: models whose full GPU offload does not fit get a partial-offload ladder instead of being
    *  rejected (slow, flagged expectDegraded). Default false. */
   heavyMode?: boolean

@@ -43,4 +43,19 @@ describe('request validation (renderer → main trust boundary)', () => {
     expect(req).toMatchObject({ heavyMode: true, retryFailed: true, rerunConfigIds: ['c1'], runQuality: false })
     expect(ok({ workload: 'coding', modelIds: ['E:\\Product_1\\models\\m.gguf'], heavyMode: 'yes', rerunConfigIds: [1] })).not.toHaveProperty('heavyMode')
   })
+
+  it('requiredContext: only 32K/64K/128K; absent/null = Auto', () => {
+    const base = { workload: 'coding', modelIds: ['D:\\llm-models\\a.gguf'] }
+    expect(ok({ ...base, requiredContext: 131072 })).toMatchObject({ requiredContext: 131072 })
+    expect(ok({ ...base, requiredContext: null })).not.toHaveProperty('requiredContext')
+    expect(sanitizeRequest({ ...base, requiredContext: 50000 }, roots)).toMatchObject({ ok: false, error: expect.stringMatching(/32K, 64K or 128K/) })
+  })
+
+  it('minDecodeTps: 0–1000 t/s, blank/null = workload default', () => {
+    const base = { workload: 'coding', modelIds: ['E:/Product_1/models/m.gguf'] }
+    expect(ok({ ...base, minDecodeTps: 25 })).toMatchObject({ minDecodeTps: 25 })
+    expect(ok({ ...base, minDecodeTps: null })).not.toHaveProperty('minDecodeTps')
+    expect(sanitizeRequest({ ...base, minDecodeTps: 5000 }, roots)).toMatchObject({ ok: false })
+    expect(sanitizeRequest({ ...base, minDecodeTps: -1 }, roots)).toMatchObject({ ok: false })
+  })
 })

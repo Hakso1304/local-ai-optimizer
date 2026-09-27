@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { Metric } from '../../shared/bench-types'
 import type { SessionCandidate, SessionDetail, SessionSummary } from '../../shared/types'
 import type { TelemetrySample } from '../../shared/bench-events'
+import { WORKLOADS } from '../../core/scoring/workloads'
 import { ExportMenu } from './ExportMenu'
 import { LineChart, type Band } from './LineChart'
 import { ParetoChart } from './ParetoChart'
@@ -34,6 +35,11 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
   // Same model can appear with several configs, so always show the configId too.
   const name = (id: string | null) => (id ? `${d.candidates.find((c) => c.config.id === id)?.model.name ?? '?'} — ${id}` : '—')
   const tag = d.session.demo ? ' (DEMO DATA)' : ''
+  const req = d.session.requiredContext
+  const meets = (c: SessionCandidate) => req != null && (c.cliff.practicalContextCeiling.value ?? 0) >= req
+  const reqLine = req == null ? null : d.candidates.some(meets)
+    ? `Required context: ${fmtCtx(req)} — met by ${d.candidates.filter(meets).map((c) => name(c.config.id)).join(', ')}`
+    : `No configuration reached ${fmtCtx(req)}: ${d.candidates.map((c) => `${c.config.id} practical ${c.cliff.practicalContextCeiling.value != null ? fmtCtx(c.cliff.practicalContextCeiling.value) : 'none'} (limited by ${c.cliff.limitedBy})`).join('; ')}`
   const [slo, setSlo] = useState<SloCheck>(() => () => ({ ok: true, failed: [] }))
   const onSlo = useCallback((p: SloCheck) => setSlo(() => p), [])
   const [tele, setTele] = useState<{ key: string; samples: TelemetrySample[] } | null>(null)
@@ -42,9 +48,9 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
     <>
       {d.session.demo && <DemoBanner />}
       <h2>Comparison — {d.session.workload}{tag}</h2>
-      <SloFilter workload={d.session.workload} candidates={d.candidates} onChange={onSlo} />
+      <SloFilter workload={d.session.workload} requiredContext={d.session.requiredContext} candidates={d.candidates} onChange={onSlo} />
       <table>
-        <thead><tr><th /><th>Model</th><th>Quant</th><th>Config</th><th>Recommended ctx</th><th>Practical ctx</th><th>Quality</th><th>Decode t/s</th><th>Prefill t/s</th><th>Peak VRAM</th><th>Peak RAM</th><th>Stability</th><th /></tr></thead>
+        <thead><tr><th /><th>Model</th><th>Quant</th><th>Config</th><th>Recommended ctx</th>{req != null && <th>Required {fmtCtx(req)}</th>}<th>Practical ctx</th><th>Quality</th><th>Decode t/s</th><th>Prefill t/s</th><th>Peak VRAM</th><th>Peak RAM</th><th>Stability</th><th /></tr></thead>
         <tbody>
           {d.candidates.map((c, i) => {
             const q = comp(c, 'quality'), st = comp(c, 'stability'), r = refRun(c), fit = slo(c)
@@ -57,6 +63,7 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
                 <td className="muted">ngl {c.config.gpuLayersAll ? 'all' : c.config.gpuLayers}, kv {c.config.kvType}, t {c.config.threads}
                   {c.config.expectDegraded && <span className="pill warn-pill" title={c.config.degradedReason ?? ''}>partial offload — degraded</span>}</td>
                 <td><CtxPick recommended={c.score?.recommendedCtx} scored={c.score?.referenceCtx} /></td>
+                {req != null && <td>{meets(c) ? <span className="pill">met</span> : <span className="pill warn-pill" title={`practical ceiling ${c.cliff.practicalContextCeiling.value != null ? fmtCtx(c.cliff.practicalContextCeiling.value) : 'none'}`}>not met</span>}</td>}
                 <td><M m={c.cliff.practicalContextCeiling} fmt={fmtCtx} /></td>
                 <td>{q ? <M m={{ ...q.input, value: q.score }} fmt={(v) => v.toFixed(0)} /> : '—'}</td>
                 <td><M m={r?.decodeTps} /> {r && <span className="muted">@{fmtCtx(r.ctx)}</span>}</td>
@@ -112,6 +119,12 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
       {rec ? (
         <div className="card">
           <p><b>{rec.best ? name(rec.best.configId) : 'No recommendation'}</b>{rec.best && <> — {rec.best.score.total.toFixed(1)}/100, context <CtxPick recommended={rec.best.score.recommendedCtx} scored={rec.best.score.referenceCtx} /></>}</p>
+          {reqLine && <p className={d.candidates.some(meets) ? '' : 'err'}>{reqLine}</p>}
+          {(() => {
+            const own = d.session.minDecodeTps
+            const def = WORKLOADS[d.session.workload].minDecodeTps
+            return own != null ? <p>Decode gate: {num(own)} t/s (yours)</p> : def != null ? <p className="muted">Decode gate: {num(def)} t/s (workload default)</p> : null
+          })()}
           <ul>{rec.reasons.map((r) => <li key={r}>{r}</li>)}</ul>
           <table>
             <tbody>

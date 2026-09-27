@@ -13,6 +13,7 @@ const api: RendererApi & HubApi = {
   benchSmoke: (modelPath) => ipcRenderer.invoke('bench:smoke', modelPath),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setWorkload: (w) => ipcRenderer.invoke('settings:setWorkload', w),
+  setRequiredContext: (ctx) => ipcRenderer.invoke('settings:setRequiredContext', ctx),
   listWorkloads: () => ipcRenderer.invoke('workloads:list'),
   listSessions: () => ipcRenderer.invoke('sessions:list'),
   getSession: (id) => ipcRenderer.invoke('sessions:get', id),

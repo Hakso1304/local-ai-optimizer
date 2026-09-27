@@ -38,6 +38,7 @@ function RecommendedCard({ d, go }: { d: SessionDetail; go: Go }) {
               <tr><td>Model</td><td>{c.model.name}</td></tr>
               <tr><td>Quant</td><td>{c.model.quant ?? '—'}</td></tr>
               <tr><td>Context</td><td><CtxPick recommended={rec.best.score.recommendedCtx} scored={rec.best.score.referenceCtx} /></td></tr>
+              {d.session.requiredContext != null && <tr><td>Required context</td><td>{fmtCtx(d.session.requiredContext)} {(rec.best.practicalContext.value ?? 0) >= d.session.requiredContext ? <span className="pill">met</span> : <span className="pill warn-pill">not met</span>}</td></tr>}
               <tr><td>Practical ceiling</td><td><M m={rec.best.practicalContext} fmt={fmtCtx} /> <span className="muted">(model declares <M m={rec.best.declaredContext} fmt={fmtCtx} />)</span></td></tr>
               <tr><td>Backend</td><td>{c.config.device ? `llama.cpp Vulkan (${c.config.device})` : 'llama.cpp CPU'}</td></tr>
               <tr><td>GPU layers</td><td>{c.config.gpuLayersAll ? `all (${c.model.layers})` : c.config.gpuLayers}</td></tr>
