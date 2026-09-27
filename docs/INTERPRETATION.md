@@ -191,8 +191,12 @@ the GPU, driver, backend build and allocation pattern — observed here 13.3 GiB
 The planner therefore uses `vramEffectiveBudgetBytes` learned from this machine's own
 observations (ceiling at spill onset, with model, KV bytes and largest single buffer;
 keyed by GPU identity + driver + backend build; the most conservative comparable
-observation wins, MEASURED). With no observation: 0.80 × total, ESTIMATED, worded "no
-measured budget on this machine yet; assuming 80 % (some GPUs/backends allow 100 %)".
+observation wins, MEASURED). Observations are recorded only from spills that survive
+the I-2.8 placement retry — a placement event is not a budget. With no observation the
+0.80 × total figure is DISCLOSED as an estimate ("no measured budget on this machine
+yet; assuming 80 % (some GPUs/backends allow 100 %)") but is NOT used to prune
+candidates: an estimate may never remove a configuration that measurement could show
+to be clean (a measured 27B config ran clean at 13.03 GiB > 0.8 × 15.92).
 Never stated as a Windows or vendor rule. A ROCm/HIP backend may place memory
 differently from Vulkan; the app measures only the backend it runs.
 Rule I-4.1 (`mem.budget-basis`, info): headroom is always stated with its basis:
