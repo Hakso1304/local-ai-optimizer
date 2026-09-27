@@ -197,6 +197,7 @@ export class LlamaCppBackend implements InferenceBackend {
   private port = 0
   private abort: AbortController | null = null
   private unloading: ChildProcess | null = null
+  private unloadPromise: Promise<void> | null = null
   private loadDeclarationListener: ((declared: LoadResult['declared']) => void) | null = null
   private exeOverride?: string
   private pidFile?: string
@@ -338,6 +339,7 @@ export class LlamaCppBackend implements InferenceBackend {
     if (this.proc || this.ownedRootPid) await this.unloadModel()
     if (cfg.signal?.aborted) throw new Error('cancelled')
     this.port = cfg.port ?? (await freePort())
+    if (cfg.signal?.aborted) throw new Error('cancelled')
     this.log.length = 0
     this.lastExit = null
     this.templateHash = null
@@ -388,15 +390,22 @@ export class LlamaCppBackend implements InferenceBackend {
         throw new Error('cancelled')
       }
       if (exited) { await this.unloadModel(); throw new Error(`${exited}; last log: ${this.log.slice(-10).join(' | ')}`) }
-      healthy = (await this.healthCheck()).ok
-      if (!healthy) await new Promise((r) => setTimeout(r, 100))
+      healthy = (await this.healthCheck(cfg.signal)).ok
+      if (!healthy) await new Promise<void>((resolve) => {
+        const timer = setTimeout(done, 100)
+        const onAbort = () => { clearTimeout(timer); done() }
+        function done() { cfg.signal?.removeEventListener('abort', onAbort); resolve() }
+        cfg.signal?.addEventListener('abort', onAbort, { once: true })
+        if (cfg.signal?.aborted) onAbort()
+      })
     }
     if (!healthy) {
       await this.unloadModel()
       throw new Error('llama-server did not become healthy within 120s')
     }
     const loadTimeMs = performance.now() - t0
-    const props = await getJson<{ model_path?: string; chat_template?: string; default_generation_settings?: { n_ctx?: number } }>(`http://127.0.0.1:${this.port}/props`, 2_000).catch(() => null)
+    const props = await getJson<{ model_path?: string; chat_template?: string; default_generation_settings?: { n_ctx?: number } }>(`http://127.0.0.1:${this.port}/props`, 2_000, cfg.signal).catch(() => null)
+    if (cfg.signal?.aborted) { await this.unloadModel(); throw new Error('cancelled') }
     if (exited) { await this.unloadModel(); throw new Error(`${exited}; last log: ${this.log.slice(-10).join(' | ')}`) }
     const same = (a: string) => resolve(a).toLowerCase() === resolve(cfg.modelPath).toLowerCase()
     if (!props?.model_path || !same(props.model_path)) {
@@ -415,7 +424,18 @@ export class LlamaCppBackend implements InferenceBackend {
   }
 
   /** Reap the owned server tree, including children left behind by an exited parent. */
-  async unloadModel(): Promise<void> {
+  unloadModel(): Promise<void> {
+    if (this.unloadPromise) return this.unloadPromise
+    const pending = this.reapOwnedTree()
+    this.unloadPromise = pending
+    void pending.then(
+      () => { if (this.unloadPromise === pending) this.unloadPromise = null },
+      () => { if (this.unloadPromise === pending) this.unloadPromise = null }
+    )
+    return pending
+  }
+
+  private async reapOwnedTree(): Promise<void> {
     const p = this.proc
     const root = this.ownedRootPid ?? p?.pid
     if (root === undefined || root === null) {
@@ -495,9 +515,9 @@ export class LlamaCppBackend implements InferenceBackend {
     if (this.pidFile) rmSync(this.pidFile, { force: true })
   }
 
-  async healthCheck(): Promise<HealthStatus> {
+  async healthCheck(signal?: AbortSignal): Promise<HealthStatus> {
     try {
-      const j = await getJson<{ status?: string }>(`http://127.0.0.1:${this.port}/health`, 1_500)
+      const j = await getJson<{ status?: string }>(`http://127.0.0.1:${this.port}/health`, 1_500, signal)
       return { ok: j.status === 'ok', detail: JSON.stringify(j) }
     } catch (e) {
       return { ok: false, detail: (e as Error).message }

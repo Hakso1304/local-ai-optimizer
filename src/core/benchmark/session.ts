@@ -662,7 +662,9 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   // --- helpers (closures over deps/cfg) ---
 
   // Cancel during load kills the server immediately (not after the 120 s /health deadline).
-  function loadCfg(cand: CandidateConfig, model: ModelMeta, ctx: number): LoadConfig { return { ...loadConfigFor(cand, model, ctx, rules), signal } }
+  function loadCfg(cand: CandidateConfig, model: ModelMeta, ctx: number, requestSignal: AbortSignal): LoadConfig {
+    return { ...loadConfigFor(cand, model, ctx, rules), signal: requestSignal }
+  }
 
   /** ladder-2: resize the filler with the loaded model's tokenizer until the prompt is LADDER_FILL·ctx tokens. */
   /** ladder-2: resize the filler with the loaded model's tokenizer until the prompt is LADDER_FILL·ctx tokens.
@@ -825,7 +827,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     let load: LoadResult
     try {
       backend.setLoadDeclarationListener?.((declared) => { pinned = hostPinnedBytes(declared, cand.mmap !== false) })
-      load = await backend.loadModel({ ...loadCfg(cand, model, ctx), signal: stepSignal })
+      load = await backend.loadModel(loadCfg(cand, model, ctx, stepSignal))
     } catch (e) {
       backend.setLoadDeclarationListener?.(null)
       clearInterval(pidPoll)
@@ -1015,7 +1017,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     const timer = setInterval(poll, cand.expectDegraded ? cfg.heavyGuardPollMs : cfg.guardPollMs)
     const stop = async () => { clearInterval(timer); await (sampler as SessionSampler | null)?.stop() }
     try {
-      await backend.loadModel({ ...loadCfg(cand, model, ctx), signal: requestSignal })
+      await backend.loadModel(loadCfg(cand, model, ctx, requestSignal))
     } catch (err) {
       poll()
       await stop()

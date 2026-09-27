@@ -59,8 +59,9 @@ export class NotImplementedError extends Error {
 }
 
 /** HTTP GET JSON with a hard timeout. Throws on network error, timeout or non-2xx. */
-export async function getJson<T>(url: string, timeoutMs: number): Promise<T> {
-  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
+export async function getJson<T>(url: string, timeoutMs: number, signal?: AbortSignal): Promise<T> {
+  const timeout = AbortSignal.timeout(timeoutMs)
+  const res = await fetch(url, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout })
   if (!res.ok) throw new Error(`GET ${url} -> HTTP ${res.status}`)
   return (await res.json()) as T
 }
