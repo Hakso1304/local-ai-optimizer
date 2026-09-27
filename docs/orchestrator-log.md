@@ -241,3 +241,6 @@
 
 ## Fable — 2026-09-28 04:17 local
 - aa19a8b (Q2 negatives) pushed. Clean-HEAD worktree: tsc 0. Known RED on master: 2 Q1 + 2 Q2 gates (S1 in progress). #1 pre-reviewing S1's uncommitted Q1/Q2 diff. Waiting: S3 session 5 export; Astra RECHECK6.
+
+## Fable — 2026-09-28 04:19 local
+- #1 pre-review of S1's Q1/Q2 diff: abort propagation correct; BUG in defaultProcessTree date parsing (PS 5.1 /Date(ms)/ → RangeError on every real unload); foreign-kill window too wide; batch isAlive; overlapping unloads; sampler.stop still sync; before-quit killSync root-only (HIP backend not killed). Routed to S1 before commit.
