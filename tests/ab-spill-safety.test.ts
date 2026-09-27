@@ -3,11 +3,25 @@ import type { ChildProcess } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { bounded, idle, launch, ramFloor, safeEnv, stopOwned, unifiedMemoryKeys, watchRam, type CollisionEvidence, type LaunchProbe } from '../scripts/ab-spill'
+import { assertNewArtifact, bounded, idle, launch, outputPathFor, ramFloor, safeEnv, stopOwned, unifiedMemoryKeys, watchRam, type CollisionEvidence, type LaunchProbe } from '../scripts/ab-spill'
 
 const GiB = 1024 ** 3
 
 describe('ab-spill safety helpers (injected fakes; no GPU or executable)', () => {
+  it('uses a repaired output path and refuses the old partial artifact or any existing explicit path', () => {
+    const old = 'docs/ab-spill-2026-09-28.json'
+    const repaired = outputPathFor([])
+    expect(repaired).toBe('docs/ab-spill-repaired-2026-09-28.json')
+    expect(repaired).not.toBe(old)
+    expect(outputPathFor(['--hip'])).toBe('docs/ab-hip-2026-09-28.json')
+    expect(outputPathFor(['--igpu'])).toBe('docs/ab-igpu-2026-09-28.json')
+    expect(outputPathFor([old])).toBe(old)
+    const exists = vi.fn((path: string) => path === old)
+    expect(() => assertNewArtifact(old, exists)).toThrow(/refusing to overwrite existing A\/B artifact/)
+    expect(() => assertNewArtifact(repaired, exists)).not.toThrow()
+    expect(exists.mock.calls.map(([path]) => path)).toEqual([old, repaired])
+  })
+
   it('removes every Windows spelling of unified-memory env, leaving unrelated keys intact', () => {
     const base = { PATH: 'x', GGML_CUDA_ENABLE_UNIFIED_MEMORY: '1', ggml_cuda_enable_unified_memory: '1', GgMl_CuDa_EnAbLe_UnIfIeD_MeMoRy: '1' }
     expect(unifiedMemoryKeys(base)).toHaveLength(3)
