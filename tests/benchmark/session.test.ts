@@ -13,6 +13,7 @@ import { ConfigDriftError } from '../../src/core/runtimes/llamacpp'
 import { load } from '../scoring/helpers'
 import { suiteFor } from '../../src/core/quality'
 import { coverage, qualityUncertainty } from '../../src/core/scoring/uncertainty'
+import { summarizeGen, type GenRow } from '../../src/core/benchmark/gen'
 
 /** Items in the DEFAULT suite (unset qualityMode = 'thorough' = qb-2.0.0); explicit 'quick' runs keep 17 (qb-1.1.0). */
 const N = suiteFor(undefined, 0).tests.length
@@ -529,6 +530,46 @@ describe('runSession', () => {
     expect(r.reason).toMatch(/persisted after a fresh restart — capacity-suspect, not placement/)
     expect(s.budget.filter((b) => b.o.kind === 'capacity').map((b) => b.o)).toEqual([expect.objectContaining({ ceilingBytes: 8 * GiB, qualified: false, origin: expect.objectContaining({ attempts: 2, status: 'pass', configId: r.configId }) })]) // fake adapter: no driver / build → advisory
     expect(rec?.insights?.some((i) => i.ruleId === 'I-2.8') ?? false).toBe(false)
+  })
+
+  it('reasoning provenance: null runtime count stays unknown while total decode rate remains measured; zero is known', async () => {
+    const m = { ...model, supportsThinking: true, genKnobs: { supportsThinking: true } }
+    const off = { id: 'off', thinking: false, temperature: 0, source: 'default' as const }
+    const think = { id: 'think', thinking: true, temperature: 1, source: 'model-card' as const }
+    const req: Partial<SessionRequest> = { runQuality: true, qualityMode: 'quick', ladder: [2048], genConfigs: [off, think] }
+    const one = async (reasoningTokens: number | null, streamedOnly = false) => run(() => ({}), req, { models: [m], backend: () => {
+      const b = fakeBackend(() => ({}))
+      b.applyTemplate = async (msgs, opts) => `${msgs.map((x) => x.content).join('\n')}${JSON.stringify(opts?.templateKwargs ?? {})}`
+      const rp = b.runPrompt.bind(b)
+      b.runPrompt = async (q) => {
+        const r = await rp(q)
+        return q.temperature === 1 && streamedOnly ? { ...r, decodeTokens: null, streamedTokens: 100, reasoningTokens } : { ...r, reasoningTokens }
+      }
+      return b
+    } })
+    const unknown = await one(null)
+    const thinkRows = unknown.s.quality[0].results.filter((r) => (r as GenRow).genId === 'think') as GenRow[]
+    expect(thinkRows).toHaveLength(17)
+    expect(thinkRows.every((r) => r.reasoningTokens === null && r.answerTokens === null && r.tokenSource !== 'runtime')).toBe(true)
+    const thinkUnknown = summarizeGen(think, thinkRows, 1)
+    expect(thinkUnknown.reasoningTokens.kind).not.toBe('measured')
+    expect(thinkUnknown.answerTokens.kind).not.toBe('measured')
+    expect(thinkUnknown.effectiveTps.kind).not.toBe('measured')
+    expect(thinkUnknown.rawTps?.kind).toBe('measured')
+    const offRows = unknown.s.quality[0].results.filter((r) => (r as GenRow).genId === 'off') as GenRow[]
+    expect(offRows.every((r) => r.reasoningTokens === 0 && r.tokenSource === 'runtime')).toBe(true)
+    const knownZero = await one(0)
+    const thinkZero = knownZero.s.quality[0].results.filter((r) => (r as GenRow).genId === 'think') as GenRow[]
+    expect(thinkZero.every((r) => r.reasoningTokens === 0 && typeof r.answerTokens === 'number' && r.answerTokens > 0 && r.tokenSource === 'runtime')).toBe(true)
+    expect(summarizeGen(think, thinkZero, 1).reasoningTokens.kind).toBe('measured')
+    const streamed = await one(null, true)
+    const streamedRows = streamed.s.quality[0].results.filter((r) => (r as GenRow).genId === 'think') as GenRow[]
+    expect(streamedRows.every((r) => r.totalTokenSource === 'streamed' && r.tokenSource !== 'runtime')).toBe(true)
+    expect.soft(summarizeGen(think, streamedRows, 1).rawTps?.kind).not.toBe('measured')
+    const fragmented = await one(5, true)
+    const fragmentedRows = fragmented.s.quality[0].results.filter((r) => (r as GenRow).genId === 'think') as GenRow[]
+    expect(fragmentedRows.every((r) => r.tokenSource !== 'runtime')).toBe(true)
+    expect(summarizeGen(think, fragmentedRows, 1).reasoningTokens.kind).not.toBe('measured')
   })
 
   it.each([

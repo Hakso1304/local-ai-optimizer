@@ -347,6 +347,25 @@ describe('§6 eligibility and stability', () => {
     expect(text(panel([synth([run(2048, {}, ver('b1', 'interp-1')), run(4096, {}, ver('b1'))])], 'general_chat'), 'I-6.2')).toMatch(/rules versions \(interp-1, interp-2\)/)
     expect(has(panel([synth([run(2048, {}, ver('b1')), run(4096, {}, ver('b1'))])], 'general_chat'), 'I-6.2')).toBe(false)
   })
+  it('I-5.4/I-5.7/I-5.8 use explicit off T=1.0 in choice and diagnostics; default off remains T=0', () => {
+    const g: GenConfig = { id: 'off', thinking: false, temperature: 1, source: 'model-card' }
+    const base = full8()[0]
+    const model = { ...base.model, supportsThinking: true, genKnobs: { supportsThinking: true } }
+    const rows = genRows(g, 0.7, 0, 1000)
+    const mk = (results: GenRow[]) => ({ ...base, model, quality: results, genQuality: [summarizeGen(g, results, 1)] })
+    const clean = text(panel([mk(rows)], 'coding'), 'I-5.4')
+    expect(clean).toMatch(/thinking off \(T=1\.0\)/)
+    expect(clean).not.toMatch(/thinking off \(T=0\)/)
+    const infra = rows.map((r, i) => i ? r : { ...r, evaluationStatus: 'infra_error' as const })
+    const failText = text(panel([mk(infra)], 'coding'), 'I-5.7')
+    expect(failText).toMatch(/thinking off \(T=1\.0\)/)
+    expect(failText).not.toMatch(/thinking off \(T=0\)/)
+    const trunc = rows.map((r, i) => i ? r : { ...r, evaluationStatus: 'truncated' as const, outputTruncated: true, maxTokens: 64 })
+    const truncText = text(panel([mk(trunc)], 'coding'), 'I-5.8')
+    expect(truncText).toMatch(/thinking off \(T=1\.0\)/)
+    expect(truncText).not.toMatch(/thinking off \(T=0\)/)
+    expect(text(panel(full8().map((c) => ({ ...c, model: { ...c.model, supportsThinking: true } })), 'coding'), 'I-5.4')).toMatch(/thinking off \(T=0\)/)
+  })
   it('stage1: legacy bare runtime build and namespaced Vulkan build are equivalent without rewriting stored rows', () => {
     const legacy = run(2048, {}, { versions: { benchmark: 'bench-1.0.0', prompts: 'ladder-1', quality: 'qb-1.1.0', runtime: 'b11208', rules: 'interp-2' } })
     const current = run(4096, {}, { versions: { benchmark: 'bench-1.0.0', prompts: 'ladder-1', quality: 'qb-1.1.0', runtime: 'vulkan:b11208', rules: 'interp-2' } })
