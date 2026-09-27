@@ -2,15 +2,11 @@
 // template render proof, requested vs runtime-accepted sampling). Read-only, from the rows as stored. Old rows without
 // these fields say so ("pre-P1"); nothing is inferred. The comparability verdict itself is read from the engine's
 // I-8.0 insight, never recomputed here.
+import type { GenRow } from '../../core/benchmark/gen'
 import type { Insight } from '../../shared/interpret-types'
 
-/** The provenance fields of a stored quality row (all optional: absent on rows written before they existed). */
-interface ProofRow {
-  renderProof?: { status?: string } | null
-  proofProvenance?: { originalPromptHashPresent?: boolean; status?: string } | null
-  requestedSampling?: { temperature?: number | null; topP?: number | null; topK?: number | null; minP?: number | null; seed?: number | null } | null
-  acceptedSampling?: Record<string, unknown> | null
-}
+/** The provenance fields of a stored quality row (committed GenRow types; all optional — absent on older rows). */
+type ProofRow = Pick<GenRow, 'renderProof' | 'proofProvenance' | 'requestedSampling' | 'acceptedSampling'>
 
 export interface ProofSummary {
   rows: number
