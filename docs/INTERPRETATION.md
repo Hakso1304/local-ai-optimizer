@@ -213,8 +213,11 @@ observed clean at X cannot be pruned by an observation below X. Observations are
 by the selected adapter's stable identity + verified driver + backend build; identity is
 verified again when an observation is APPLIED — ambiguous or unverified identity ⇒
 advisory only, even for previously qualified records. Advisory or estimated ceilings
-never decide an abort; the in-run guard rests on observed residual growth/pressure with
-an explicit uncertain-residency reason. With no observation the
+never decide an abort; the in-run guard trips on an observed residual (raw shared −
+host-pinned − benign baseline, where the benign baseline is a first-rung residual
+< 1 GiB) above 2 GiB over 2 consecutive samples (origin policy), with an explicit
+"uncertain residency" reason that records the saturation state and whether it happened
+during load. Readings are tri-state (measured / below threshold / unknown). With no observation the
 0.80 × total figure is DISCLOSED as an estimate ("no measured budget on this machine
 yet; assuming 80 % (some GPUs/backends allow 100 %)") but is NOT used to prune
 candidates: an estimate may never remove a configuration that measurement could show
