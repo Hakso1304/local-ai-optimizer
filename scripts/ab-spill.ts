@@ -14,7 +14,7 @@
 //   (-mg places KV only with -sm row, which Vulkan does not implement).
 // Telemetry: typeperf 1 s, per-PID dedicated/shared + adapter dedicated/shared (all LUIDs). At spill onset (per-PID shared
 // > first sample + 256 MiB) records per-PID dedicated, adapter dedicated, adapter free and adapter total.
-import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { freemem } from 'node:os'
@@ -22,7 +22,11 @@ import { resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
 import { generateFiller } from '../src/core/quality'
+import type { ProcessTree } from '../src/core/runtimes/llamacpp'
+import { scanSystem } from '../src/core/system/scanner'
+import { readVramInUse } from '../src/core/telemetry/sampler'
 import { validateHarnessLimits } from './harness-limits'
+import { trackOwnedProcess, type OwnedProcess } from './owned-process'
 
 // Same safety bounds as the session harness: every request <= 5 min, host RAM watchdog 4 GiB (kills the server).
 const optionValue = (name: string): string | undefined => {
@@ -35,6 +39,8 @@ const RAM_ABORT_BYTES = limits.ramAbortGib * 1024 ** 3
 const LOAD_TIMEOUT_MS = 120_000
 const PROBE_TIMEOUT_MS = 30_000
 const execFileAsync = promisify(execFile)
+const osProbe = (file: string, args: string[], timeout: number, signal?: AbortSignal) =>
+  execFileAsync(file, args, { encoding: 'utf8', windowsHide: true, timeout, signal, env: safeEnv(), maxBuffer: 16 * 1024 * 1024 })
 /** Free ephemeral loopback port. A later listener check closes the bind race. */
 export function reserveLoopbackPort(signal?: AbortSignal): Promise<number> {
   return new Promise((done, fail) => {
@@ -80,18 +86,7 @@ export function ramFloor(read: () => number = freemem): number {
   return available
 }
 export const bounded = (signal: AbortSignal, ms = REQUEST_TIMEOUT_MS) => AbortSignal.any([signal, AbortSignal.timeout(ms)])
-const alive = (pid: number) => execFileSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true, timeout: PROBE_TIMEOUT_MS, env: safeEnv() }).split('\n').some((l) => /^"[^\"]+","\d+"/.test(l))
-export async function stopOwned(p: ChildProcess, closed: Promise<void>, isAlive: (pid: number) => boolean = alive, forceKill: (pid: number) => void = (pid) => { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, timeout: PROBE_TIMEOUT_MS, env: safeEnv() }) }): Promise<void> {
-  if (!p.pid) throw new Error('spawned server has no PID; exit cannot be verified')
-  const waitClosed = (ms: number) => Promise.race([closed.then(() => true), sleep(ms).then(() => false)])
-  if (isAlive(p.pid)) p.kill()
-  let didClose = await waitClosed(10_000)
-  if (!didClose || isAlive(p.pid)) {
-    forceKill(p.pid)
-    didClose = await waitClosed(10_000)
-  }
-  if (!didClose || isAlive(p.pid)) throw new Error(`server PID ${p.pid} survived teardown`)
-}
+export async function stopOwned(owned: OwnedProcess): Promise<void> { await owned.stop() }
 export function watchRam(controller: AbortController, kill: () => void, read: () => number = freemem, intervalMs = 500) {
   let minimum = read()
   let reason: string | null = null
@@ -115,9 +110,31 @@ const HIP = process.argv.includes('--hip')
 const IGPU = process.argv.includes('--igpu')
 const QWEN = 'D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf'
 const MODEL = 'D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf'
-const ADAPTER_TOTAL = 17095983104 // RX 9070 XT qwMemorySize (scanner, registry)
 const GiB = 1024 ** 3
 const MiB = 1024 ** 2
+export interface SelectedAdapter {
+  luid: string | null
+  name: string | null
+  pnpDeviceId: string | null
+  totalBytes: number | null
+  totalSource: string | null
+  mappingStatus: 'inferred-single-discrete' | 'unverified'
+}
+let selectedAdapter: SelectedAdapter | null = null
+export function bufferExtrema(rows: { dev: string; mib: number }[]): { largestDeviceBufferMiB: number | null; largestHostBufferMiB: number | null } {
+  const host = (dev: string) => /^CPU(?:$|[_/])|(?:^|[_/])Host$/i.test(dev)
+  const max = (xs: number[]) => xs.length ? Math.max(...xs) : null
+  return { largestDeviceBufferMiB: max(rows.filter((r) => !host(r.dev)).map((r) => r.mib)), largestHostBufferMiB: max(rows.filter((r) => host(r.dev)).map((r) => r.mib)) }
+}
+async function inspectSelectedAdapter(): Promise<SelectedAdapter> {
+  const [profile, vram] = await Promise.all([scanSystem(), readVramInUse()])
+  experimentController?.signal.throwIfAborted()
+  const discrete = profile.gpus.value?.filter((g) => !g.isIntegrated) ?? []
+  const gpu = discrete.length === 1 ? discrete[0] : null
+  return { luid: vram?.luid ?? null, name: gpu?.name ?? null, pnpDeviceId: gpu?.pnpDeviceId ?? null,
+    totalBytes: gpu?.dedicatedVramBytes.value ?? null, totalSource: gpu?.dedicatedVramBytes.source ?? null,
+    mappingStatus: gpu && vram ? 'inferred-single-discrete' : 'unverified' }
+}
 export function outputPathFor(args: string[]): string {
   const positionals = args.filter((a, i) => !a.startsWith('--') && !['--request-cap-ms', '--ram-abort-gib'].includes(args[i - 1]))
   return positionals[0] ?? (args.includes('--hip') ? 'docs/ab-hip-2026-09-28.json' : args.includes('--igpu') ? 'docs/ab-igpu-2026-09-28.json' : 'docs/ab-spill-repaired-2026-09-28.json')
@@ -128,24 +145,27 @@ export function assertNewArtifact(path: string, exists: (path: string) => boolea
 const out = outputPathFor(process.argv.slice(2))
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const g = (b: number | null) => (b == null ? null : +(b / GiB).toFixed(2))
+let experimentController: AbortController | null = null
+let activeOwnedChild: ChildProcess | null = null
 export const baseArgv = (ctx: number, extra: string[] = [], dev = 'Vulkan0') => ['-m', MODEL, '-c', String(ctx), '-ngl', '999', '-dev', dev, '-t', '8', '-b', '2048', '-ub', '512', '-fa', 'on', '-fit', 'off', '--parallel', '1', '-lm', 'none', '--cache-ram', '0', '-lv', '4', ...extra]
 
 /** Backend's own view (llama-server --list-devices): total/free MiB per device. */
-function listDevices(exe = EXE): string[] {
+async function listDevices(exe = EXE, signal?: AbortSignal): Promise<string[]> {
   ramFloor()
-  const lines = execFileSync(exe, ['--list-devices'], { encoding: 'utf8', windowsHide: true, timeout: PROBE_TIMEOUT_MS, env: safeEnv(), stdio: ['ignore', 'pipe', 'pipe'] }).split(/\r?\n/).filter((l) => /MiB/.test(l)).map((l) => l.trim())
+  const { stdout, stderr } = await osProbe(exe, ['--list-devices'], PROBE_TIMEOUT_MS, signal)
+  const lines = `${stdout}\n${stderr}`.split(/\r?\n/).filter((l) => /MiB/.test(l)).map((l) => l.trim())
   if (!lines.length) throw new Error(`${exe} --list-devices returned no devices`)
   return lines
 }
-function vulkanHeaps(): string {
-  try { ramFloor(); return execFileSync('vulkaninfo', ['--summary'], { encoding: 'utf8', windowsHide: true, timeout: PROBE_TIMEOUT_MS, env: safeEnv(), stdio: ['ignore', 'pipe', 'ignore'] }).split(/\r?\n/).filter((l) => /heap|MEMORY_HEAP|size\s*=/i.test(l)).slice(0, 30).join('\n') } catch { return 'vulkaninfo not available (skipped)' }
+async function vulkanHeaps(signal?: AbortSignal): Promise<string> {
+  try { ramFloor(); return (await osProbe('vulkaninfo', ['--summary'], PROBE_TIMEOUT_MS, signal)).stdout.split(/\r?\n/).filter((l) => /heap|MEMORY_HEAP|size\s*=/i.test(l)).slice(0, 30).join('\n') } catch { return 'vulkaninfo not available (skipped)' }
 }
 
 type SeenServer = { pid: number; image: string }
 let lastServerScan: { observedAt: string; processes: SeenServer[] } = { observedAt: '', processes: [] }
-const servers = () => {
+const servers = async (signal?: AbortSignal) => {
   const observedAt = new Date().toISOString()
-  const processes = execFileSync('tasklist', ['/FI', 'IMAGENAME eq llama-server.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true, timeout: PROBE_TIMEOUT_MS, env: safeEnv() })
+  const processes = (await osProbe('tasklist', ['/FI', 'IMAGENAME eq llama-server.exe', '/FO', 'CSV', '/NH'], 5_000, signal)).stdout
     .split(/\r?\n/).map((l) => /^"(llama-server\.exe)","(\d+)"/i.exec(l)).filter((m): m is RegExpExecArray => m !== null)
     .map((m) => ({ image: m[1], pid: Number(m[2]) }))
   lastServerScan = { observedAt, processes }
@@ -158,11 +178,11 @@ export interface CollisionEvidence {
   probeError?: string
 }
 /** Read-only diagnostics for a foreign server. Never terminate a process found here. */
-export function collisionEvidence(): CollisionEvidence {
+export async function collisionEvidence(signal?: AbortSignal): Promise<CollisionEvidence> {
   const evidence: CollisionEvidence = { observedAt: new Date().toISOString(), tasklist: lastServerScan, cim: [] }
   try {
     const command = '$ErrorActionPreference="Stop"; ConvertTo-Json -InputObject @(Get-CimInstance Win32_Process -Filter "Name=\'llama-server.exe\'" | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine,CreationDate) -Compress -Depth 3'
-    const raw = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true, timeout: PROBE_TIMEOUT_MS, env: safeEnv() }).trim()
+    const raw = (await osProbe('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], 5_000, signal)).stdout.trim()
     const rows = raw ? JSON.parse(raw) as Record<string, unknown>[] | Record<string, unknown> : []
     evidence.cim = (Array.isArray(rows) ? rows : [rows]).map((r) => ({
       pid: Number(r.ProcessId), parentPid: r.ParentProcessId == null ? null : Number(r.ParentProcessId),
@@ -178,7 +198,8 @@ interface Row { t: number; pidDed: number | null; pidShr: number | null; adapter
 function sampler(pid: number) {
   const ctr = [`\\GPU Process Memory(pid_${pid}_*)\\Dedicated Usage`, `\\GPU Process Memory(pid_${pid}_*)\\Shared Usage`, '\\GPU Adapter Memory(*)\\Dedicated Usage', '\\GPU Adapter Memory(*)\\Shared Usage']
   const c = spawn('typeperf', [...ctr, '-si', '1'], { windowsHide: true, env: safeEnv() })
-  const closed = new Promise<void>((resolve) => { c.once('close', () => resolve()); c.once('error', () => resolve()) })
+  const owned = trackOwnedProcess(c)
+  void owned.catch(() => {})
   const rows: Row[] = []
   let cols: { obj: string; ctr: string; luid: string | null }[] | null = null
   createInterface({ input: c.stdout }).on('line', (l) => {
@@ -193,11 +214,11 @@ function sampler(pid: number) {
     })
     rows.push(r)
   })
-  return { rows, stop: async () => { if (c.pid) await stopOwned(c, closed) } }
+  return { rows, stop: async () => { await stopOwned(await owned) } }
 }
 
-async function prompt(port: number, tokens: number, signal: AbortSignal, timeoutMs = REQUEST_TIMEOUT_MS): Promise<{ text: string; n: number }> {
-  const tok = async (s: string) => ((await (await fetch(`http://127.0.0.1:${port}/tokenize`, { signal: bounded(signal, timeoutMs), method: 'POST', body: JSON.stringify({ content: s }) })).json()) as { tokens: unknown[] }).tokens.length
+async function prompt(port: number, tokens: number, signal: AbortSignal, timeoutMs = REQUEST_TIMEOUT_MS, beforeRequest: () => Promise<void> = async () => {}): Promise<{ text: string; n: number }> {
+  const tok = async (s: string) => { await beforeRequest(); return ((await (await fetch(`http://127.0.0.1:${port}/tokenize`, { signal: bounded(signal, timeoutMs), method: 'POST', body: JSON.stringify({ content: s }) })).json()) as { tokens: unknown[] }).tokens.length }
   let est = tokens, text = '', n = 0
   for (let i = 0; i < 6; i++) {
     text = generateFiller(est, 65536).join(' ') + '\n\nContinue the story in the same style:\n'
@@ -211,8 +232,8 @@ async function prompt(port: number, tokens: number, signal: AbortSignal, timeout
 /** Dependency seam for no-GPU fake-server tests. Production always uses the default OS probes and safety limits. */
 export interface LaunchProbe {
   readRam?: () => number
-  countServers?: () => number
-  devices?: (exe: string) => string[]
+  countServers?: () => number | Promise<number>
+  devices?: (exe: string) => string[] | Promise<string[]>
   startSampler?: typeof sampler
   requestTimeoutMs?: number
   loadTimeoutMs?: number
@@ -222,10 +243,18 @@ export interface LaunchProbe {
   postMs?: number
   reservePort?: (signal: AbortSignal) => Promise<number>
   ownerOfPort?: (port: number, signal: AbortSignal) => Promise<number | null>
+  processTree?: ProcessTree
+  selectedAdapter?: SelectedAdapter
 }
 export async function launch(label: string, argv: string[], promptTokens: number | null, exe = EXE, probe: LaunchProbe = {}) {
   const readRam = probe.readRam ?? freemem
-  const countServers = probe.countServers ?? servers
+  const controller = new AbortController()
+  const parentSignal = experimentController?.signal
+  const parentAbort = () => controller.abort(parentSignal?.reason ?? new Error('experiment aborted'))
+  if (parentSignal?.aborted) parentAbort()
+  else parentSignal?.addEventListener('abort', parentAbort, { once: true })
+  const countServers = probe.countServers ?? (() => servers(controller.signal))
+  const finalServers = probe.countServers ?? (() => servers())
   const requestTimeoutMs = Math.min(probe.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, REQUEST_TIMEOUT_MS)
   const loadTimeoutMs = Math.min(probe.loadTimeoutMs ?? LOAD_TIMEOUT_MS, LOAD_TIMEOUT_MS)
   const healthTimeoutMs = Math.min(probe.healthTimeoutMs ?? 5_000, 5_000)
@@ -239,8 +268,8 @@ export async function launch(label: string, argv: string[], promptTokens: number
   let devicesBefore: string[] = []
   let p: ChildProcess | null = null
   let closed: Promise<void> | null = null
+  let ownership: Promise<OwnedProcess> | null = null
   let s: ReturnType<typeof sampler> | null = null
-  const controller = new AbortController()
   // Drain both pipes: b11208 may emit load/buffer lines on stdout. Keep the text for audit, even when parsing fails.
   let stdoutLog = '', stderrLog = ''
   const append = (kind: 'stdout' | 'stderr', chunk: Buffer) => {
@@ -255,16 +284,26 @@ export async function launch(label: string, argv: string[], promptTokens: number
   const watchdog = watchRam(controller, () => { console.log('RAM WATCHDOG: cancelling request and killing server'); p?.kill() }, readRam, probe.watchIntervalMs ?? 500)
   try {
     ramFloor(readRam)
-    if (countServers() > 0) throw new Error('another llama-server is running')
-    devicesBefore = (probe.devices ?? listDevices)(exe)
+    if (await countServers() > 0) throw new Error('another llama-server is running')
+    devicesBefore = await (probe.devices ?? ((path) => listDevices(path, controller.signal)))(exe)
     ramFloor(readRam)
     port = await (probe.reservePort ?? reserveLoopbackPort)(controller.signal)
     if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw new Error(`invalid reserved loopback port: ${String(port)}`)
     // A listener appearing between reservation and spawn is a conflict, never ours.
     if (await (probe.ownerOfPort ?? loopbackOwner)(port, controller.signal) !== null) throw new Error(`reserved port ${port} acquired by another listener before spawn`)
     p = spawn(exe, [...argv, '--port', String(port), '--host', '127.0.0.1'], { windowsHide: true, env: safeEnv() })
+    if (experimentController) activeOwnedChild = p
+    ownership = trackOwnedProcess(p, probe.processTree)
+    void ownership.catch(() => {}) // finally awaits the same rejection and records teardown failure
     let serverClosed = false
+    const assertOwnedListener = async () => {
+      if (serverClosed || !p?.pid) throw new Error('owned server exited before request')
+      const currentOwner = await (probe.ownerOfPort ?? loopbackOwner)(port!, controller.signal)
+      listenerOwnerPid = currentOwner
+      if (currentOwner !== p.pid) throw new Error(`port ${port} listener PID ${String(currentOwner)} is not owned server PID ${p.pid}`)
+    }
     closed = new Promise<void>((resolve) => { p!.once('close', () => { serverClosed = true; resolve() }); p!.once('error', () => { serverClosed = true; resolve() }) })
+    await ownership
     p.stdout?.on('data', (d: Buffer) => append('stdout', d))
     p.stderr?.on('data', (d: Buffer) => append('stderr', d))
     const loadStart = Date.now()
@@ -278,22 +317,22 @@ export async function launch(label: string, argv: string[], promptTokens: number
       await sleep(250)
     }
     if (!ready) throw new Error(`server health unavailable after ${loadTimeoutMs} ms`)
-    if (serverClosed || !p.pid) throw new Error('server exited before identity verification')
-    listenerOwnerPid = await (probe.ownerOfPort ?? loopbackOwner)(port, controller.signal)
-    if (listenerOwnerPid !== p.pid) throw new Error(`port ${port} listener PID ${String(listenerOwnerPid)} is not owned server PID ${p.pid}`)
+    await assertOwnedListener()
     const props = await (await fetch(`http://127.0.0.1:${port}/props`, { signal: bounded(controller.signal, healthTimeoutMs) })).json()
     servedProps = verifyProps(props, argv)
-    if (serverClosed || await (probe.ownerOfPort ?? loopbackOwner)(port, controller.signal) !== p.pid) throw new Error(`port ${port} listener changed during /props verification`)
+    await assertOwnedListener()
     loadMs = Date.now() - t0
     if (!p.pid) throw new Error('server started without PID')
     s = (probe.startSampler ?? sampler)(p.pid)
     await sleep(settleMs)
     if (controller.signal.aborted) throw controller.signal.reason
+    await assertOwnedListener()
     if (promptTokens) {
-      const pr = await prompt(port, promptTokens, controller.signal, requestTimeoutMs)
+      const pr = await prompt(port, promptTokens, controller.signal, requestTimeoutMs, assertOwnedListener)
       promptN = pr.n
       for (const phase of ['warmup', 'rep1', 'rep2']) {
         if (controller.signal.aborted) throw controller.signal.reason
+        await assertOwnedListener()
         const r0 = Date.now()
         const j = (await (await fetch(`http://127.0.0.1:${port}/completion`, { signal: bounded(controller.signal, requestTimeoutMs), method: 'POST', body: JSON.stringify({ prompt: pr.text, n_predict: phase === 'warmup' ? 8 : 128, temperature: 0, seed: 1, cache_prompt: false }) })).json()) as { timings?: { prompt_n?: number; prompt_per_second?: number; predicted_per_second?: number; prompt_ms?: number } }
         if (phase !== 'warmup') reps.push({ decodeTps: j.timings?.predicted_per_second ?? null, prefillTps: j.timings?.prompt_per_second ?? null, promptN: j.timings?.prompt_n ?? null, prefillMs: j.timings?.prompt_ms ?? null, clientTtftMs: null, requestWallMs: Date.now() - r0 })
@@ -301,34 +340,49 @@ export async function launch(label: string, argv: string[], promptTokens: number
     }
     await sleep(postMs)
     if (controller.signal.aborted) throw controller.signal.reason
+    await assertOwnedListener()
   } catch (e) {
     error = e instanceof Error ? e.message : String(e)
   } finally {
     controller.abort()
-    watchdog.stop()
     if (s) try { await s.stop() } catch (e) { error = [error, `sampler teardown: ${(e as Error).message}`].filter(Boolean).join('; ') }
-    if (p && closed) try { await stopOwned(p, closed) } catch (e) { error = [error, `server teardown: ${(e as Error).message}`].filter(Boolean).join('; ') }
-    if (countServers() > 0) error = [error, 'llama-server remains after this case'].filter(Boolean).join('; ')
+    if (p && ownership) try { await stopOwned(await ownership) } catch (e) {
+      p.kill() // ChildProcess handle only; no numeric-PID kill when identity verification failed
+      if (closed) await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 10_000)
+        void closed!.then(() => { clearTimeout(timer); resolve() })
+      })
+      error = [error, `server teardown: ${(e as Error).message}`].filter(Boolean).join('; ')
+    }
+    try { if (await finalServers() > 0) error = [error, 'llama-server remains after this case'].filter(Boolean).join('; ') }
+    catch (e) { error = [error, `server reaping could not be verified: ${(e as Error).message}`].filter(Boolean).join('; ') }
+    watchdog.stop()
+    if (activeOwnedChild === p) activeOwnedChild = null
+    parentSignal?.removeEventListener('abort', parentAbort)
   }
   const ramMin = Math.min(watchdog.minimum(), readRam())
   const rows = s?.rows ?? []
-  const luid = Object.entries(rows[0]?.adapterDed ?? {}).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
+  const adapter = probe.selectedAdapter ?? selectedAdapter
+  const luid = adapter?.luid ?? null
+  const adapterTotal = adapter?.totalBytes ?? null
   const base = rows.find((r) => r.pidShr != null)?.pidShr ?? null
   const onset = base == null ? null : rows.find((r) => r.pidShr != null && r.pidShr > base + 256 * MiB) ?? null
   const peak = (f: (r: Row) => number | null) => { const v = rows.map(f).filter((x): x is number => x != null); return v.length ? Math.max(...v) : null }
   const log = `${stdoutLog}\n${stderrLog}`
   const bufs = (kind: string) => [...log.matchAll(/(\S+) (model|KV|compute) buffer size\s*=\s*([\d.]+) MiB/g)].filter((m) => m[2] === kind).map((m) => ({ dev: m[1], mib: Number(m[3]) }))
   const bufferRows = [...bufs('model'), ...bufs('KV'), ...bufs('compute')]
+  const extrema = bufferExtrema(bufferRows)
   const res = {
     label, exe, argv: argv.join(' '), port, listenerOwnerPid, servedProps, error, ramAbort: watchdog.reason(), loadMs, promptTokensRequested: promptTokens, promptTokensActual: promptN, reps,
-    samples: rows.length, adapterLuid: luid, adapterTotalGiB: g(ADAPTER_TOTAL),
+    samples: rows.length, adapterLuid: luid, selectedAdapter: adapter, adapterTotalGiB: g(adapterTotal),
     peakPidDedicatedGiB: g(peak((r) => r.pidDed)), peakPidSharedGiB: g(peak((r) => r.pidShr)), pidSharedBaselineGiB: g(base),
     peakAdapterDedicatedGiB: g(peak((r) => (luid ? r.adapterDed[luid] ?? null : null))),
-    spillOnset: onset ? { atSec: +((onset.t - t0) / 1000).toFixed(1), pidDedicatedGiB: g(onset.pidDed), pidSharedGiB: g(onset.pidShr), adapterDedicatedGiB: g(luid ? onset.adapterDed[luid] : null), adapterFreeGiB: g(luid ? ADAPTER_TOTAL - onset.adapterDed[luid] : null) } : null,
+    spillOnset: onset ? { atSec: +((onset.t - t0) / 1000).toFixed(1), pidDedicatedGiB: g(onset.pidDed), pidSharedGiB: g(onset.pidShr), adapterDedicatedGiB: g(luid ? onset.adapterDed[luid] : null), adapterFreeGiB: g(luid && adapterTotal != null && onset.adapterDed[luid] != null ? adapterTotal - onset.adapterDed[luid] : null) } : null,
     buffersMiB: { model: bufs('model'), kv: bufs('KV'), compute: bufs('compute') },
     layersPerDevice: [...log.matchAll(/layer\s+\d+ assigned to device (\S+?),?\s/g)].reduce<Record<string, number>>((a, m) => ((a[m[1]] = (a[m[1]] ?? 0) + 1), a), {}),
     offloadLines: log.split(/\r?\n/).filter((l) => /offload(ing|ed) \d+/.test(l)).map((l) => l.trim()),
-    largestBufferMiB: bufferRows.length ? Math.max(...bufferRows.map((b) => b.mib)) : null,
+    largestBufferMiB: extrema.largestDeviceBufferMiB, largestDeviceBufferMiB: extrema.largestDeviceBufferMiB, largestHostBufferMiB: extrema.largestHostBufferMiB,
+    residencyScope: 'raw counters only; adapter mapping inferred when one discrete GPU; no capacity or learned-budget claim',
     // Compatibility fields: both logs are fully retained, so truncation is always false.
     stdoutLog, stderrLog, stdoutTruncated: false, stderrTruncated: false,
     listDevicesBefore: devicesBefore, ramAvailBeforeGiB: g(ramBefore), ramAvailMinGiB: g(ramMin)
@@ -337,15 +391,17 @@ export async function launch(label: string, argv: string[], promptTokens: number
   return res
 }
 
-export async function idle(ms: number, read: () => number = freemem, countServers: () => number = servers, inspectCollision: () => CollisionEvidence = collisionEvidence) {
-  if (countServers() > 0) throw new Error(`llama-server already running; collision=${JSON.stringify(inspectCollision())}`)
+export async function idle(ms: number, read: () => number = freemem, countServers: () => number | Promise<number> = () => servers(experimentController?.signal), inspectCollision: () => CollisionEvidence | Promise<CollisionEvidence> = () => collisionEvidence(experimentController?.signal)) {
+  experimentController?.signal.throwIfAborted()
+  if (await countServers() > 0) throw new Error(`llama-server already running; collision=${JSON.stringify(await inspectCollision())}`)
   console.log(`idle ${ms / 1000}s (GPU quiet)`)
   ramFloor(read)
   const end = Date.now() + ms
   while (Date.now() < end) {
     await sleep(Math.min(500, end - Date.now()))
+    experimentController?.signal.throwIfAborted()
     ramFloor(read)
-    if (countServers() > 0) throw new Error(`llama-server appeared during idle; stop this experiment; collision=${JSON.stringify(inspectCollision())}`)
+    if (await countServers() > 0) throw new Error(`llama-server appeared during idle; stop this experiment; collision=${JSON.stringify(await inspectCollision())}`)
   }
 }
 function assertCase(row: Awaited<ReturnType<typeof launch>>) {
@@ -355,8 +411,8 @@ function assertCase(row: Awaited<ReturnType<typeof launch>>) {
 async function hipAb() {
   // Unified memory would let HIP page to host RAM silently — the ceiling comparison would be meaningless.
   if (unifiedMemoryKeys().length) throw new Error(`${unifiedMemoryKeys().join(', ')} set in this environment; unset it first`)
-  const hipDevices = listDevices(HIP_EXE)
-  const vulkanDevices = listDevices()
+  const hipDevices = await listDevices(HIP_EXE, experimentController?.signal)
+  const vulkanDevices = await listDevices(EXE, experimentController?.signal)
   console.log(`HIP --list-devices: ${JSON.stringify(hipDevices)}`)
   const results = []
   try {
@@ -370,11 +426,11 @@ async function hipAb() {
   } finally {
     writeFileSync(out, JSON.stringify({ when: new Date().toISOString(), model: MODEL, hipDevices, vulkanDevices, unifiedMemoryEnvKeys: unifiedMemoryKeys(), safeEnvStripsUnifiedMemory: true, results }, null, 1), { flag: 'wx' })
   }
-  console.log(`wrote ${out}; leftover llama-server ${servers()}`)
+  console.log(`wrote ${out}; leftover llama-server ${await servers()}`)
 }
 
 async function igpuAb() {
-  const devices = listDevices()
+  const devices = await listDevices(EXE, experimentController?.signal)
   console.log(`--list-devices: ${JSON.stringify(devices)}`)
   const common = ['-m', QWEN, '-c', '8192', '-t', '8', '-b', '2048', '-ub', '512', '-fa', 'on', '-lm', 'none', '-fit', 'off', '--parallel', '1', '--cache-ram', '0', '-lv', '4']
   const results = []
@@ -390,16 +446,24 @@ async function igpuAb() {
   } finally {
     writeFileSync(out, JSON.stringify({ when: new Date().toISOString(), model: QWEN, devices, results }, null, 1), { flag: 'wx' })
   }
-  console.log(`wrote ${out}; leftover llama-server ${servers()}`)
+  console.log(`wrote ${out}; leftover llama-server ${await servers()}`)
 }
 
 async function main() {
+  const controller = new AbortController()
+  experimentController = controller
+  const supervisor = watchRam(controller, () => activeOwnedChild?.kill())
+  let failure: unknown = null
+  try {
+  controller.signal.throwIfAborted()
   if (unifiedMemoryKeys().length) throw new Error(`${unifiedMemoryKeys().join(', ')} set in this environment; unset it first`)
   assertNewArtifact(out)
+  selectedAdapter = await inspectSelectedAdapter()
+  console.log(`selected adapter: ${JSON.stringify(selectedAdapter)}`)
   if (HIP) return hipAb()
   if (IGPU) return igpuAb()
   const results = []
-  const heaps = vulkanHeaps()
+  const heaps = await vulkanHeaps(experimentController?.signal)
   let stopReason: string | null = null
   try {
     await idle(120_000)
@@ -423,7 +487,17 @@ async function main() {
   } finally {
     writeFileSync(out, JSON.stringify({ when: new Date().toISOString(), model: MODEL, vulkaninfoHeaps: heaps, stopReason, results }, null, 1), { flag: 'wx' })
   }
-  console.log(`wrote ${out}; leftover llama-server ${servers()}`)
+  console.log(`wrote ${out}; leftover llama-server ${await servers()}`)
+  } catch (e) { failure = e; throw e }
+  finally {
+    const cleanupErrors: unknown[] = []
+    try { if (await servers() > 0) cleanupErrors.push(new Error('llama-server.exe remains after experiment')) }
+    catch (e) { cleanupErrors.push(e) }
+    supervisor.stop() // remains active through all case and final process reaping
+    experimentController = null
+    selectedAdapter = null
+    if (cleanupErrors.length) throw new AggregateError(failure === null ? cleanupErrors : [failure, ...cleanupErrors], 'experiment teardown could not be verified')
+  }
 }
 
 // Importing this module for fake-process safety tests never starts a GPU experiment.
