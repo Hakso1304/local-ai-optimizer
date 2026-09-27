@@ -169,6 +169,7 @@ describe('runSession', () => {
     const { backend, rec } = await run(() => ({}), { resumeSessionId: 's1' }, {}, kept)
     expect(ctxOf(backend)).toEqual([8192, 16384, 32768])
     expect(rec?.best?.score.referenceCtx).toBe(16384)
+    expect(rec?.best?.score.recommendedCtx).toBe(32768) // coding: largest step within 15 s TTFT, ≤ 32K
   })
 
   it('emits events in order', async () => {

@@ -31,13 +31,15 @@ A step is one candidate config at one context size. The server is started with `
 | `peakRamBytes` | max `Process V2(llama-server:<pid>)\Working Set - Private` (excludes the mmap file cache) | measured |
 | `avgGpuUtil`, `avgCpuUtil` | mean over samples: GPU = max over the PID's 3D/Compute engine groups; CPU = `Processor(_Total)` | measured |
 | `status`, `failureKind` | see §4 | — |
+| `warm` | true when the size-matched warmup succeeded before the measured reps (X13) | — |
+| `versions` | `{benchmark: BENCHMARK_VERSION ('bench-1.0.0'), prompts: PROMPT_VERSION ('ladder-1'), quality: 'qb-1.0.0', runtime: SessionDeps.runtimeVersion}` (X17) | declared |
 
 - Telemetry: `startSampler({pid})` (`src/core/telemetry/sampler.ts`) runs `typeperf -si 1`. It starts after load (on the new pid), so the load-phase CPU spike is outside the averages, and it runs through warmup and reps.
 - When a step collects **0 samples** (typeperf needs ~2 s before its first row), every telemetry field is `unavailable` rather than 0.
 
 ## 3. Context ladder, warmup, reps
 
-- Ladder: `[2048, 4096, 8192, 16384, 32768, 65536]` ∩ ≤ declared `ctxTrain` (unknown → cap 8192). Steps above that are listed in `skippedSteps` with a reason. `SessionRequest.ladder` can restrict the list further.
+- Ladder: `[2048, 4096, 8192, 16384, 32768, 65536, 131072]` ∩ ≤ declared `ctxTrain` (unknown → cap 8192). Steps above that are listed in `skippedSteps` with a reason. `SessionRequest.ladder` can restrict the list further.
 - Prompt: `ladderPrompt(ctx)` (`src/core/benchmark/prompts.ts`) = `generateFiller(floor(0.75·ctx), seed = ctx)` + "Continue the story in the same style:". It is deterministic per ctx. The request uses `n_predict = 128`, `temperature 0`, `seed 1` and `cache_prompt false`. There is no `ignore_eos`, so `decodeTokens` may be < 128.
 - Warmup: one discarded request with the **same prompt** (`backend.warmup(prompt)`, 8 tokens). This compiles the Vulkan pipelines for that batch shape (DESIGN F7). A warmup failure fails the step.
 - Reps: `reps = 2` measured prompts. The first failing rep fails the step.
@@ -102,44 +104,50 @@ Steps are sorted by ctx. A step is **usable** iff its status is `pass|degraded` 
   - Prefill was 2943 → 1514 t/s. The worst per-doubling ratio is .74, above 0.5.
   - Per-PID shared Δ was ≤ 0.12 GiB (< 256 MiB), and dedicated peaked at 14.6 GiB (≈ 92 % < 95 %).
   - Result: no false positives on a real smooth sweep.
+  - Do not lower `decodeDropRatio` below ~0.65: a 25–30 % threshold would fire at 64K.
 - **True positive not yet observed:** no calibrated run crossed into spill. The 0.60 / 256 MiB / 0.95 thresholds are still [A] for the positive direction.
-- Partial offload (ngl 20/33 @ 8K) decodes at 16.5–18.5 t/s vs 99.9 fully offloaded. That is a config difference rather than a cliff, and the memory component's partial-offload cap handles it.
+- **Memory-bound, not cliff-bound:** on 16 GB the 8B ceiling is 64K because 128K is estimated far over the VRAM budget and pruned. Reasons say "memory-bound at 64K (128K: est. VRAM … > budget …)" instead of "no cliff".
+- **Partial offload** (ngl 20/32 @ 8K) decodes at 17.5 t/s vs 99.9 with full offload, and ngl 0 at 7.1 t/s. That is a config difference, not a cliff. It is handled by linear genSpeed, the partial-offload memory cap and the partial-offload gate (§7, §8).
+- Tests: `tests/scoring/calibration.test.ts` (fixture `calib-8b-rx9070.json`, built from the calibration table) and `tests/scoring/adversarial.test.ts` (#3, `calib-rx9070-2026-09-27.json`).
 
 ## 7. Component scores (`src/core/scoring/components.ts`)
 
-All components are 0–100 with **absolute** normalization: fixed floors and targets per profile, no min-max or rank across candidates. A single candidate therefore scores normally, and adding a candidate never reorders the others. An unavailable input scores 0 with a note, and weights are not renormalized.
+All components are 0–100 with **absolute** normalization: fixed floors and targets per profile, no min-max or rank across candidates. A single candidate therefore scores normally, and adding a candidate never reorders the others. An **unavailable input scores `norm.unknownScore` = 50 (neutral)** and its note starts with "unknown (…)". It is never 0 (that would punish missing telemetry) and never 100, and weights are not renormalized. Calibration: requests under ~1 s get 0 typeperf samples. A step with no usable run still scores 0 (it is excluded anyway).
 
-**Reference step** = the largest PASS step ≤ targetContext, else the smallest PASS step, else the smallest usable step. Speed, latency and memory are read there.
+Two steps are picked per candidate (`referenceStep`):
+- **Scoring step** (`referenceCtx`): the largest PASS step ≤ targetContext, else the smallest PASS step, else the smallest usable step. Speed, latency and memory are read here, so candidates are compared at the same workload need.
+- **Recommended context** (`recommendedCtx`): the largest PASS step ≤ `maxContext` whose full-prompt TTFT ≤ `latencyToleranceMs`. Steps with unknown TTFT qualify only up to targetContext. This is the `-c` to configure, and it is reported with its TTFT in the reasons. Scoring deliberately does *not* use this step: at the tolerance edge the latency score would be ≈0 by construction.
 
 | Component | Formula (`norm.*`) |
 |---|---|
 | quality | §5 Q (measured) or the prior (estimated) |
-| genSpeed | `logScore(decodeTps, 2, genTargetTps)`, where `logScore(x,f,t) = 100·clamp(ln(x/f)/ln(t/f), 0, 1)` |
-| prefillSpeed | `logScore(prefillTps, 20, prefillTargetTps)` |
+| genSpeed | `linScore(decodeTps, 2, genTargetTps) = 100·clamp((x−2)/(t−2), 0, 1)`. It is linear because the log version left a 5.7× slower partial offload only 6–12 points behind (calibration). |
+| prefillSpeed | `logScore(prefillTps, 20, prefillTargetTps)`, where `logScore(x,f,t) = 100·clamp(ln(x/f)/ln(t/f), 0, 1)` (prefill spans orders of magnitude) |
 | latency | 100 at TTFT ≤ tol/10, falling log-linearly to 0 at tol = `latencyToleranceMs`. The TTFT is for a prompt filling the reference step. |
-| memory | u = peak/total (VRAM, or RAM if ngl=0): 100 at u ≤ .80, then linear to 40 at .97, then to 0 at 1.0. Shared > 256 MiB caps it at 30; partial offload caps it at 60. |
+| memory | u = peak/total (VRAM; RAM only for ngl=0 on a machine with no GPU): 100 at u ≤ .80, then linear to 40 at .97, then to 0 at 1.0. Shared > 256 MiB caps it at 30; partial offload (including ngl=0 on a GPU machine) caps it at 60. |
 | stability | 100 · usable/attempted over steps ≤ targetContext, − 20 if any crash/device_lost |
 | context | `100·clamp(log2(ceiling/2048) / log2(targetContext/2048), 0, 1)`, using the measured practical ceiling (never the declared ctx) |
 
 Total = Σ wᵢ · scoreᵢ. Breakdown rows `{component, input: Metric, score, weight, contribution}` sum exactly to the total.
 
 ### Workload profiles (`WORKLOADS`)
-| Profile | Q | G | P | L | M | S | C | targetCtx | genTarget | ppTarget | TTFT tol | minQ | quality categories |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| general_chat | .30 | .25 | .05 | .15 | .10 | .10 | .05 | 8K | 30 | 1000 | 8 s | 40 | instr, reason, struct, extract |
-| coding | .40 | .20 | .10 | .10 | .05 | .10 | .05 | 16K | 30 | 1500 | 15 s | 50 | coding, instr, struct |
-| long_context_coding | .30 | .10 | .20 | .05 | .05 | .10 | .20 | 32K | 20 | 2000 | 40 s | 50 | coding, context |
-| reasoning | .45 | .20 | 0 | .05 | .05 | .15 | .10 | 8K | 25 | 1000 | 10 s | 55 | reason, instr |
-| document_analysis | .30 | .05 | .25 | .05 | .05 | .10 | .20 | 32K | 15 | 2000 | 60 s | 45 | extract, context, struct |
-| fast_assistant | .15 | .35 | .10 | .25 | .05 | .10 | 0 | 4K | 60 | 1000 | 2 s | 30 | instr, extract |
-| max_quality | .70 | .05 | 0 | 0 | .05 | .15 | .05 | 8K | 8 | 500 | 20 s | 0 | all |
+| Profile | Q | G | P | L | M | S | C | targetCtx | maxContext | genTarget | ppTarget | TTFT tol | minQ | quality categories |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| general_chat | .30 | .25 | .05 | .15 | .10 | .10 | .05 | 8K | 16K | 60 | 1000 | 8 s | 40 | instr, reason, struct, extract |
+| coding | .40 | .20 | .10 | .10 | .05 | .10 | .05 | 16K | 32K | 60 | 1500 | 15 s | 50 | coding, instr, struct |
+| long_context_coding | .30 | .10 | .20 | .05 | .05 | .10 | .20 | 32K | 128K | 40 | 2000 | 40 s | 50 | coding, context |
+| reasoning | .45 | .20 | 0 | .05 | .05 | .15 | .10 | 8K | 16K | 50 | 1000 | 10 s | 55 | reason, instr |
+| document_analysis | .30 | .05 | .25 | .05 | .05 | .10 | .20 | 32K | 128K | 30 | 2000 | 60 s | 45 | extract, context, struct |
+| fast_assistant | .15 | .35 | .10 | .25 | .05 | .10 | 0 | 4K | 8K | 100 | 1000 | 2 s | 30 | instr, extract |
+| max_quality | .70 | .05 | 0 | 0 | .05 | .15 | .05 | 8K | 16K | 15 | 500 | 20 s | 0 | all |
 
-For scale, calibrated TTFT (8B full offload) was 1.05 s @ 4K, 2.2 s @ 8K, 4.9 s @ 16K and 12.0 s @ 32K. So the coding latency score at 16K is ≈ 49, and fast_assistant at 4K is ≈ 28. The targets and tolerances are [A] and are pending the calibration task.
+Calibrated on the 8B full offload (TTFT 0.5 s @ 2K, 1.1 s @ 4K, 2.2 s @ 8K, 4.9 s @ 16K, 12.0 s @ 32K, 32.4 s @ 64K). The recommended contexts are asserted in `calibration.test.ts`: fast_assistant 4K; general_chat, reasoning and max_quality 16K; coding 32K; long_context_coding and document_analysis 64K. genTarget values are near full-offload speed on this GPU class (52–109 t/s), so partial offload is clearly behind. These are calibrated on one machine and one model, so they are still [A] elsewhere.
 
 ## 8. Recommendation (`src/core/scoring/recommend.ts` `recommend(inputs, machine, workload)`)
 
 - **Excluded**: candidates with no usable step, listed with their step reasons (A17).
-- **Gates** (the candidate is still ranked, but `eligible:false`): practical ceiling < 0.5 · targetContext; stability < 50; quality < minQuality (an estimated quality also gates, and the reason says "estimated").
+- **Gates** (the candidate is still ranked, but `eligible:false`): practical ceiling < 0.5 · targetContext; stability < 50; quality < minQuality (an estimated quality also gates, and the reason says "estimated"); **TTFT at the scoring step > latencyToleranceMs**.
+- **Partial-offload gate**: on a GPU machine, a partial config (ngl < all, including ngl 0) is ineligible when a full-offload config of the **same model** is eligible. Calibration: ngl 20 decodes −83 %, and ngl 0 still uses the GPU.
 - **Ranking / tie-break**: eligible first → total rounded to 1e-6, descending → lower peak VRAM (CPU-only counts as 0) → lower peak RAM → `configId` ascending (code-unit order). Unknown values sort last. Output is deep-equal for any input order.
 - **Best** = the first eligible candidate, with `practicalContext` (measured) and `declaredContext` (declared) reported separately.
 - **Alternatives**, among eligible candidates, each with a configId tie-break:
@@ -151,21 +159,26 @@ For scale, calibrated TTFT (8B full offload) was 1.05 s @ 4K, 2.2 s @ 8K, 4.9 s 
   - no inputs → "No recommendation: no candidates were benchmarked"
   - nothing usable → "No recommendation: no successful runs"
   - all gated → "No recommendation: no candidate meets the <profile> requirements", plus each candidate's gate failures.
-- **Reasons** (deterministic English): the score, "Only one candidate; not compared", the top-2 contributions, practical vs declared context, "No VRAM spill up to …", every cliff message, and the estimated-quality notice.
+- **Reasons** (deterministic English): the score, "Only one candidate; not compared", the top-2 contributions, "Recommended context 32K: TTFT 12.0 s for a full prompt (tolerance 15 s), decode 72.0 t/s", practical vs declared context plus what bounded it (cliff / failure / "memory-bound at 64K (128K: est. VRAM …)" / declared ctx), a warning when runs mix runtime/benchmark versions, "No VRAM spill up to …", every cliff message, and the estimated-quality notice.
 
 ## 9. Candidate generation (`src/core/benchmark/candidates.ts`)
 
-Estimates follow DESIGN §2.7 (`estimateMemory`). They are `kind:'estimated'`, prune only, and never rank.
+Estimates are `kind:'estimated'`, prune only, and never rank.
+- **`estimateMemory`:**
+  - KV = ctx·L·Hkv·(dk+dv)·bytes. This is exact vs the llama-server log: 8B 0.125 MiB/token, Qwen2.5-1.5B 0.0273 MiB/token.
+  - VRAM = file·min(ngl,L)/L + KV + compute, where compute = 32 MiB + ubatch·n_embd·32 B + 1 KiB·ctx (fit to the measured 61–164 MiB compute buffers).
+  - RAM = **whole file (mmap resident)** + KV if ngl=0 + 512 MiB. Available RAM fell by ≈ file size even at ngl 99. This makes the pre-check conservative, and spill detection never uses it: spill uses the private working set and per-PID shared memory.
+  - Estimated vs measured on 8B: −2 % … +3 % per rung.
 - **Budgets:**
-  - VRAM = total − in-use − 512 MiB.
+  - VRAM = total − in-use − **1 GiB**. The margin absorbs the measured residual of 0.2–0.9 GiB, largest at 64K.
   - RAM = available (else total) − 4 GiB.
-  - RAM over budget → the step is skipped.
-  - VRAM over budget → the first such step is kept once (to observe the cliff) and later ones are skipped.
+  - RAM over budget → the step is skipped (never kept).
+  - VRAM over budget → the first such step is kept once, to observe the cliff, but only if est ≤ 1.15 × budget (`keepOverVramMaxRatio`). Every later step is skipped.
 - **Order:**
   1. ngl=all f16.
   2. ngl=all q8_0 KV, when targetContext ≥ 32K and declared ≥ 32K.
   3. If (1) is rejected: partial ngl = ⌊L·f⌋ for f ∈ .75/.5/.25, keeping the largest that fits plus the next lower one.
-  4. ngl=0 when there is no GPU, or when params ≤ 3B.
+  4. ngl=0 only when there is no GPU, or no GPU config fits (`cpuOnlyMaxParams` = 0 = off). On a GPU machine it carries the note "treated as partial offload".
 - **Other rules:**
   - Max 4 per model.
   - Threads = physical cores.
@@ -175,11 +188,11 @@ Estimates follow DESIGN §2.7 (`estimateMemory`). They are `kind:'estimated'`, p
 
 ## 10. Known limitations
 - **GPU util outliers:** the calibration shows GPU util samples of ~1e13 % (the 8B @ 32K/64K run1 rows). The sampler does not clamp `gpuUtilPct` to 0–100, so `avgGpuUtil` can be poisoned. GPU util is not used by scoring or cliff rules today, but it is displayed.
-- **No calibrated true-positive cliff/spill yet:** the thresholds are validated only against false positives.
+- **No calibrated true-positive cliff/spill yet:** the thresholds are validated only against false positives. Profiles are calibrated on one GPU and one model family.
 - **No `ignore_eos`:** `runPrompt` doesn't send it, so short generations make decode TPS noisier. No CV-based extra reps are taken (DESIGN §3.4 is not implemented).
 - **Thinking models:** the ×4 quality token boost is off (`ModelMeta` has no `supportsThinking`).
 - **Sticky degraded verdict:** a real ≥ 40 % transient dip that recovers still ends the practical ceiling.
 - **Prompt sizing:** assumes ≈ 4 chars/token (0.75 fill as slack). Real prompt_n was ≈ 0.75·ctx on the calibration models (e.g. 12289 at 16K).
 - **Hardcoded load timeout:** the 120 s load timeout is not configurable.
-- **No cross-session comparison:** results from different sessions are not compared, and version drift is not detected.
+- **No cross-session comparison:** results from different sessions are not compared. Within a session, mixed `versions` only produce a warning reason.
 - **Runner not wired to the UI:** see ARCHITECTURE §8.

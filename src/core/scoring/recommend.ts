@@ -1,6 +1,6 @@
 // Rank candidates for one workload and explain the pick in plain English. Pure and deterministic (A19).
 import type {
-  BreakdownRow, CandidateInput, ComponentId, MachineLimits, Metric, Recommendation, WorkloadId, WorkloadScore
+  BreakdownRow, CandidateInput, CliffReport, ComponentId, MachineLimits, Metric, Recommendation, WorkloadId, WorkloadScore
 } from '../../shared/bench-types'
 import { componentScores } from './components'
 import { fmtCtx, val } from './cliff'
@@ -24,6 +24,16 @@ const byId = (a: Scored, b: Scored) => (a.input.config.id < b.input.config.id ? 
 /** Missing values sort last in both directions. */
 const cmp = (a: number | null, b: number | null, desc: boolean) =>
   a === b ? 0 : a === null ? 1 : b === null ? -1 : desc ? b - a : a - b
+
+/** What bounded the practical ceiling, in words (calibration: 8B on 16 GB is memory-bound, not cliff-bound). */
+function limitText(input: CandidateInput, cliff: CliffReport, ceiling: number): string {
+  if (cliff.limitedBy === 'cliff') return 'limited by a performance cliff above it'
+  if (cliff.limitedBy === 'failure') return 'limited by a failed run above it'
+  const next = input.config.skippedSteps.find((s) => s.ctx > ceiling)
+  if (next && /VRAM|RAM/.test(next.reason)) return `memory-bound at ${fmtCtx(ceiling)} (${fmtCtx(next.ctx)}: ${next.reason})`
+  if (next) return `${fmtCtx(next.ctx)} not tested (${next.reason})`
+  return `largest step tested`
+}
 
 export function recommend(
   inputs: CandidateInput[],
@@ -58,13 +68,27 @@ export function recommend(
     const q = cs.components.quality
     if (q.score < profile.minQuality) gateFailures.push(`${q.input.kind === 'estimated' ? 'estimated ' : ''}quality ${q.score.toFixed(0)} < ${profile.minQuality}`)
     const ref = input.runs.find((r) => r.ctx === cs.referenceCtx)
+    const refTtft = val(ref?.ttftMs, true)
+    if (refTtft !== null && refTtft > profile.latencyToleranceMs) {
+      gateFailures.push(`TTFT ${(refTtft / 1000).toFixed(1)} s at ${fmtCtx(ref!.ctx)} exceeds the ${(profile.latencyToleranceMs / 1000).toFixed(0)} s tolerance`)
+    }
     scored.push({
       input, cs,
-      score: { configId: input.config.id, workload, total, eligible: gateFailures.length === 0, gateFailures, breakdown, referenceCtx: cs.referenceCtx },
+      score: { configId: input.config.id, workload, total, eligible: gateFailures.length === 0, gateFailures, breakdown, referenceCtx: cs.referenceCtx, recommendedCtx: cs.recommendedCtx },
       decode: val(ref?.decodeTps, true),
       vram: input.config.gpuLayers === 0 ? 0 : val(ref?.peakVramBytes),
       ram: val(ref?.peakRamBytes)
     })
+  }
+
+  // Calibration: partial offload collapsed decode −83% (ngl 20) on 8B; ngl 0 on Vulkan still uses the GPU for prefill.
+  // Never recommend a partial config of a model whose full-offload config is eligible.
+  const fullOk = new Set(scored.filter((s) => s.score.eligible && s.input.config.gpuLayersAll).map((s) => s.input.model.id))
+  for (const s of scored) {
+    if (!s.input.config.gpuLayersAll && machine.gpuDevice !== null && fullOk.has(s.input.model.id)) {
+      s.score.eligible = false
+      s.score.gateFailures.push('partial offload; a full-offload config of this model passed')
+    }
   }
 
   // Tie-break chain (X3): eligible, total (rounded) desc, lower peak VRAM, lower peak RAM, configId asc.
@@ -92,6 +116,10 @@ export function recommend(
     for (const s of scored) reasons.push(`${s.score.configId}: ${s.score.gateFailures.join('; ')}`)
   }
 
+  // X17: only compare like with like; say so when rows come from different runtimes/procedures.
+  const vers = [...new Set(inputs.flatMap((i) => i.runs).map((r) => (r.versions ? `${r.versions.runtime ?? '?'}/${r.versions.benchmark}/${r.versions.prompts}` : null)).filter((v): v is string => v !== null))].sort()
+  if (vers.length > 1) reasons.push(`Warning: results mix runtime/benchmark versions (${vers.join(', ')}); comparisons may not be like-for-like`)
+
   let best: Recommendation['best'] = null
   if (top) {
     const { cliff, components } = top.cs
@@ -103,7 +131,13 @@ export function recommend(
     const leaders = [...top.score.breakdown].sort((a, b) => b.contribution - a.contribution || (a.component < b.component ? -1 : 1)).slice(0, 2)
     reasons.push(`Largest contributions: ${leaders.map((r) => `${LABEL[r.component]} ${r.contribution.toFixed(1)}`).join(', ')}`)
     const pc = val(cliff.practicalContextCeiling)!
-    reasons.push(`Practical context ${fmtCtx(pc)} (measured)${declared ? `; model declares ${fmtCtx(declared)}` : ''}`)
+    const rc = top.input.runs.find((r) => r.ctx === top.score.recommendedCtx)
+    const ttft = val(rc?.ttftMs, true)
+    if (rc) {
+      reasons.push(`Recommended context ${fmtCtx(rc.ctx)}: TTFT ${ttft === null ? 'unknown' : `${(ttft / 1000).toFixed(1)} s`} for a full prompt ` +
+        `(tolerance ${(profile.latencyToleranceMs / 1000).toFixed(0)} s), decode ${val(rc.decodeTps, true)!.toFixed(1)} t/s`)
+    }
+    reasons.push(`Practical context ${fmtCtx(pc)} (measured)${declared ? `; model declares ${fmtCtx(declared)}` : ''}; ${limitText(top.input, cliff, pc)}`)
     if (cliff.spillFreeUpTo !== null) reasons.push(`No VRAM spill up to ${fmtCtx(cliff.spillFreeUpTo)}`)
     for (const s of cliff.steps) for (const r of s.reasons) if (r.code !== 'beyond_limit') reasons.push(r.message)
     if (components.quality.note) reasons.push(components.quality.note)

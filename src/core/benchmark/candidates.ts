@@ -9,15 +9,22 @@ const MiB = 1024 ** 2
 const GiB = 1024 ** 3
 
 export const DEFAULT_CANDIDATE_RULES = {
-  ctxLadder: [2048, 4096, 8192, 16384, 32768, 65536],
+  /** 128K only runs where declared ctx and the VRAM estimate allow; otherwise it documents the memory bound. */
+  ctxLadder: [2048, 4096, 8192, 16384, 32768, 65536, 131072],
   /** Ladder cap when the GGUF declares no context length. */
   unknownCtxMax: 8192,
-  vramMarginBytes: 512 * MiB,
+  /** Covers the measured residual above model+KV+compute (0.2–0.9 GiB on 8B, largest at 64K). */
+  vramMarginBytes: 1024 * MiB,
+  /** The first step over the VRAM budget is kept (to observe the cliff) only if est ≤ budget × this. Calibration:
+   *  estimate is 2–19% above measured per-PID VRAM on 8B (residual 0.2–0.9 GiB), so far-over steps would just spill. */
+  keepOverVramMaxRatio: 1.15,
   /** A25: RAM kept free for the OS; configs whose RAM estimate exceeds available − reserve are skipped. */
   ramReserveBytes: 4 * GiB,
   partialFractions: [0.75, 0.5, 0.25],
-  /** CPU-only reference config only for models this small (or when there is no GPU). */
-  cpuOnlyMaxParams: 3e9,
+  /** ngl=0 reference config for models this small even when full offload fits. 0 = off: calibration showed ngl 0 on
+   *  the Vulkan build still offloads prefill matmuls (1.1K t/s, 1.8 GiB VRAM), so it is partial, not CPU-only.
+   *  ngl=0 is still generated when there is no GPU or when no GPU config fits. */
+  cpuOnlyMaxParams: 0,
   /** q8_0 KV variant only when both the workload target and the declared ctx reach this. */
   longContextMin: 32768,
   maxPerModel: 4,
@@ -36,17 +43,21 @@ const est = (value: number, source: string): Metric => ({ value, kind: 'estimate
 
 export const isLowConfidence = (m: ModelMeta) => m.slidingWindow !== null || LOW_CONFIDENCE_ARCHS.has(m.arch)
 
-/** DESIGN §2.7. gpuLayers ≥ layers means full offload. */
+/** DESIGN §2.7. gpuLayers ≥ layers means full offload. RAM counts the whole mmap'd file (calibration: available RAM
+ *  fell ≈ file size even at ngl 99), so the A25 pre-check is conservative; spill detection never uses it. */
 export function estimateMemory(m: ModelMeta, gpuLayers: number, ctx: number, kv: KvType, ubatch = DEFAULT_CANDIDATE_RULES.ubatch) {
   const dk = m.keyLength ?? m.nEmbd / m.heads
   const dv = m.valueLength ?? dk
   const kvBytes = ctx * m.layers * m.headsKv * (dk + dv) * KV_BYTES[kv]
   const onGpu = Math.min(gpuLayers, m.layers)
   const wGpu = (m.fileBytes * onGpu) / m.layers
-  const compute = 512 * MiB + ubatch * m.nVocab * 4 // flash attention on → no ctx-sized score buffer
+  // Calibration (b11208 Vulkan, fa on): compute buffers 61→91 MiB (1.5B, 2K→32K), 102→164 MiB (8B, 2K→64K) ≈
+  // 32 MiB + ubatch·n_embd·32 B + 1 KiB/ctx token. The unexplained residual (0.2–0.9 GiB) is covered by
+  // rules.vramMarginBytes in the budget, not here, so small models aren't over-estimated.
+  const compute = 32 * MiB + ubatch * m.nEmbd * 32 + ctx * 1024
   return {
-    vramBytes: onGpu > 0 ? wGpu + kvBytes + compute + 256 * MiB : 0,
-    ramBytes: m.fileBytes - wGpu + (onGpu === 0 ? kvBytes : 0) + 512 * MiB,
+    vramBytes: onGpu > 0 ? wGpu + kvBytes + compute : 0,
+    ramBytes: m.fileBytes + (onGpu === 0 ? kvBytes : 0) + 512 * MiB,
     kvBytes
   }
 }
@@ -109,7 +120,10 @@ export function generateCandidates(
       }
       if (ngl > 0 && gpuBudget !== null && vramNeed > gpuBudget) {
         // Keep the first step over the VRAM estimate once: the cliff detector needs to see it, guards contain it.
-        if (steps.length && !overVramKept) { overVramKept = true; steps.push(ctx); notes.push(`${ctxK(ctx)} is above the VRAM estimate; kept to observe the cliff`); continue }
+        if (steps.length && !overVramKept && vramNeed <= gpuBudget * rules.keepOverVramMaxRatio) {
+          overVramKept = true; steps.push(ctx); notes.push(`${ctxK(ctx)} is above the VRAM estimate; kept to observe the cliff`); continue
+        }
+        overVramKept = true // never skip a step and then run a larger one
         skipped.push({ ctx, reason: `est. VRAM ${gib(vramNeed)} > budget ${gib(gpuBudget)}` })
         continue
       }
@@ -143,7 +157,11 @@ export function generateCandidates(
       }
     }
   }
-  if (!hasGpu || (model.paramCount !== null && model.paramCount <= rules.cpuOnlyMaxParams)) add(build(0, 'f16'))
+  if (!hasGpu || !candidates.length || (model.paramCount !== null && model.paramCount <= rules.cpuOnlyMaxParams)) {
+    const c = build(0, 'f16')
+    if (c && hasGpu) c.notes.push('ngl=0 on a GPU build still offloads prefill to the GPU (measured); treated as partial offload')
+    add(c)
+  }
 
   for (const c of candidates.splice(rules.maxPerModel)) rejected.push({ id: c.id, modelId: model.id, reason: `over the per-model cap of ${rules.maxPerModel}` })
   return { candidates, rejected }

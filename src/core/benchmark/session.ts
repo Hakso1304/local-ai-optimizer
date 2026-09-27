@@ -14,7 +14,10 @@ import { detectCliffs, isUsable, val } from '../scoring/cliff'
 import { recommend } from '../scoring/recommend'
 import { DEFAULT_SCORING_CONFIG } from '../scoring/workloads'
 import { DEFAULT_CANDIDATE_RULES, estimateMemory, generateCandidates, machineFromProfile } from './candidates'
-import { LADDER_PREDICT, ladderPrompt } from './prompts'
+import { LADDER_PREDICT, PROMPT_VERSION, ladderPrompt } from './prompts'
+
+/** Bump when the runner's measurement procedure changes (warmup, reps, reduction, timeouts). */
+export const BENCHMARK_VERSION = 'bench-1.0.0'
 
 const GiB = 1024 ** 3
 type Awaitable<T> = T | Promise<T>
@@ -82,6 +85,8 @@ export interface SessionDeps {
   /** Runtime device of the benchmark GPU (from listDevices), e.g. 'Vulkan0'; null = CPU only. */
   gpuDevice: string | null
   backendKind?: 'vulkan' | 'cuda' | 'cpu'
+  /** From the runtime's detect() (e.g. llama.cpp build); stored on every run (X17). */
+  runtimeVersion?: string | null
   /** ModelMeta.id is the absolute GGUF path (ModelInfo convention); it is passed to loadModel. */
   models: ModelMeta[]
   clock: { now(): number }
@@ -240,7 +245,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         configId: cand.id, ctx, promptTokens: null, status, failureKind,
         loadTimeMs: na('not loaded'), ttftMs: na('no request'), prefillTps: na('no request'), decodeTps: na('no request'), totalMs: na('no request'),
         peakVramBytes: na('no telemetry'), peakSharedGpuBytes: na('no telemetry'), peakRamBytes: na('no telemetry'),
-        avgGpuUtil: na('no telemetry'), avgCpuUtil: na('no telemetry'), ...extra
+        avgGpuUtil: na('no telemetry'), avgCpuUtil: na('no telemetry'), warm: false,
+        versions: { benchmark: BENCHMARK_VERSION, prompts: PROMPT_VERSION, quality: defaultTestSet.suite, runtime: deps.runtimeVersion ?? null }, ...extra
       },
       detail: { samples: [], reason, stderrTail: backend.lastExit?.tail.slice(-50) ?? [], load: null, startedAt, endedAt: clock.now(), ...detail }
     })
@@ -280,11 +286,12 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     const prompt = ladderPrompt(ctx)
     const timeoutMs = cfg.promptTimeoutBaseMs + ctx * cfg.promptTimeoutPerCtxMs
     const reps: PromptResult[] = []
+    let warm = false
     let failure: { status: RunStatus; kind: FailureKind | null; reason: string } | null = null
     try {
       send({ type: 'phase', configId: cand.id, ctx, phase: 'warmup' })
       // Size-matched warmup: compiles the pipelines for this batch shape (F7).
-      await backend.warmup(prompt).catch((e: Error) => { failure = classify(e.message, false) })
+      await backend.warmup(prompt).then(() => { warm = true }, (e: Error) => { failure = classify(e.message, false) })
       send({ type: 'phase', configId: cand.id, ctx, phase: 'measure' })
       for (let i = 0; i < cfg.reps && !failure && !signal?.aborted; i++) {
         const r = await backend.runPrompt({ prompt, maxTokens: cfg.predictTokens, temperature: 0, seed: 1, timeoutMs })
@@ -317,6 +324,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         : e != null ? { value: e, kind: 'estimated', source: `${what} tokens / wall clock` } : { value: null, kind: 'unavailable', reason: 'no timings' }
 
     return result(f?.status ?? 'pass', f?.kind ?? null, f?.reason ?? null, {
+      warm,
       promptTokens: median(reps.map((r) => r.promptTokens)),
       loadTimeMs: measured(load.loadTimeMs, 'spawn → /health ok'),
       ttftMs: measured(ttft, 'client wall clock, request → first token', 'no successful request'),

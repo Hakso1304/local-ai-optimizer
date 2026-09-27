@@ -1,6 +1,8 @@
 // Deterministic ladder prompts: same ctx → same text on every machine/model.
 import { generateFiller } from '../quality'
 
+/** Bump when ladderPrompt output changes for any ctx. */
+export const PROMPT_VERSION = 'ladder-1'
 /** Share of the context the prompt fills. generateFiller assumes ≈4 chars/token; the slack also leaves room for
  *  tokenizer differences and the decoded tokens. */
 export const LADDER_FILL = 0.75

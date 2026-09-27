@@ -27,6 +27,9 @@ export interface WorkloadProfile {
   /** Non-negative, sum to 1. */
   weights: Record<ComponentId, number>
   targetContext: number
+  /** Largest context worth recommending for this workload (default targetContext). The recommended ctx is the
+   *  largest PASS step ≤ this whose full-prompt TTFT is within latencyToleranceMs. */
+  maxContext?: number
   /** TTFT (ms) for a prompt filling the reference step; latency score is 0 at/above this. */
   latencyToleranceMs: number
   genTargetTps: number
@@ -131,6 +134,10 @@ export interface BenchmarkRunResult {
   /** Decode-window averages (load phase excluded). */
   avgGpuUtil: Metric
   avgCpuUtil: Metric
+  /** true = measured after a successful size-matched warmup (X13). Absent in pre-1.0 data. */
+  warm?: boolean
+  /** What produced this row (X17), all declared. runtime null = not reported by detect(). */
+  versions?: { benchmark: string; prompts: string; quality: string; runtime: string | null }
 }
 
 export type StepVerdict = 'pass' | 'degraded' | 'fail'
@@ -169,7 +176,7 @@ export interface CliffReport {
 }
 
 export interface ComponentScore {
-  /** 0–100, always finite. Unavailable input scores 0. */
+  /** 0–100, always finite. Unavailable input scores norm.unknownScore (neutral) and says so in note. */
   score: number
   input: Metric
   note?: string
@@ -178,8 +185,10 @@ export interface ComponentScore {
 export interface ComponentScores {
   components: Record<ComponentId, ComponentScore>
   cliff: CliffReport
-  /** ctx of the step whose metrics feed speed/latency/memory; null when no usable step. */
+  /** ctx of the step whose metrics feed speed/latency/memory (≈ targetContext); null when no usable step. */
   referenceCtx: number | null
+  /** Context to configure for this workload: largest PASS step ≤ maxContext whose full-prompt TTFT is within tolerance. */
+  recommendedCtx: number | null
   usable: boolean
 }
 
@@ -200,6 +209,7 @@ export interface WorkloadScore {
   gateFailures: string[]
   breakdown: BreakdownRow[]
   referenceCtx: number | null
+  recommendedCtx: number | null
 }
 
 export interface CandidateInput {

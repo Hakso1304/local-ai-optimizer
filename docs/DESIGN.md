@@ -272,6 +272,8 @@ Source of truth: `src/core/quality/tests.v1.json` (17 tests), checkers in `check
 
 ## 5. Scoring and cliff detection (implemented: `src/core/scoring/*`, types in `src/shared/bench-types.ts`)
 
+> **Calibrated 2026-09-27.** Current constants and rules are in `docs/BENCHMARK.md` and in code. Changes vs the text below: genSpeed is linear; unavailable inputs score a neutral 50; the scoring step and recommended ctx are separate (`maxContext`, TTFT tolerance); there is a TTFT gate and a partial-offload gate; the ladder includes 128K; the VRAM margin is 1 GiB with keep-over ≤ 1.15×; compute = 32 MiB + ub·n_embd·32 + 1 KiB·ctx; RAM counts the whole mmap'd file; ngl=0 is generated only without a GPU or as a fallback.
+
 All thresholds and weights live in ONE plain object, `DEFAULT_SCORING_CONFIG` (`workloads.ts`, version `scoring-1.0.0`, stored per recommendation). Every function takes it as an optional last argument. Pure TS, no I/O, no clock, no randomness.
 
 ### 5.0 Provenance (ACCEPTANCE R1)

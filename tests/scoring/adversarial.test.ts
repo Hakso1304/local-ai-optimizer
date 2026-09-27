@@ -85,7 +85,7 @@ describe('calibration (a): real full-offload 8B sweep, gradual decode decay', ()
   // DEFECT (candidates.ts:46-48): fixed overhead 512 MiB compute + 256 MiB + ubatch·nVocab·4 ≈ 1.0 GiB, but the
   // measured compute buffer is 61–164 MiB. Qwen 1.5B is over-estimated 1.87× at 2K / 1.49× at 32K, so small models are
   // pruned on small GPUs that would run them.
-  it.fails('estimateMemory is within +25% for a 1.5B model', () => {
+  it('estimateMemory is within +25% for a 1.5B model', () => {
     for (const r of runsOf(calib, 'qwen|all')) {
       expect(estimateMemory(qwen, 99, r.ctx, 'f16').vramBytes / r.peakVramBytes!, fmtCtx(r.ctx)).toBeLessThan(1.25)
     }
@@ -129,7 +129,7 @@ describe('calibration (b): TTFT 32 s at 64K vs workload latency tolerance', () =
 
   // DEFECT: no latency gate exists (recommend.ts:528-533 gates only ctx, stability, quality). A config whose only
   // measured TTFT is 16× the Fast Assistant tolerance is still ELIGIBLE and can be the recommendation.
-  it.fails('a config whose TTFT at its reference step exceeds the tolerance is ineligible for Fast Assistant/General Chat', () => {
+  it('a config whose TTFT at its reference step exceeds the tolerance is ineligible for Fast Assistant/General Chat', () => {
     for (const w of ['fast_assistant', 'general_chat'] as const) {
       const r = recommend([only64()], M, w)
       expect(r.ranked[0].eligible, w).toBe(false)
@@ -165,7 +165,7 @@ describe('calibration (c): partial offload vs full offload (real numbers: decode
 
   // DEFECT (workloads.ts:602-605 genTargetTps 25–30): decode 17.5 t/s (5.7× slower than 99.9) still earns genSpeed ≈80,
   // and everything ≥30 t/s saturates at 100, so partial offload lands only 6–12 points below full.
-  it.fails.each(['general_chat', 'coding', 'reasoning'] as const)('%s: partial offload scores ≥ 15 points below full', (w) => {
+  it.each(['general_chat', 'coding', 'reasoning'] as const)('%s: partial offload scores ≥ 15 points below full', (w) => {
     const g = gap(w)
     expect(g.full - g.partial).toBeGreaterThanOrEqual(15)
   })
