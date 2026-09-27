@@ -18,6 +18,20 @@ This is the single consolidated list, and every item is checked against the code
   - Here (llama.cpp Vulkan) it was ≈ 11.6–13.25 GiB of 15.92, about 73–83 %, so a 16 GB card behaved like ≈ 12–13 GB. Ollama's ROCm/HIP backend on an RX 6800 used the full 16 GB. HIP allocates device memory directly, while Vulkan on this driver keeps a per-process ceiling.
   - Ceilings are learned per adapter (PNP id) + driver + backend build, only from residency that persists after a fresh restart. They stay advisory until qualified (identity verified, load-log buffer comparable to the planned allocation). Only qualified, comparable ceilings prune, and never an allocation observed clean. Until one exists, 80 % is shown as an estimate. I-2.8 (placement) is heuristic until the held A/B confirms.
   - The app measures only the backend it runs: a ROCm/HIP backend (LM Studio or Ollama on AMD) may allocate differently from Vulkan, and its ceiling is not inferred from ours.
+- **OPEN (review-w4q): harness safety blockers. No new GPU stage runs until these are fixed and re-reviewed by Astra:**
+  - **Q1** — cancellation can be lost between preprocessing (applyTemplate) and generation.
+  - **Q2** — PID-chain teardown kills the parent first and uses `taskkill /T` only if the parent survives, so children can outlive it.
+  - **Q3** — the 4 GiB watchdog does not cover probes/teardown (untimed synchronous tasklist/git; probes before the watchdog exists).
+  - **Q5** — session dumps are not no-clobber/atomic.
+  - **Q6** — a ZIP snapshot does not freeze the environment (junctioned node_modules/vendor are mutable).
+  - **Q7** — A/B `largestBufferMiB` includes host buffers.
+  - **Q8** — A/B health readiness is not bound to the owned server/model (/props not verified).
+- **DONE-WITH-CAVEAT: generation-config evidence before 2026-09-28 is non-evaluable** for effort/thinking claims. It has no original prompt hash, so there is no row-bound render proof (I-8.0), and this includes session 5's Qwen off/low/medium. A replay can only label such rows *reconstructed*.
+- **UNKNOWN ORIGIN: the Vulkan per-process ceiling.**
+  - Repaired stage-2 A/B (8B f16 64K): dedicated stops at 11.60 GiB with 1.36 GiB raw shared from the first sample. This is independent of prompt fill (36K vs 49K), of a prior large load (B1b) and of `-ub 256` (B2).
+  - It is not driver placement (EVIDENCE E-12 contradicted) and not a proven capacity limit.
+  - Likely an undeclared host-visible or other buffer: the A/B lacked `-lv 4`, now added, so buffer declarations will be logged next time.
+  - HIP stays **untested** on hardware.
 - **FOLLOW-UP: AMD backend choice.** llama.cpp also ships HIP (ROCm) Windows builds for supported gfx targets, and a HIP backend may use more VRAM than Vulkan on the same card. It is not integrated yet; whether the HIP SDK supports the RX 9070 XT (gfx1201) is still to be checked.
 - **BLOCKED (env): NVIDIA telemetry is wired but fixture-tested only.** `withNvidia` merges nvidia-smi temp/power into samples when `probeNvidiaSmi()` works (acbd169). nvidia-smi here fails with "insufficient permissions" (stale driver, exit 4).
 
