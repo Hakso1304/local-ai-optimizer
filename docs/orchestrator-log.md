@@ -202,3 +202,6 @@
 
 ## Fable — 2026-09-28 03:37 local
 - Pushed 9252667 (RELEASE-GATE), 3dd8a48 (G08 fixture proof, S1/S2), 0209597 (CHANGELOG). Morning report §4 updated. Waiting: session 5 (S3), RECHECK5 (Astra), S1 follow-ups, S2 evidence rows.
+
+## Fable — 2026-09-28 03:48 local
+- RECHECK5 committed. P1 HIGH (per-key proof broadcast) → S1 producer/verdict fix + offline proveQualityRows tool; S2 negatives. Session 5 effort comparisons are NOT citable until rows are re-proven. Lane plan after session 5 export: S3 runs proveQualityRows(5) (needs the Qwen server; short) → then xhigh with the fixed producer → HIP check. STATUS/morning report updated.

@@ -31,7 +31,7 @@ Quality bands overlap between the three (14B 86, Gemma 93, Qwen 96, all ±≈10)
 
 ## 4. Engine conformance
 - Rules `interp-2` through the overnight fixes (O1–O9 closed: b02096f, e1ea388; comparator/token-provenance/per-key template proof: 7166792, 70c5c9e, 842d396) with S2 negative tests; Astra's last verdict (docs/review-w4o) preceded these — a fresh re-check is due once the lane is idle.
-- One regression found at 03:40 (interp2-rereview G08: fixture lacked the new per-key template proof) → fixed in 3dd8a48 (fixture proof added, rule unchanged); Astra RECHECK5 pending.
+- One regression found at 03:40 (interp2-rereview G08: fixture lacked the new per-key template proof) → fixed in 3dd8a48 (fixture proof added, rule unchanged); Astra RECHECK5 (docs/review-w4p): O1–O9 closed; new P1 HIGH — the per-key template proof was broadcast from the first item to all rows, so effort/thinking attributions are unproved until rows are re-proven per prompt (S1 tool; S3 runs it on session 5 before xhigh); P2 seed acceptance; P3 malformed proof.
 - Release gate: docs/RELEASE-GATE.md (9252667) — every item must cite a commit/output; release notes: CHANGELOG.md (0209597).
 
 ## 5. Evidence status
