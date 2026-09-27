@@ -9,6 +9,7 @@ import type { GgufMetadata, ModelInfo } from '../../shared/types'
 
 const CHUNK = 1 << 20
 const MAX_TENSORS = 1_000_000 // sanity bound against corrupt headers
+const SMALL_ARRAY = 4096
 const T = { U8: 0, I8: 1, U16: 2, I16: 3, U32: 4, I32: 5, F32: 6, BOOL: 7, STRING: 8, ARRAY: 9, U64: 10, I64: 11, F64: 12 } as const
 const FIXED: Record<number, number> = { 0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8 }
 
@@ -76,6 +77,13 @@ class Cursor {
       case T.ARRAY: {
         const elem = await this.u32()
         const n = await this.u64()
+        // Small numeric/bool arrays are layout data (per-layer head_count_kv, sliding_window_pattern): keep them.
+        // Big ones (tokenizer token_type, 150k entries) and string arrays are walked/skipped, never materialized.
+        if (FIXED[elem] !== undefined && elem !== T.ARRAY && n <= SMALL_ARRAY) {
+          const values: unknown[] = []
+          for (let i = 0; i < n; i++) values.push(await this.value(elem))
+          return { arrayLength: n, values }
+        }
         if (FIXED[elem] !== undefined) this.skip(n * FIXED[elem])
         else for (let i = 0; i < n; i++) await this.value(elem) // strings / nested arrays: walk lengths only
         return { arrayLength: n }
@@ -88,6 +96,9 @@ class Cursor {
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 const str = (v: unknown): string | null => (typeof v === 'string' ? v : null)
 const arrLen = (v: unknown): number | null => (v && typeof v === 'object' && 'arrayLength' in v ? (v as { arrayLength: number }).arrayLength : null)
+const arrVals = (v: unknown): unknown[] | null => (v && typeof v === 'object' && 'values' in v ? (v as { values: unknown[] }).values : null)
+const nums = (v: unknown): number[] | null => { const a = arrVals(v); return a && a.every((x) => typeof x === 'number') ? (a as number[]) : null }
+const bools = (v: unknown): boolean[] | null => { const a = arrVals(v); return a && a.every((x) => typeof x === 'boolean') ? (a as boolean[]) : null }
 
 /** Parse GGUF header + tensor infos. Throws on non-GGUF / corrupt files. */
 export async function readGgufMetadata(path: string): Promise<GgufMetadata> {
@@ -119,7 +130,14 @@ export async function readGgufMetadata(path: string): Promise<GgufMetadata> {
     const a = (k: string) => (arch ? kv.get(`${arch}.${k}`) : undefined)
     const blockCount = num(a('block_count'))
     const headCount = num(a('attention.head_count'))
-    const headCountKv = num(a('attention.head_count_kv')) ?? headCount
+    // head_count_kv is an ARRAY on per-layer-GQA archs (gemma4: [8,8,8,8,8,2,…]); headsKv = max, per-layer kept.
+    const kvArr = nums(a('attention.head_count_kv'))
+    const headCountKv = num(a('attention.head_count_kv')) ?? (kvArr?.length ? Math.max(...kvArr) : null) ?? headCount
+    const fullAttentionInterval = num(a('full_attention_interval')) // qwen35 hybrid: only every Nth layer has KV
+    const swaPattern = bools(a('attention.sliding_window_pattern'))
+    const slidingWindow = num(a('attention.sliding_window'))
+    const keyLenSwa = num(a('attention.key_length_swa'))
+    const valLenSwa = num(a('attention.value_length_swa'))
     const embeddingLength = num(a('embedding_length'))
     const fileType = num(kv.get('general.file_type'))
     const declaredParams = num(kv.get('general.parameter_count'))
@@ -151,16 +169,39 @@ export async function readGgufMetadata(path: string): Promise<GgufMetadata> {
       keyLength: keyLen,
       valueLength: valLen,
       nVocab: num(a('vocab_size')) ?? arrLen(kv.get('tokenizer.ggml.tokens')),
-      slidingWindow: num(a('attention.sliding_window')),
+      slidingWindow,
+      headCountKvPerLayer: kvArr,
+      fullAttentionInterval,
+      slidingWindowPattern: swaPattern,
+      keyLengthSwa: keyLenSwa,
+      valueLengthSwa: valLenSwa,
       headDim: { value: headDim, kind: keyLen != null ? 'declared' : 'estimated' },
       estimated: {
-        // f16 K+V: blockCount * headCountKv * (dk + dv) * 2 bytes
-        kvCacheBytesPerToken: blockCount && headCountKv && headDim && dv ? blockCount * headCountKv * (headDim + dv) * 2 : null
+        kvCacheBytesPerToken: blockCount && headCountKv && headDim && dv
+          ? kvBytesPerToken({ blockCount, headCountKv, kvArr, fullAttentionInterval, swaPattern, dk: headDim, dv, dkSwa: keyLenSwa, dvSwa: valLenSwa })
+          : null
       }
     }
   } finally {
     await fh.close()
   }
+}
+
+/** f16 K+V bytes for one token (below any sliding window), layer by layer: recurrent layers (hybrid archs) hold no
+ *  KV, SWA layers may use their own head dims. Same layout rules as candidates.kvLayout. */
+function kvBytesPerToken(o: {
+  blockCount: number; headCountKv: number; kvArr: number[] | null; fullAttentionInterval: number | null
+  swaPattern: boolean[] | null; dk: number; dv: number; dkSwa: number | null; dvSwa: number | null
+}): number {
+  let bytes = 0
+  for (let i = 0; i < o.blockCount; i++) {
+    if (o.fullAttentionInterval && (i + 1) % o.fullAttentionInterval !== 0) continue
+    const swa = !!o.swaPattern?.[i]
+    const k = swa ? (o.dkSwa ?? o.dk) : o.dk
+    const v = swa ? (o.dvSwa ?? o.dv) : o.dv
+    bytes += (o.kvArr?.[i] ?? o.headCountKv) * (k + v) * 2
+  }
+  return bytes
 }
 
 function quantFromFilename(path: string): string | null {
@@ -200,7 +241,9 @@ export function toModelMeta(info: ModelInfo): { meta: ModelMeta } | { meta: null
     meta: {
       id: info.path, name: g.name ?? info.name, fileBytes: g.fileSizeBytes, paramCount: g.parameterCount.value, quant: g.quantName,
       arch: g.arch!, ctxTrain: g.contextLength, layers: g.blockCount!, nEmbd: g.embeddingLength!, heads: g.headCount!,
-      headsKv: g.headCountKv ?? g.headCount!, keyLength: g.keyLength, valueLength: g.valueLength, nVocab: g.nVocab!, slidingWindow: g.slidingWindow
+      headsKv: g.headCountKv ?? g.headCount!, keyLength: g.keyLength, valueLength: g.valueLength, nVocab: g.nVocab!, slidingWindow: g.slidingWindow,
+      headsKvPerLayer: g.headCountKvPerLayer, fullAttentionInterval: g.fullAttentionInterval, slidingWindowPattern: g.slidingWindowPattern,
+      keyLengthSwa: g.keyLengthSwa, valueLengthSwa: g.valueLengthSwa
     }
   }
 }

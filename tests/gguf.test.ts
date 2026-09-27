@@ -8,7 +8,7 @@ import { findGgufModels, readGgufMetadata, toModelMeta } from '../src/core/model
 const u32 = (n: number) => { const b = Buffer.alloc(4); b.writeUInt32LE(n); return b }
 const u64 = (n: number) => { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(n)); return b }
 const gstr = (s: string) => Buffer.concat([u64(Buffer.byteLength(s)), Buffer.from(s)])
-type Kv = [string, 'u32' | 'str' | 'f32' | 'bool' | 'strarr' | 'i32arr', unknown]
+type Kv = [string, 'u32' | 'str' | 'f32' | 'bool' | 'strarr' | 'i32arr' | 'u32arr' | 'boolarr', unknown]
 function kvBytes([k, t, v]: Kv): Buffer {
   const val = {
     u32: () => Buffer.concat([u32(4), u32(v as number)]),
@@ -16,7 +16,9 @@ function kvBytes([k, t, v]: Kv): Buffer {
     bool: () => Buffer.concat([u32(7), Buffer.from([v ? 1 : 0])]),
     str: () => Buffer.concat([u32(8), gstr(v as string)]),
     strarr: () => Buffer.concat([u32(9), u32(8), u64((v as string[]).length), ...(v as string[]).map(gstr)]),
-    i32arr: () => Buffer.concat([u32(9), u32(5), u64((v as number[]).length), ...(v as number[]).map((n) => u32(n))])
+    i32arr: () => Buffer.concat([u32(9), u32(5), u64((v as number[]).length), ...(v as number[]).map((n) => u32(n))]),
+    u32arr: () => Buffer.concat([u32(9), u32(4), u64((v as number[]).length), ...(v as number[]).map((n) => u32(n))]),
+    boolarr: () => Buffer.concat([u32(9), u32(7), u64((v as boolean[]).length), Buffer.from((v as boolean[]).map((b) => (b ? 1 : 0)))])
   }[t]()
   return Buffer.concat([gstr(k), val])
 }
@@ -63,6 +65,46 @@ describe('readGgufMetadata', () => {
     })
     const mm = toModelMeta({ id: p, name: 'tiny', path: p, sizeBytes: 1, runtime: 'llamacpp', meta: m })
     expect(mm.meta).toMatchObject({ id: p, arch: 'llama', layers: 2, heads: 4, headsKv: 2, nEmbd: 64, nVocab: 5000, quant: 'Q4_K_M', ctxTrain: 4096 })
+  })
+
+  it('reads per-layer KV heads + SWA pattern (gemma4-like) and computes KV per token layer by layer', async () => {
+    const p = join(dir, 'gemma-like.gguf')
+    writeFileSync(p, gguf(3, [
+      ['general.architecture', 'str', 'gemma4'],
+      ['gemma4.block_count', 'u32', 6], ['gemma4.embedding_length', 'u32', 1024], ['gemma4.attention.head_count', 'u32', 8],
+      ['gemma4.attention.head_count_kv', 'u32arr', [8, 8, 8, 8, 8, 2]],
+      ['gemma4.attention.sliding_window', 'u32', 512],
+      ['gemma4.attention.sliding_window_pattern', 'boolarr', [true, true, true, true, true, false]],
+      ['gemma4.attention.key_length_swa', 'u32', 256], ['gemma4.attention.value_length_swa', 'u32', 256],
+      ['tokenizer.ggml.tokens', 'strarr', ['a', 'b']]
+    ], [[4]]))
+    const m = await readGgufMetadata(p)
+    expect(m).toMatchObject({
+      headCountKv: 8, headCountKvPerLayer: [8, 8, 8, 8, 8, 2], slidingWindow: 512,
+      slidingWindowPattern: [true, true, true, true, true, false], keyLengthSwa: 256, valueLengthSwa: 256, fullAttentionInterval: null
+    })
+    // 5 SWA layers × 8 heads × (256+256) × 2 B + 1 full layer × 2 heads × (128+128) × 2 B
+    expect(m.estimated.kvCacheBytesPerToken).toBe(5 * 8 * 512 * 2 + 2 * 256 * 2)
+    const mm = toModelMeta({ id: p, name: 'g', path: p, sizeBytes: 1, runtime: 'llamacpp', meta: m }).meta!
+    expect(mm).toMatchObject({ headsKv: 8, headsKvPerLayer: [8, 8, 8, 8, 8, 2], slidingWindowPattern: [true, true, true, true, true, false], keyLengthSwa: 256 })
+  })
+
+  it('hybrid layout (qwen35-like full_attention_interval): only every Nth layer holds KV', async () => {
+    const p = join(dir, 'hybrid.gguf')
+    writeFileSync(p, gguf(3, [
+      ['general.architecture', 'str', 'qwen35'],
+      ['qwen35.block_count', 'u32', 8], ['qwen35.embedding_length', 'u32', 1024], ['qwen35.attention.head_count', 'u32', 8],
+      ['qwen35.attention.head_count_kv', 'u32', 2], ['qwen35.full_attention_interval', 'u32', 4]
+    ], []))
+    const m = await readGgufMetadata(p)
+    expect(m.fullAttentionInterval).toBe(4)
+    expect(m.estimated.kvCacheBytesPerToken).toBe(2 * 2 * (128 + 128) * 2) // layers 3 and 7 only
+  })
+
+  it('big numeric arrays (tokenizer token_type) are still skipped, not materialized', async () => {
+    const p = join(dir, 'big.gguf')
+    writeFileSync(p, gguf(3, [['general.architecture', 'str', 'llama'], ['llama.attention.head_count_kv', 'i32arr', Array.from({ length: 5000 }, () => 2)]], []))
+    expect((await readGgufMetadata(p)).headCountKvPerLayer).toBeNull()
   })
 
   it('toModelMeta refuses models missing planner-critical fields', () => {

@@ -74,6 +74,14 @@ export interface GgufMetadata {
   /** <arch>.vocab_size, else the length of tokenizer.ggml.tokens. */
   nVocab: number | null
   slidingWindow: number | null
+  /** <arch>.attention.head_count_kv when it is a per-layer array (then headCountKv = its max). */
+  headCountKvPerLayer: number[] | null
+  /** Hybrid archs (qwen35): only every Nth layer is full attention and holds KV. */
+  fullAttentionInterval: number | null
+  /** true = sliding-window layer. */
+  slidingWindowPattern: boolean[] | null
+  keyLengthSwa: number | null
+  valueLengthSwa: number | null
   headDim: { value: number | null; kind: 'declared' | 'estimated' }
   estimated: { kvCacheBytesPerToken: number | null }
 }
