@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- Use CIM creation time for Windows process identity, restoring session completion after `0a20d21`..`bbe12dc` (`127d96f`).
+- Keep standalone quality MEASURED and disclose an unverified thinking state (`127d96f`).
+- Disclose paired quality, answer-time ratio and estimated answer time in generation choices (`340f3ee`).
+- Cancel the typeperf VRAM preflight through an AbortSignal (`7e122fe`).
+- Supervise session preflight and reap owned process chains (`0d74210`).
+- Supervise A/B case teardown and separate host buffer evidence (`147a5a8`).
+- Verify measurement dependencies before and after launch (`9e34367`).
+- Bind exported session evidence to the runner log identity (`b8328e2`).
+- Bound process reaping checks and hash probes (`3ad0641`).
+- Reject ambiguous port ownership and abort when the server is lost (`3a52076`).
+- Align selected HIP device metadata with ROCm0 (`f0fda83`).
+- Reserve and checkpoint session dumps atomically (`b647ed9`).
+
 ## 0.1.0 — 2026-09-27 / 2026-09-28 (first release, Windows 11)
 
 Local AI Optimizer benchmarks local LLM configurations on your own machine with llama.cpp. From measured data it
