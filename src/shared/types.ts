@@ -69,6 +69,11 @@ export interface GgufMetadata {
   fileType: number | null
   quantName: string | null // from general.file_type, else parsed from the filename
   fileSizeBytes: number
+  keyLength: number | null
+  valueLength: number | null
+  /** <arch>.vocab_size, else the length of tokenizer.ggml.tokens. */
+  nVocab: number | null
+  slidingWindow: number | null
   headDim: { value: number | null; kind: 'declared' | 'estimated' }
   estimated: { kvCacheBytesPerToken: number | null }
 }
@@ -136,6 +141,8 @@ export interface RendererApi {
   latestRecommendation(w: WorkloadId): Promise<{ sessionId: number; recommendation: Recommendation } | null>
   startBench(req: SessionRequest): Promise<StartResult>
   cancelBench(): Promise<{ ok: boolean; error?: string }>
+  /** Continue a cancelled/failed session; already-measured steps are reused. */
+  resumeBench(sessionId: number): Promise<StartResult>
   /** Subscribe to bench:event; returns an unsubscribe function. */
   onBenchEvent(cb: (e: SessionEvent) => void): () => void
   scanSystem(): Promise<SystemProfile>
@@ -155,6 +162,10 @@ export interface SessionPayload {
   /** Declared VRAM of the bench GPU, for cliff/spill rules. */
   vramBytes: number | null
   candidates: { config: CandidateConfig; model: ModelMeta }[]
+  /** Original request (for resume). */
+  request?: SessionRequest
+  /** Set when status = failed. */
+  error?: string
 }
 
 export interface SessionSummary {
@@ -164,6 +175,7 @@ export interface SessionSummary {
   workload: WorkloadId
   demo: boolean
   label: string | null
+  error: string | null
   candidateCount: number
   bestConfigId: string | null
 }

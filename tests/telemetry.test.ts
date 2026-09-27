@@ -48,6 +48,34 @@ describe('typeperf parser', () => {
     expect(samples[1].ramAvailBytes).toBeNull() // blank cell
   })
 
+  it('drops out-of-range percentages (PDH glitch) instead of reporting them', () => {
+    const header = String.raw`"(PDH-CSV 4.0)","\\HOST\Processor(_Total)\% Processor Time","\\HOST\GPU Engine(pid_1_luid_0x00000000_0x00016058_phys_0_eng_0_engtype_3D)\Utilization Percentage"`
+    const p = new TypeperfParser({ gpuLuid: '0x00000000_0x00016058' })
+    const rows = [header, '"t","12.5","13000000000000.0"', '"t","250","40.0"', '"t","20","40.0"'].map((l) => p.line(l)).filter(Boolean)
+    expect(rows).toHaveLength(1) // both glitch rows dropped whole
+    expect(rows[0]).toMatchObject({ cpuPct: 20, gpuUtilPct: 40 })
+    expect(p.droppedRows).toBe(2)
+  })
+
+  it('accepts trailing -1 placeholders but drops rows that do not line up with the header', () => {
+    const header = String.raw`"(PDH-CSV 4.0)","\\H\Memory\Available MBytes","\\H\Processor(_Total)\% Processor Time"`
+    const p = new TypeperfParser({})
+    p.line(header)
+    expect(p.line('"t","11433.0","7.5","-1"')).toMatchObject({ ramAvailBytes: 11433 * 1024 * 1024, cpuPct: 7.5 }) // real: missing Process V2 instance
+    expect(p.line('"t","11433.0"')).toBeNull() // short row
+    expect(p.line('"t","65.6","11433.0","7.5"')).toBeNull() // extra non-placeholder cell: misaligned
+    expect(p.droppedRows).toBe(2)
+  })
+
+  it('does not lock onto an adapter where the pid holds only a few MB (ngl=0 case)', () => {
+    const H = String.raw`"(PDH-CSV 4.0)","\\H\GPU Adapter Memory(luid_0x00000000_0x00016058_phys_0)\Dedicated Usage","\\H\GPU Adapter Memory(luid_0x00000000_0x000190BD_phys_0)\Dedicated Usage","\\H\GPU Process Memory(pid_7_luid_0x00000000_0x00016058_phys_0)\Dedicated Usage","\\H\GPU Process Memory(pid_7_luid_0x00000000_0x000190BD_phys_0)\Dedicated Usage"`
+    const p = new TypeperfParser({ pid: 7 })
+    p.line(H)
+    const s = p.line('"t","1800000000","0","13090816","13500000"')!
+    expect(p.luid).toBe('0x00000000_0x00016058') // adapter-max fallback, not the iGPU
+    expect(s.vramDedicatedBytes).toBe(1800000000)
+  })
+
   it('ignores non-CSV status lines and builds pid-safe counter paths', () => {
     const p = new TypeperfParser({})
     expect(p.line('Exiting, please wait...')).toBeNull()

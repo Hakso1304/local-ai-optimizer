@@ -20,6 +20,7 @@ export interface TelemetrySample {
 }
 export type Field = Exclude<keyof TelemetrySample, 'ts'>
 const FIELDS: Field[] = ['cpuPct', 'ramAvailBytes', 'gpuUtilPct', 'vramDedicatedBytes', 'vramSharedBytes', 'procRamPrivateBytes', 'procVramDedicatedBytes', 'procVramSharedBytes']
+const PROC_LUID_MIN_BYTES = 128 * 1024 * 1024
 const PROC_FIELDS: Field[] = ['procRamPrivateBytes', 'procVramDedicatedBytes', 'procVramSharedBytes']
 
 export interface SamplerOpts {
@@ -67,6 +68,7 @@ export class TypeperfParser {
   luid: string | null
   private luidLocked: boolean
   readonly unavailable: Partial<Record<Field, string>> = {}
+  droppedRows = 0
 
   constructor(private o: SamplerOpts) {
     this.luid = o.gpuLuid?.toLowerCase() ?? null
@@ -81,11 +83,22 @@ export class TypeperfParser {
       this.checkHeader()
       return null
     }
+    // Exact-instance counters that don't exist (e.g. \Process V2(name:pid) before/after the process) are left out
+    // of the header but still emit a "-1" cell at their position; ours is last, so it shows up as a trailing extra.
+    // Any other length mismatch means the row doesn't line up with the header: drop it rather than mis-assign cells.
+    const extra = cells.slice(this.cols.length)
+    if (cells.length < this.cols.length || extra.some((x) => x.replace(/"/g, '').trim() !== '-1')) { this.droppedRows++; return null }
     const vals = new Map<Col, number>()
+    let glitch = false
     this.cols.forEach((c, i) => {
       const v = Number(cells[i]?.trim())
-      if (c && cells[i]?.trim() !== '' && Number.isFinite(v)) vals.set(c, v)
+      if (!c || cells[i]?.trim() === '' || !Number.isFinite(v)) return
+      if (/Percent|^% /.test(c.counter) && (v < 0 || v > 100)) glitch = true
+      vals.set(c, v)
     })
+    // PDH glitch rows (1.3e13 % util in #3's calibration; 62 MB "available" RAM + 794 KB private WS in the E2E run)
+    // carry an impossible percentage and garbage in the other cells too: drop the whole row, never report it.
+    if (glitch) { this.droppedRows++; return null }
     return this.sample(vals)
   }
 
@@ -119,7 +132,8 @@ export class TypeperfParser {
       return top
     }
     const [procLuid, procVal] = best('GPU Process Memory')
-    if (procLuid && procVal > 0) {
+    // ≥128 MiB: at ngl=0 llama-server holds ~13 MB on BOTH adapters, which picked the iGPU in the E2E run.
+    if (procLuid && procVal >= PROC_LUID_MIN_BYTES) {
       this.luidLocked = true
       return (this.luid = procLuid)
     }

@@ -16,11 +16,23 @@ const modelPath = mode === 'wrong' ? 'C:\\somewhere\\other.gguf' : arg('-m')
 http
   .createServer((req, res) => {
     if (req.url === '/health') return res.end(JSON.stringify({ status: 'ok' }))
-    if (req.url === '/props') return res.end(JSON.stringify({ model_path: modelPath }))
+    if (req.url === '/props') {
+      const nCtx = mode === 'drift' ? Number(arg('-c')) / 2 : Number(arg('-c'))
+      return res.end(JSON.stringify({ model_path: modelPath, default_generation_settings: { n_ctx: nCtx } }))
+    }
+    if (req.url === '/completion' && mode === 'http400') {
+      return res.writeHead(400).end(JSON.stringify({ error: { code: 400, type: 'exceed_context_size_error', message: 'request (40000 tokens) exceeds the available context size (32768 tokens)' } }))
+    }
     if (req.url === '/completion') {
       res.writeHead(200, { 'content-type': 'text/event-stream' })
       res.write('data: {"content":"Hi","stop":false}\n\n')
       res.end('data: {"content":"","stop":true,"stop_type":"limit","timings":{"prompt_n":3,"prompt_ms":1.5,"prompt_per_second":2000,"predicted_n":1,"predicted_ms":2,"predicted_per_second":500}}\n\n')
+      return
+    }
+    if (req.url === '/tokenize') {
+      let body = ''
+      req.on('data', (d) => (body += d))
+      req.on('end', () => res.end(JSON.stringify({ tokens: JSON.parse(body).content.split(/\s+/).filter(Boolean).map((_, i) => i) })))
       return
     }
     res.writeHead(404).end()

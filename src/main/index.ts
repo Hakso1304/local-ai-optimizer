@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { freemem } from 'node:os'
 import type { DatabaseSync } from 'node:sqlite'
 import { join } from 'node:path'
 import { scanSystem } from '../core/system/scanner'
@@ -7,11 +8,17 @@ import { detectRuntimes } from '../core/runtimes'
 import { LlamaCppBackend, killStaleServer } from '../core/runtimes/llamacpp'
 import { pickDiscreteDevice } from '../core/runtimes/llamacpp/parse'
 import { openDb } from '../core/storage/db'
-import { getSession, latestRecommendation, listSessions, seedDemoSession } from '../core/storage/sessions'
+import { getSession, getSessionRequest, latestRecommendation, listSessions, makeSessionStorage, seedDemoSession, type PlanFor } from '../core/storage/sessions'
 import { WORKLOADS } from '../core/scoring/workloads'
+import { val } from '../core/scoring/cliff'
+import { runSession, type SessionStorage } from '../core/benchmark/session'
+import { DEFAULT_CANDIDATE_RULES, generateCandidates, machineFromProfile } from '../core/benchmark/candidates'
+import { findGgufModels, toModelMeta } from '../core/models/gguf'
+import { startSampler } from '../core/telemetry/sampler'
+import { evaluateAsync } from '../core/quality'
 import type { SessionEvent, SessionRequest } from '../shared/bench-events'
-import type { WorkloadId } from '../shared/bench-types'
-import type { AppSettings, SmokeResult } from '../shared/types'
+import type { ModelMeta, WorkloadId } from '../shared/bench-types'
+import type { AppSettings, SmokeResult, StartResult, SystemProfile } from '../shared/types'
 
 // ponytail: app.getAppPath() is the project root in dev/preview; revisit for packaged builds.
 const llamaDir = () => join(app.getAppPath(), 'vendor', 'llama.cpp')
@@ -62,12 +69,19 @@ ipcMain.handle('workloads:list', () => Object.values(WORKLOADS))
 ipcMain.handle('sessions:list', () => listSessions(needDb()))
 ipcMain.handle('sessions:get', (_e, id: number) => getSession(needDb(), Number(id)))
 ipcMain.handle('recommendation:latest', (_e, w: WorkloadId) => latestRecommendation(needDb(), w))
-// TODO(next task): wire #1's session runner; it reports progress through sendBenchEvent().
-ipcMain.handle('bench:start', (_e, _req: SessionRequest) => ({ ok: false as const, error: 'runner not wired yet' }))
-ipcMain.handle('bench:cancel', () => ({ ok: false as const, error: 'runner not wired yet' }))
+ipcMain.handle('bench:start', (_e, req: SessionRequest) => startSession(req))
+ipcMain.handle('bench:resume', (_e, id: number) => {
+  const req = getSessionRequest(needDb(), Number(id))
+  return req ? startSession({ ...req, resumeSessionId: String(id) }) : { ok: false, error: `session ${id} has no stored request` }
+})
+ipcMain.handle('bench:cancel', () => {
+  if (!active) return { ok: false, error: 'no benchmark running' }
+  active.abort()
+  return { ok: true }
+})
 ipcMain.handle('bench:smoke', async (_e, modelPath: string): Promise<SmokeResult> => {
   if (typeof modelPath !== 'string' || !modelDirs().some((d) => modelPath.startsWith(d))) throw new Error('model path not in a configured model dir')
-  if (smokeBusy) throw new Error('a smoke run is already in progress')
+  if (smokeBusy || active) throw new Error('a smoke run or benchmark is already in progress')
   smokeBusy = true
   try {
     // Deliberately tiny: ctx 2048, 32 tokens, one warmup + one measured request.
@@ -83,6 +97,58 @@ ipcMain.handle('bench:smoke', async (_e, modelPath: string): Promise<SmokeResult
     smokeBusy = false
   }
 })
+
+// ---- Benchmark session (one at a time, in the main process) ----
+let active: AbortController | null = null
+let profileCache: SystemProfile | null = null
+
+async function startSession(req: SessionRequest): Promise<StartResult> {
+  if (active || smokeBusy) return { ok: false, error: 'a benchmark or smoke run is already in progress' }
+  if (!req || !(req.workload in WORKLOADS) || !Array.isArray(req.modelIds) || !req.modelIds.length) return { ok: false, error: 'pick a workload and at least one model' }
+  const dirs = modelDirs()
+  if (!req.modelIds.every((id) => typeof id === 'string' && dirs.some((d) => id.startsWith(d)))) return { ok: false, error: 'model path not in a configured model dir' }
+  const ctl = new AbortController()
+  active = ctl // claim before the first await so a double click can't start two sessions
+  try {
+    profileCache ??= await scanSystem() // ponytail: static facts cached per app run; RAM is re-read live via freemem()
+    const [infos, devices, runtime] = await Promise.all([findGgufModels(dirs), llama.listDevices(), llama.detect()])
+    const device = pickDiscreteDevice(devices)?.id ?? null
+    const models: ModelMeta[] = []
+    for (const id of req.modelIds) {
+      const info = infos.find((m) => m.path === id)
+      const mm = info ? toModelMeta(info) : { meta: null, reason: 'file not found' }
+      if (mm.meta) models.push(mm.meta)
+      else sendBenchEvent({ sessionId: '', type: 'log', level: 'warn', msg: `${id}: ${mm.reason}; skipped` })
+    }
+    if (!models.length) throw new Error('none of the selected models can be benchmarked')
+    const backendKind = device ? 'vulkan' as const : 'cpu' as const
+    const profile = profileCache
+    // Same deterministic candidate generation the runner does, so stored sessions carry full configs.
+    const planFor: PlanFor = (r) => {
+      const machine = machineFromProfile(profile, device)
+      const rules = { ...DEFAULT_CANDIDATE_RULES, ...r.candidateRules }
+      return {
+        vramBytes: val(machine.vramBytes, true),
+        candidates: models.flatMap((model) => generateCandidates(machine, model, { backend: backendKind }, WORKLOADS[r.workload], rules).candidates.map((config) => ({ config, model })))
+      }
+    }
+    let gotId: (id: string) => void = () => {}
+    const idReady = new Promise<string>((r) => { gotId = r })
+    const base = makeSessionStorage(needDb(), planFor)
+    const storage: SessionStorage = { ...base, createSession: async (s) => { const id = await base.createSession(s); gotId(id); return id } }
+    if (req.resumeSessionId) gotId(req.resumeSessionId)
+    const run = runSession(req, {
+      backend: () => llama, startSampler: (pid) => startSampler({ pid }), storage, machine: profile, gpuDevice: device, backendKind,
+      models, clock: Date, readRamAvailableBytes: () => freemem(), evaluate: evaluateAsync, signal: ctl.signal,
+      runtimeVersion: runtime.version ?? null
+    }, sendBenchEvent).finally(() => { if (active === ctl) active = null })
+    const id = await Promise.race([idReady, run.then(() => null)])
+    return id ? { ok: true, sessionId: id } : { ok: false, error: 'session ended before it started (see event log)' }
+  } catch (e) {
+    if (active === ctl) active = null
+    return { ok: false, error: (e as Error).message }
+  }
+}
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -105,5 +171,5 @@ app.whenReady().then(async () => {
   createWindow()
 })
 app.on('window-all-closed', () => app.quit())
-app.on('before-quit', () => llama.killSync())
+app.on('before-quit', () => { active?.abort(); llama.killSync() })
 process.on('exit', () => llama.killSync())

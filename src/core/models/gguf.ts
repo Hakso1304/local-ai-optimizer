@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { open, type FileHandle } from 'node:fs/promises'
 import { basename, join } from 'node:path'
+import type { ModelMeta } from '../../shared/bench-types'
 import type { GgufMetadata, ModelInfo } from '../../shared/types'
 
 // GGUF v2/v3 header reader (docs/DESIGN.md §2.6). Streams through the file with a 1 MiB window:
@@ -56,7 +57,7 @@ class Cursor {
     return this.buf.toString('utf8', at, at + len)
   }
 
-  /** Read a scalar/string value; arrays are skipped and yield undefined. */
+  /** Read a scalar/string value; array contents are skipped and yield only { arrayLength }. */
   async value(type: number): Promise<unknown> {
     const at = FIXED[type] !== undefined ? await this.need(FIXED[type]) : -1
     const b = this.buf
@@ -77,7 +78,7 @@ class Cursor {
         const n = await this.u64()
         if (FIXED[elem] !== undefined) this.skip(n * FIXED[elem])
         else for (let i = 0; i < n; i++) await this.value(elem) // strings / nested arrays: walk lengths only
-        return undefined
+        return { arrayLength: n }
       }
       default: throw new Error(`unknown GGUF value type ${type} at byte ${this.pos}`)
     }
@@ -86,6 +87,7 @@ class Cursor {
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 const str = (v: unknown): string | null => (typeof v === 'string' ? v : null)
+const arrLen = (v: unknown): number | null => (v && typeof v === 'object' && 'arrayLength' in v ? (v as { arrayLength: number }).arrayLength : null)
 
 /** Parse GGUF header + tensor infos. Throws on non-GGUF / corrupt files. */
 export async function readGgufMetadata(path: string): Promise<GgufMetadata> {
@@ -146,6 +148,10 @@ export async function readGgufMetadata(path: string): Promise<GgufMetadata> {
       fileType,
       quantName: fileType != null ? (FTYPE[fileType] ?? `ftype_${fileType}`) : quantFromFilename(path),
       fileSizeBytes: size,
+      keyLength: keyLen,
+      valueLength: valLen,
+      nVocab: num(a('vocab_size')) ?? arrLen(kv.get('tokenizer.ggml.tokens')),
+      slidingWindow: num(a('attention.sliding_window')),
       headDim: { value: headDim, kind: keyLen != null ? 'declared' : 'estimated' },
       estimated: {
         // f16 K+V: blockCount * headCountKv * (dk + dv) * 2 bytes
@@ -182,4 +188,19 @@ export async function findGgufModels(dirs: string[]): Promise<ModelInfo[]> {
       }
     })
   )
+}
+
+/** GGUF facts → the scorer's ModelMeta. null (with reason) when a field the planner needs is missing. */
+export function toModelMeta(info: ModelInfo): { meta: ModelMeta } | { meta: null; reason: string } {
+  const g = info.meta
+  if (!g) return { meta: null, reason: info.metaError ?? 'no GGUF metadata' }
+  const missing = (['arch', 'blockCount', 'embeddingLength', 'headCount', 'nVocab'] as const).filter((k) => g[k] == null)
+  if (missing.length) return { meta: null, reason: `GGUF lacks ${missing.join(', ')}` }
+  return {
+    meta: {
+      id: info.path, name: g.name ?? info.name, fileBytes: g.fileSizeBytes, paramCount: g.parameterCount.value, quant: g.quantName,
+      arch: g.arch!, ctxTrain: g.contextLength, layers: g.blockCount!, nEmbd: g.embeddingLength!, heads: g.headCount!,
+      headsKv: g.headCountKv ?? g.headCount!, keyLength: g.keyLength, valueLength: g.valueLength, nVocab: g.nVocab!, slidingWindow: g.slidingWindow
+    }
+  }
 }

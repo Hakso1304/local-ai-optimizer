@@ -5,13 +5,16 @@ import { applyEvent, initialLive } from './benchState'
 import { fmtCtx, gib, num } from './ui'
 
 const v = (x: number | null | undefined, f: (n: number) => string) => (x == null ? '—' : f(x))
+const LADDER = [2048, 4096, 8192, 16384, 32768, 65536, 131072]
 
-export function BenchmarkPage() {
+export function BenchmarkPage({ onDone }: { onDone: (sessionId: number) => void }) {
   const [workloads, setWorkloads] = useState<WorkloadProfile[]>([])
   const [workload, setWorkload] = useState<WorkloadId | null>(null)
   const [models, setModels] = useState<ModelInfo[] | null>(null)
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [msg, setMsg] = useState<string | null>(null)
+  const [maxCtx, setMaxCtx] = useState<number>(0) // 0 = no cap (candidate rules decide)
+  const [quality, setQuality] = useState(true)
   const [live, dispatch] = useReducer(applyEvent, initialLive)
 
   useEffect(() => {
@@ -24,10 +27,15 @@ export function BenchmarkPage() {
   const start = async () => {
     if (!workload) return
     setMsg(null)
-    const r = await window.api.startBench({ workload, modelIds: [...picked] })
+    const r = await window.api.startBench({
+      workload, modelIds: [...picked], runQuality: quality, ...(maxCtx ? { ladder: LADDER.filter((c) => c <= maxCtx) } : {})
+    })
     if (!r.ok) setMsg(r.error)
   }
   const cancel = async () => { const r = await window.api.cancelBench(); if (!r.ok) setMsg(r.error ?? 'cancel failed') }
+  useEffect(() => {
+    if (live.status === 'done' && live.sessionId) onDone(Number(live.sessionId))
+  }, [live.status, live.sessionId, onDone])
   const t = live.telemetry
   const running = live.status === 'running'
 
@@ -40,6 +48,13 @@ export function BenchmarkPage() {
             {workloads.map((w) => <option key={w.id} value={w.id}>{w.label}</option>)}
           </select>
         </label>
+        <label>Max ctx{' '}
+          <select value={maxCtx} onChange={(e) => setMaxCtx(Number(e.target.value))} disabled={running}>
+            <option value={0}>auto</option>
+            {LADDER.map((c) => <option key={c} value={c}>{fmtCtx(c)}</option>)}
+          </select>
+        </label>
+        <label><input type="checkbox" checked={quality} onChange={(e) => setQuality(e.target.checked)} disabled={running} /> quality suite</label>
         <button onClick={() => void start()} disabled={running || !picked.size}>Start</button>
         <button onClick={() => void cancel()} disabled={!running}>Cancel</button>
       </header>

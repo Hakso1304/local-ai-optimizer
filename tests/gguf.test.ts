@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { findGgufModels, readGgufMetadata } from '../src/core/models/gguf'
+import { findGgufModels, readGgufMetadata, toModelMeta } from '../src/core/models/gguf'
 
 // Minimal GGUF writer: enough of the spec to exercise every code path in the reader.
 const u32 = (n: number) => { const b = Buffer.alloc(4); b.writeUInt32LE(n); return b }
@@ -56,8 +56,17 @@ describe('readGgufMetadata', () => {
       embeddingLength: 64, fileType: 15, quantName: 'Q4_K_M',
       parameterCount: { value: 6400 + 4096 + 64, kind: 'declared', source: 'sum of tensor dims' },
       headDim: { value: 16, kind: 'estimated' },
+      nVocab: 5000, // from the skipped tokenizer.ggml.tokens array length
+      keyLength: null,
+      slidingWindow: null,
       estimated: { kvCacheBytesPerToken: 2 * 2 * (16 + 16) * 2 }
     })
+    const mm = toModelMeta({ id: p, name: 'tiny', path: p, sizeBytes: 1, runtime: 'llamacpp', meta: m })
+    expect(mm.meta).toMatchObject({ id: p, arch: 'llama', layers: 2, heads: 4, headsKv: 2, nEmbd: 64, nVocab: 5000, quant: 'Q4_K_M', ctxTrain: 4096 })
+  })
+
+  it('toModelMeta refuses models missing planner-critical fields', () => {
+    expect(toModelMeta({ id: 'x', name: 'x', path: 'x', sizeBytes: 1, runtime: 'llamacpp', meta: null, metaError: 'bad magic' })).toEqual({ meta: null, reason: 'bad magic' })
   })
 
   it('accepts v2, prefers general.parameter_count, and falls back to filename quant', async () => {
@@ -83,6 +92,7 @@ describe('readGgufMetadata', () => {
       arch: 'qwen2', sizeLabel: '630M', contextLength: 32768, blockCount: 24, embeddingLength: 896, headCount: 14, headCountKv: 2,
       fileType: 7, quantName: 'Q8_0', estimated: { kvCacheBytesPerToken: 12288 }
     })
+    expect(m.nVocab).toBeGreaterThan(150_000)
     expect(m.parameterCount.value).toBeGreaterThan(400e6)
   })
 })

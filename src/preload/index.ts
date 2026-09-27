@@ -15,6 +15,7 @@ const api: RendererApi = {
   latestRecommendation: (w) => ipcRenderer.invoke('recommendation:latest', w),
   startBench: (req) => ipcRenderer.invoke('bench:start', req),
   cancelBench: () => ipcRenderer.invoke('bench:cancel'),
+  resumeBench: (id) => ipcRenderer.invoke('bench:resume', id),
   onBenchEvent: (cb) => {
     const h = (_e: IpcRendererEvent, ev: SessionEvent) => cb(ev)
     ipcRenderer.on('bench:event', h)

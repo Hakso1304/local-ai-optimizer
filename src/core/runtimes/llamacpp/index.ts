@@ -34,6 +34,20 @@ export function pickVulkanAsset(releases: GhRelease[]): { tag: string; name: str
   return null
 }
 
+/** Server came up with different settings than requested (maps to FailureKind 'config_drift'). */
+export class ConfigDriftError extends Error {
+  readonly failureKind = 'config_drift' as const
+}
+
+/** llama-server error body `{error:{type,message}}` → "type: message"; else the raw text, truncated. */
+function serverError(body: string): string {
+  try {
+    const e = (JSON.parse(body) as { error?: { type?: string; message?: string } }).error
+    if (e?.message) return `${e.type ?? 'error'}: ${e.message}`.slice(0, 300)
+  } catch { /* not JSON */ }
+  return body.slice(0, 300)
+}
+
 export interface ExitInfo {
   code: number | null
   reason: ExitReason
@@ -213,12 +227,18 @@ export class LlamaCppBackend implements InferenceBackend {
       throw new Error('llama-server did not become healthy within 120s')
     }
     const loadTimeMs = performance.now() - t0
-    const props = await getJson<{ model_path?: string }>(`http://127.0.0.1:${this.port}/props`, 2_000).catch(() => null)
+    const props = await getJson<{ model_path?: string; default_generation_settings?: { n_ctx?: number } }>(`http://127.0.0.1:${this.port}/props`, 2_000).catch(() => null)
     if (exited) throw new Error(`${exited}; last log: ${this.log.slice(-10).join(' | ')}`)
     const same = (a: string) => resolve(a).toLowerCase() === resolve(cfg.modelPath).toLowerCase()
     if (!props?.model_path || !same(props.model_path)) {
       await this.unloadModel()
       throw new Error(`wrong server answered on port ${this.port}: /props model_path=${props?.model_path ?? 'n/a'}`)
+    }
+    // #3's 14B run: -c 49152 on a 32K-trained model allocated a 48K KV but served n_ctx 32768 → every request HTTP 400.
+    const nCtx = props.default_generation_settings?.n_ctx
+    if (typeof nCtx === 'number' && nCtx < cfg.contextSize) {
+      await this.unloadModel()
+      throw new ConfigDriftError(`config_drift: requested -c ${cfg.contextSize} but server serves n_ctx ${nCtx}`)
     }
     return { loadTimeMs, declared }
   }
@@ -288,7 +308,7 @@ export class LlamaCppBackend implements InferenceBackend {
         }),
         signal: ctl.signal
       })
-      if (!res.ok || !res.body) throw new Error(`POST /completion -> HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`)
+      if (!res.ok || !res.body) throw new Error(`POST /completion -> HTTP ${res.status}: ${serverError(await res.text())}`)
       const dec = new TextDecoder()
       let buf = ''
       for await (const bytes of res.body) {
@@ -317,9 +337,18 @@ export class LlamaCppBackend implements InferenceBackend {
 
   /** One short discarded request so the measured run doesn't pay first-dispatch costs. Pass the measured
    *  prompt: a 1-token warmup left prefill at 47 tok/s on the 10-token measured run (b11208, RX 9070 XT). */
-  async warmup(prompt = 'Hello'): Promise<void> {
-    const r = await this.runPrompt({ prompt, maxTokens: 8, timeoutMs: 60_000 })
+  async warmup(prompt = 'Hello', timeoutMs = 120_000): Promise<void> {
+    const r = await this.runPrompt({ prompt, maxTokens: 8, timeoutMs })
     if (r.error) throw new Error(`warmup failed: ${r.error}`)
+  }
+
+  /** Token count of `text` with the loaded model's tokenizer (POST /tokenize). */
+  async tokenize(text: string): Promise<number> {
+    const res = await fetch(`http://127.0.0.1:${this.port}/tokenize`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ content: text }), signal: AbortSignal.timeout(30_000)
+    })
+    if (!res.ok) throw new Error(`POST /tokenize -> HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`)
+    return ((await res.json()) as { tokens: unknown[] }).tokens.length
   }
 
   /** Apply the model's chat template (POST /apply-template) so chat-format prompts can go through runPrompt. */

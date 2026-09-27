@@ -39,3 +39,9 @@ export function ScoreBar({ label, score, kind, weight }: { label: string; score:
 export const COMPONENT_LABEL: Record<string, string> = {
   quality: 'Quality', genSpeed: 'Speed', prefillSpeed: 'Prefill', latency: 'Latency', memory: 'Memory', stability: 'Stability', context: 'Context'
 }
+
+/** "32K (scored at 16K)" — recommendedCtx is what to configure; referenceCtx is where speed was scored. */
+export function CtxPick({ recommended, scored }: { recommended: number | null | undefined; scored: number | null | undefined }) {
+  if (recommended == null) return <span className="muted" title="no passing step fits the workload latency tolerance">—</span>
+  return <span>{fmtCtx(recommended)} <Prov kind="measured" />{scored != null && scored !== recommended && <span className="muted"> (scored at {fmtCtx(scored)})</span>}</span>
+}

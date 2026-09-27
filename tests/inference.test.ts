@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { LlamaCppBackend } from '../src/core/runtimes/llamacpp'
+import { ConfigDriftError, LlamaCppBackend } from '../src/core/runtimes/llamacpp'
 import { classifyExit, emptyDeclared, parseDevices, parseLogLine, parseSse, pickDiscreteDevice, toPromptResult, type CompletionChunk } from '../src/core/runtimes/llamacpp/parse'
 
 // Shape of a real llama-server /completion stream (b11208), split at awkward byte boundaries.
@@ -109,9 +109,26 @@ describe('LlamaCppBackend process handling (fake server, no GPU)', () => {
     const r = await b.runPrompt({ prompt: 'x', maxTokens: 1, timeoutMs: 5_000 })
     expect(r).toMatchObject({ text: 'Hi', decodeTokens: 1, stopType: 'limit', error: null })
     expect(r.ttftMs).toBeGreaterThan(0)
+    expect(await b.tokenize('one two three')).toBe(3)
     await b.unloadModel()
     expect(existsSync(pidFile)).toBe(false)
     expect((await b.runPrompt({ prompt: 'x', maxTokens: 1 })).error).toBe('no model loaded')
+  })
+
+  it('fails with config_drift when the server serves a smaller n_ctx than requested', async () => {
+    b = backend('drift')
+    const err = await b.loadModel(cfg).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(ConfigDriftError)
+    expect((err as ConfigDriftError).failureKind).toBe('config_drift')
+    expect(String(err)).toMatch(/requested -c 2048 but server serves n_ctx 1024/)
+  })
+
+  it('reports HTTP 400 with the server error text', async () => {
+    b = backend('http400')
+    await b.loadModel(cfg)
+    const r = await b.runPrompt({ prompt: 'x', maxTokens: 1 })
+    expect(r.error).toMatch(/HTTP 400: exceed_context_size_error: request \(40000 tokens\) exceeds/)
+    expect(b.lastExit).toBeNull() // server still alive: runner classifies this as request_error, never crash
   })
 
   it('rejects a second concurrent prompt instead of clobbering the cancel slot', async () => {

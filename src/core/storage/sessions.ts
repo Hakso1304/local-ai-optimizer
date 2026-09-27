@@ -5,7 +5,10 @@ import type {
   BenchmarkRunResult, CandidateConfig, CandidateInput, FailureKind, Metric, ModelMeta, QualityResult, Recommendation, RunStatus, WorkloadId
 } from '../../shared/bench-types'
 import type { SessionDetail, SessionPayload, SessionSummary } from '../../shared/types'
+import type { SessionRequest } from '../../shared/bench-events'
+import type { RunDetail, SessionStorage } from '../benchmark/session'
 import type { TelemetrySample } from '../telemetry/sampler'
+import { insertTelemetrySamples } from './db'
 import { detectCliffs } from '../scoring/cliff'
 import { recommend } from '../scoring/recommend'
 
@@ -17,8 +20,14 @@ export function saveSession(db: DatabaseSync, payload: SessionPayload, status: s
   return Number(db.prepare('INSERT INTO benchmark_session (status, payload) VALUES (?, ?)').run(status, JSON.stringify(payload)).lastInsertRowid)
 }
 
-export function setSessionStatus(db: DatabaseSync, id: number, status: string): void {
-  db.prepare('UPDATE benchmark_session SET status = ? WHERE id = ?').run(status, id)
+export function setSessionStatus(db: DatabaseSync, id: number, status: string, error?: string): void {
+  if (error === undefined) db.prepare('UPDATE benchmark_session SET status = ? WHERE id = ?').run(status, id)
+  else db.prepare("UPDATE benchmark_session SET status = ?, payload = json_set(payload, '$.error', ?) WHERE id = ?").run(status, error, id)
+}
+
+export function getSessionRequest(db: DatabaseSync, id: number): SessionRequest | null {
+  const row = db.prepare('SELECT payload FROM benchmark_session WHERE id = ?').get(id) as { payload: string } | undefined
+  return row ? json<SessionPayload>(row.payload).request ?? null : null
 }
 
 export function saveRun(db: DatabaseSync, sessionId: number, modelId: string, run: BenchmarkRunResult): number {
@@ -48,6 +57,7 @@ function summary(db: DatabaseSync, row: SessionRow): SessionSummary {
     workload: p.workload,
     demo: p.demo === true || row.status === 'demo',
     label: p.label ?? null,
+    error: p.error ?? null,
     candidateCount: p.candidates.length,
     bestConfigId: rec ? json<Recommendation>(rec.payload).best?.configId ?? null : null
   }
@@ -91,6 +101,44 @@ export function latestRecommendation(db: DatabaseSync, workload: WorkloadId): { 
 
 export function telemetryForRun(db: DatabaseSync, runId: number): TelemetrySample[] {
   return (db.prepare('SELECT payload FROM telemetry_sample WHERE run_id = ? ORDER BY id').all(runId) as { payload: string }[]).map((r) => json<TelemetrySample>(r.payload))
+}
+
+/** Candidate plan for a request (same deterministic generateCandidates call the runner makes). */
+export type PlanFor = (req: SessionRequest) => Pick<SessionPayload, 'vramBytes' | 'candidates'>
+
+/** The runner's SessionStorage over these tables. Session ids are the integer row ids as strings.
+ *  Runs keep RunDetail (minus samples) under payload.detail; samples go to telemetry_sample. */
+export function makeSessionStorage(db: DatabaseSync, planFor: PlanFor): SessionStorage {
+  const sid = (id: string) => {
+    const n = Number(id)
+    if (!Number.isInteger(n)) throw new Error(`bad session id ${id}`)
+    return n
+  }
+  const modelOf = (id: string, configId: string) => {
+    const row = db.prepare('SELECT payload FROM benchmark_session WHERE id = ?').get(sid(id)) as { payload: string } | undefined
+    const c = row ? json<SessionPayload>(row.payload).candidates.find((x) => x.config.id === configId) : undefined
+    return c?.model.id ?? configId.split('|')[0] // configId = `${modelId}|ngl=..|kv=..|t=..`
+  }
+  return {
+    createSession: ({ workload, request }) => String(saveSession(db, { workload, request, ...planFor(request) }, 'running')),
+    setSessionStatus: (id, status, error) => setSessionStatus(db, sid(id), status, error),
+    listRuns: (id) =>
+      (db.prepare('SELECT payload FROM benchmark_run WHERE session_id = ? ORDER BY id').all(sid(id)) as { payload: string }[]).map((r) => {
+        const { detail: _d, ...run } = json<BenchmarkRunResult & { detail?: unknown }>(r.payload)
+        return run
+      }),
+    saveRun: (id, run, d: RunDetail) => {
+      const { samples, ...detail } = d
+      const runId = Number(db.prepare('INSERT INTO benchmark_run (session_id, status, model_id, ctx_size, payload) VALUES (?, ?, ?, ?, ?)')
+        .run(sid(id), run.status, modelOf(id, run.configId), run.ctx, JSON.stringify({ ...run, detail })).lastInsertRowid)
+      if (samples.length) insertTelemetrySamples(db, sid(id), runId, samples)
+    },
+    listQuality: (id, modelId) =>
+      (db.prepare('SELECT payload FROM quality_result WHERE session_id = ? AND model_id = ? ORDER BY id').all(sid(id), modelId) as { payload: string }[])
+        .map((r) => json<QualityResult>(r.payload)),
+    saveQuality: (id, modelId, configId, ctx, results) => saveQualityResults(db, sid(id), modelId, results.map((r) => ({ ...r, configId, ctx }))),
+    saveRecommendation: (id, rec) => { saveRecommendation(db, sid(id), rec, rec.best ? modelOf(id, rec.best.configId) : null) }
+  }
 }
 
 // ---- DEMO seed (dev only, LAO_SEED_DEMO=1). Built from tests/fixtures/scoring; every label says DEMO. ----

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { Metric } from '../../shared/bench-types'
 import type { SessionCandidate, SessionDetail, SessionSummary } from '../../shared/types'
 import { LineChart, type Band } from './LineChart'
-import { DemoBanner, M, Prov, fmtCtx, gib, num } from './ui'
+import { CtxPick, DemoBanner, M, Prov, fmtCtx, gib, num } from './ui'
 
 const COLORS = ['#58a6ff', '#f0883e', '#a371f7', '#3fb950', '#db61a2']
 const NA = (reason: string): Metric => ({ value: null, kind: 'unavailable', reason })
@@ -16,9 +16,9 @@ function peak(c: SessionCandidate, k: 'peakVramBytes' | 'peakRamBytes'): Metric 
 const refRun = (c: SessionCandidate) => c.runs.find((r) => r.ctx === c.score?.referenceCtx)
 const comp = (c: SessionCandidate, id: string) => c.score?.breakdown.find((b) => b.component === id)
 
-/** llama-server CLI + JSON for a candidate at its practical context ceiling. */
+/** llama-server CLI + JSON at the workload's recommendedCtx (falls back to the practical ceiling if unscored). */
 function exportText(c: SessionCandidate): string {
-  const ctx = c.cliff.practicalContextCeiling.value
+  const ctx = c.score?.recommendedCtx ?? c.cliff.practicalContextCeiling.value
   const args = [
     '-m', `"${c.model.id}"`, '-c', String(ctx ?? 4096), '-ngl', c.config.gpuLayersAll ? '99' : String(c.config.gpuLayers),
     ...(c.config.device ? ['--device', c.config.device] : []), '-t', String(c.config.threads),
@@ -51,7 +51,7 @@ function Detail({ d }: { d: SessionDetail }) {
       {d.session.demo && <DemoBanner />}
       <h2>Comparison — {d.session.workload}{tag}</h2>
       <table>
-        <thead><tr><th /><th>Model</th><th>Quant</th><th>Config</th><th>Practical ctx</th><th>Quality</th><th>Decode t/s</th><th>Prefill t/s</th><th>Peak VRAM</th><th>Peak RAM</th><th>Stability</th><th /></tr></thead>
+        <thead><tr><th /><th>Model</th><th>Quant</th><th>Config</th><th>Recommended ctx</th><th>Practical ctx</th><th>Quality</th><th>Decode t/s</th><th>Prefill t/s</th><th>Peak VRAM</th><th>Peak RAM</th><th>Stability</th><th /></tr></thead>
         <tbody>
           {d.candidates.map((c, i) => {
             const q = comp(c, 'quality'), st = comp(c, 'stability'), r = refRun(c)
@@ -61,6 +61,7 @@ function Detail({ d }: { d: SessionDetail }) {
                 <td>{c.model.name}{rec?.best?.configId === c.config.id && <span className="pill">best</span>}</td>
                 <td>{c.model.quant ?? '—'} <Prov kind="declared" /></td>
                 <td className="muted">ngl {c.config.gpuLayersAll ? 'all' : c.config.gpuLayers}, kv {c.config.kvType}, t {c.config.threads}</td>
+                <td><CtxPick recommended={c.score?.recommendedCtx} scored={c.score?.referenceCtx} /></td>
                 <td><M m={c.cliff.practicalContextCeiling} fmt={fmtCtx} /></td>
                 <td>{q ? <M m={{ ...q.input, value: q.score }} fmt={(v) => v.toFixed(0)} /> : '—'}</td>
                 <td><M m={r?.decodeTps} /> {r && <span className="muted">@{fmtCtx(r.ctx)}</span>}</td>
@@ -105,7 +106,7 @@ function Detail({ d }: { d: SessionDetail }) {
       <h2>Recommendation{tag}</h2>
       {rec ? (
         <div className="card">
-          <p><b>{rec.best ? name(rec.best.configId) : 'No recommendation'}</b>{rec.best && <> — {rec.best.score.total.toFixed(1)}/100</>}</p>
+          <p><b>{rec.best ? name(rec.best.configId) : 'No recommendation'}</b>{rec.best && <> — {rec.best.score.total.toFixed(1)}/100, context <CtxPick recommended={rec.best.score.recommendedCtx} scored={rec.best.score.referenceCtx} /></>}</p>
           <ul>{rec.reasons.map((r) => <li key={r}>{r}</li>)}</ul>
           <table>
             <tbody>
@@ -143,7 +144,13 @@ export function ResultsPage({ sessionId }: { sessionId?: number }) {
           {list?.map((s) => (
             <tr key={s.id} className={`click${s.id === sel ? ' selected' : ''}`} onClick={() => setSel(s.id)}>
               <td>{s.id}</td><td>{s.createdAt}</td><td>{s.workload}</td>
-              <td>{s.demo ? <span className="pill demo-pill">DEMO DATA</span> : s.status}</td>
+              <td>
+                {s.demo ? <span className="pill demo-pill">DEMO DATA</span> : s.status}
+                {s.error && <span className="err" title={s.error}> ⚠</span>}
+                {!s.demo && (s.status === 'cancelled' || s.status === 'failed') && (
+                  <button className="mini" onClick={(e) => { e.stopPropagation(); void window.api.resumeBench(s.id).then((r) => { if (!r.ok) setErr(r.error) }) }}>Resume</button>
+                )}
+              </td>
               <td>{s.candidateCount}</td><td className="muted">{s.bestConfigId ?? '—'}</td>
             </tr>
           ))}

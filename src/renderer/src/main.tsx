@@ -1,4 +1,4 @@
-import { StrictMode, useState } from 'react'
+import { StrictMode, useCallback, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { RendererApi } from '../../shared/types'
 import { BenchmarkPage } from './BenchmarkPage'
@@ -18,7 +18,8 @@ type Section = (typeof SECTIONS)[number]
 function App() {
   const [section, setSection] = useState<Section>('Dashboard')
   const [sessionId, setSessionId] = useState<number | undefined>()
-  const go = (s: Section, id?: number) => { setSection(s); setSessionId(id) }
+  const go = useCallback((s: Section, id?: number) => { setSection(s); setSessionId(id) }, [])
+  const onDone = useCallback((id: number) => go('Results', id), [go])
   return (
     <div className="app">
       <nav>
@@ -29,7 +30,7 @@ function App() {
       </nav>
       <main>
         {section === 'Dashboard' && <DashboardPage go={go} />}
-        {section === 'Benchmark' && <BenchmarkPage />}
+        {section === 'Benchmark' && <BenchmarkPage onDone={onDone} />}
         {section === 'Models' && <ModelsPage />}
         {section === 'Results' && <ResultsPage key={sessionId ?? 'none'} sessionId={sessionId} />}
         {section === 'System' && <SystemPage />}
