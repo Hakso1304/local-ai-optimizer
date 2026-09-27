@@ -12,6 +12,7 @@ import { WORKLOADS } from '../../src/core/scoring/workloads'
 import { ConfigDriftError } from '../../src/core/runtimes/llamacpp'
 import { load } from '../scoring/helpers'
 import { suiteFor } from '../../src/core/quality'
+import { coverage, qualityUncertainty } from '../../src/core/scoring/uncertainty'
 
 /** Items in the DEFAULT suite (unset qualityMode = 'thorough' = qb-2.0.0); explicit 'quick' runs keep 17 (qb-1.1.0). */
 const N = suiteFor(undefined, 0).tests.length
@@ -781,6 +782,30 @@ describe('runSession', () => {
       ? { ...r, sample: 1 } : r)
     const resumed = await run(() => ({}), { ...req, resumeSessionId: 's1' }, { models: [m], runtimeVersion: 'b1' }, first.s.runs, [{ ...stored, results: mixed }])
     expect(resumed.backend.calls.templates).toBe(stored.results.length)
+  })
+
+  it('v2 runner emits skill and instance provenance that yields skill-clustered uncertainty', async () => {
+    const m = { ...model, supportsThinking: true, genKnobs: { supportsThinking: true } }
+    const seed = 7
+    const suite = suiteFor('thorough', seed)
+    const tests = suite.tests as (typeof suite.tests[number] & { skill: string; instanceSeed?: number })[]
+    const result = await run(() => ({}), { ladder: [2048], runQuality: true, qualitySeed: seed }, { models: [m], runtimeVersion: 'b1' })
+    const rows = result.s.quality[0].results as (QualityResult & { genId: string; skillId?: string; generatorSeed?: number | string; instanceSeed?: number; sample: number })[]
+    expect(rows.length).toBe(suite.tests.length * 4) // off once; T1 three completions per item
+    for (const test of tests) {
+      const emitted = rows.filter((r) => r.testId === test.id)
+      expect(emitted.map((r) => r.skillId)).toEqual([test.skill, test.skill, test.skill, test.skill])
+      expect(emitted.map((r) => r.genId)).toEqual(['off', 'think-t1', 'think-t1', 'think-t1'])
+      if (test.instanceSeed !== undefined) {
+        expect(emitted.map((r) => r.generatorSeed)).toEqual(Array(4).fill(test.instanceSeed))
+        expect(emitted.map((r) => r.instanceSeed)).toEqual(Array(4).fill(test.instanceSeed))
+      } else {
+        expect(emitted.every((r) => r.generatorSeed === undefined && r.instanceSeed == null)).toBe(true)
+      }
+    }
+    const baseline = rows.filter((r) => r.genId === 'off')
+    expect(coverage(baseline).uniqueSkills).toBe(new Set(tests.map((t) => t.skill)).size)
+    expect(qualityUncertainty(baseline, suite.categoryWeights)).toMatchObject({ unit: 'skill', method: 'cluster-bootstrap' })
   })
 
   it('F12: without llama timings, TPS are estimated from the streamed-token count and the prompt size', async () => {
