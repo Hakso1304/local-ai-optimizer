@@ -48,7 +48,7 @@ A step is one candidate config at one context size. The server is started with `
 - Warmup: one discarded request with the **same prompt** (`backend.warmup(prompt)`, 8 tokens). This compiles the Vulkan pipelines for that batch shape (DESIGN F7). A warmup failure fails the step.
 - Reps: `reps = 2` measured prompts. The first failing rep fails the step.
 - Timeouts: prompt `60 s + 10 ms × ctx`; load 120 s (inside the backend); quality 180 s per test.
-- Pre-check before each step: est. RAM (`estimateMemory`) > live available − floor, where floor = max(2 GiB, 8 % of RAM) → `fail / skipped_memory`, and the model is not loaded.
+- Pre-check before each step: est. RAM (`estimateMemory`) > live available − floor, where floor = **max(4 GiB, 8 % of RAM)** in every mode → `fail / skipped_memory`, and the model is not loaded. The guard polls from the start of **load** (every 250 ms for heavy configs). A trip during load kills the server, and the step is recorded as `guard_abort` before any request.
 - In-step guard (1 s poll of new samples): RAM available **+ mmap credit** < floor, or per-PID shared > 2 GiB → `backend.cancel()` → `fail / guard_abort`. The guard reason is recorded, not the "cancelled" error its own cancel caused.
   - mmap credit = file × GPU layers / all layers. The weights already uploaded to the GPU are clean file pages the OS can drop. Calibration showed available RAM falls by ≈ the file size, so without the credit a 16 GiB model would falsely trip the floor.
   - Heavy mode lowers the floor to the 2 GiB minimum and pre-checks the resident RAM only.
@@ -199,7 +199,8 @@ Estimates are `kind:'estimated'`, prune only, and never rank.
      - the max ngl that fits at the target ctx;
      - the max ngl with KV in RAM (`kvOffload:false` → `-nkvo`, verified in b11208 `--help`);
      - a CPU baseline (ngl 0, `-dev none`).
-     The RAM check uses `ramResidentBytes` (non-GPU weights + CPU KV) vs available − 2 GiB. There is no keep-over step.
+     The RAM check uses `ramResidentBytes` (non-GPU weights + CPU KV + 0.5 GiB, **+1.5 GiB more at ngl 0**) vs available − 4 GiB. There is no keep-over step.
+     The **CPU baseline is skipped when the file is > 50 % of total RAM** ("CPU baseline skipped: model is >50% of system RAM"). In the real 27B run it drove available RAM to 1.0 GiB.
   4. ngl=0 only when there is no GPU (`cpuOnlyMaxParams` = 0 = off).
   - `estimateMemory` splits KV by layer share (8B ngl 20/33: KV CPU 416 + Vulkan 608 MiB). `rulesForRequest(req)` gives the runner and any re-planner the same rules → the same configIds.
 - **Other rules:**
@@ -211,13 +212,20 @@ Estimates are `kind:'estimated'`, prune only, and never rank.
 
 ### Heavy-model mode (summary)
 - **What it is:** opt-in (`SessionRequest.heavyMode`, the "Include heavy models" checkbox). A model whose full GPU offload does not fit gets up to 4 partial-offload probes (§9, all `expectDegraded` with a reason) instead of being rejected.
-- **RAM:** the check uses the resident part with a 2 GiB reserve. The in-step floor credits the mmap pages of GPU-offloaded weights.
+- **RAM:** the check uses the resident part with a 4 GiB reserve (the same floor as normal mode). The in-step floor credits the mmap pages of GPU-offloaded weights. The guard polls every 250 ms from the start of load for heavy configs.
+- **Order:** full-offload configs run first, then heavy configs most-offloaded first, with CPU baselines last. So quality and a recommendation exist even if a later, riskier config aborts.
+- **Unplanned models:** a model with no candidates is named in the recommendation reasons, e.g. "Not benchmarked: X — … full GPU offload does not fit — enable heavy-model mode".
 - **Gates:**
   - `minDecodeTps` per workload (fast 30, chat/coding 10, reasoning/long-ctx 5, doc 3, max quality 2 t/s) keeps slow partial configs out of interactive workloads.
   - A partial config is never eligible when the same model's full offload ran.
   - Across models, the scores decide: a ~27B at 8 t/s can win Maximum Quality.
 - **Reasons:** they say "Partial GPU offload (N/M layers) — degraded speed expected: decode X t/s (…)".
 - **KV:** it uses the per-layer layout (hybrid `full_attention_interval`, SWA pattern, per-layer heads) when the GGUF declares it; otherwise an all-layers upper bound, never 0.
+- **Calibration** (`docs/calibration-heavy-2026-09-27.md`, fixture `calib-heavy-qwen38-rx9070.json`):
+  - Qwen3.8-27B (dense hybrid, 16.5 GB) at 55/65 layers, 2K/4K/8K: prefill 611/661/689 t/s, decode 12.4/13.0/13.0 t/s (flat: the CPU-side layers set the rate), TTFT 1.9/3.5/6.7 s, VRAM 12.7–13.0 GiB, shared 0.04 GiB (no spill).
+  - For comparison, the 8B full offload decodes 110 → 79 t/s over 2K → 32K.
+  - Outcomes asserted in `heavy.test.ts`: the 27B wins Maximum Quality when its quality is higher; it passes Coding's 10 t/s gate but loses to the 8B on speed; Fast Assistant rejects it.
+  - The MoE model (Gemma-4-26B-A4B) is not yet measured.
 
 ## 10. Export (`src/core/export/config.ts`)
 - `exportConfigFrom(rec, cand, model, sessionId)` takes the winner at `recommendedCtx`.

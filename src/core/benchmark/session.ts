@@ -68,11 +68,15 @@ export const DEFAULT_SESSION_CONFIG = {
   promptTimeoutBaseMs: 60_000,
   promptTimeoutPerCtxMs: 10, // + 10 ms per context token: 64K → ~12 min cap for a slow partial offload
   qualityTimeoutMs: 180_000,
-  ramFloorMinBytes: 2 * GiB, // DESIGN §3.3: floor = max(2 GiB, 8% of RAM)
+  // Floor = max(4 GiB, 8 % of RAM), heavy mode included: a 27B CPU baseline drove available RAM to 1.0 GiB with a
+  // 2 GiB floor before the 1 s guard fired, and the host went into memory pressure (2026-09-27 heavy run).
+  ramFloorMinBytes: 4 * GiB,
   ramFloorFraction: 0.08,
   sharedSpillAbortBytes: 2 * GiB, // per-PID shared GPU memory: kill the run (DESIGN §3.3)
   maxConsecutiveDegraded: 2,
   guardPollMs: 1000,
+  /** Heavy (expectDegraded) configs: poll the guard every 250 ms from the start of load — mmap RAM ramps fast. */
+  heavyGuardPollMs: 250,
   /** typeperf needs ~2 s for its first row; a 0.5B step can finish in ~1.5 s. After the reps, wait (real time) up to
    *  this long from sampler start for one real row so memory peaks aren't lost. Never fabricated: still 0 → unavailable. */
   firstSampleWaitMs: 3000,
@@ -129,7 +133,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   const vramTotal = val(machine.vramBytes, true)
   const ramTotal = val(machine.ramTotalBytes, true)
   // Heavy mode runs close to the RAM limit on purpose: floor = the 2 GiB minimum, never lower.
-  const ramFloor = req.heavyMode ? cfg.ramFloorMinBytes : Math.max(cfg.ramFloorMinBytes, (ramTotal ?? 0) * cfg.ramFloorFraction)
+  const ramFloor = Math.max(cfg.ramFloorMinBytes, (ramTotal ?? 0) * cfg.ramFloorFraction)
   const evaluate = deps.evaluate ?? evaluateAsync
 
   let sessionId = req.resumeSessionId ?? ''
@@ -153,6 +157,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
 
     // All candidates of all requested models, smallest estimated footprint first.
     const plan: { cand: CandidateConfig; model: ModelMeta }[] = []
+    const unplanned: { model: string; reason: string }[] = []
     for (const id of req.modelIds) {
       const model = deps.models.find((m) => m.id === id)
       if (!model) { log('warn', `model ${id} not found; skipped`); continue }
@@ -162,10 +167,16 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       }
       const set = generateCandidates(machine, model, { backend: deps.backendKind ?? 'vulkan' }, profile, rules)
       for (const r of set.rejected) log('info', `rejected ${r.id}: ${r.reason}`)
+      if (!set.candidates.length) unplanned.push({ model: model.name, reason: [...new Set(set.rejected.map((r) => r.reason))].join('; ') || 'no candidate configuration' })
       for (const cand of set.candidates) plan.push({ cand, model })
     }
     const est = (c: CandidateConfig) => (val(c.estVramBytes) ?? 0) + (val(c.estRamBytes) ?? 0)
-    plan.sort((a, b) => est(a.cand) - est(b.cand) || (a.cand.id < b.cand.id ? -1 : 1))
+    // Full-offload configs first (cheapest estimate first). Heavy configs after them, most-offloaded first and CPU
+    // baselines last, so quality/recommendation exist even if a later, riskier config aborts.
+    const share = (c: CandidateConfig, m: ModelMeta) => (c.gpuLayersAll ? 1 : c.gpuLayers / m.layers)
+    plan.sort((a, b) => Number(!!a.cand.expectDegraded) - Number(!!b.cand.expectDegraded) ||
+      (a.cand.expectDegraded ? share(b.cand, b.model) - share(a.cand, a.model) : 0) ||
+      est(a.cand) - est(b.cand) || (a.cand.id < b.cand.id ? -1 : 1))
     send({ type: 'session:started', workload: req.workload, modelIds: req.modelIds, resumed: !!req.resumeSessionId, candidates: plan.length })
 
     const inputs: CandidateInput[] = []
@@ -248,7 +259,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       return null
     }
     for (const i of inputs) i.quality = quality.get(i.model.id) ?? []
-    const rec = recommend(inputs, machine, req.workload)
+    const rec = recommend(inputs, machine, req.workload, undefined, unplanned)
     await storage.saveRecommendation(sessionId, rec)
     await storage.setSessionStatus(sessionId, 'done')
     send({ type: 'session:done', recommendation: rec })
@@ -314,11 +325,40 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       if (!sampler && backend.pid !== undefined && backend.pid !== oldPid) { sampler = deps.startSampler(backend.pid); samplerAt = Date.now() }
     }
     const pidPoll = setInterval(startIfNew, 50)
+
+    // The guard runs from the start of LOAD (mmap ramps RAM there), faster for heavy configs. During load a trip
+    // kills the server (unloadModel); afterwards it cancels the in-flight request.
+    let emitted = 0
+    let guard: string | null = null
+    let loading = true
+    const flush = () => {
+      const xs = (sampler as SessionSampler | null)?.samples ?? []
+      for (; emitted < xs.length; emitted++) {
+        const s = xs[emitted]
+        send({ type: 'telemetry', configId: cand.id, ctx, sample: s })
+        const trip = !guard && ((s.ramAvailBytes != null && s.ramAvailBytes + mmapCredit < ramFloor) || (s.procVramSharedBytes != null && s.procVramSharedBytes > cfg.sharedSpillAbortBytes))
+        if (!trip) continue
+        guard = s.ramAvailBytes != null && s.ramAvailBytes + mmapCredit < ramFloor
+          ? `RAM available ${(s.ramAvailBytes / GiB).toFixed(1)} GiB fell below the floor`
+          : `shared GPU memory spill ${(s.procVramSharedBytes! / GiB).toFixed(1)} GiB exceeded the abort limit`
+        void (loading ? backend.unloadModel().catch(() => {}) : backend.cancel())
+      }
+    }
+    const timer = setInterval(flush, cand.expectDegraded ? cfg.heavyGuardPollMs : cfg.guardPollMs)
+    const guardAbort = () => {
+      clearInterval(timer)
+      ;(sampler as SessionSampler | null)?.stop()
+      return result('fail', 'guard_abort', guard, {}, { samples: (sampler as SessionSampler | null)?.samples ?? [] })
+    }
+
     let load: LoadResult
     try {
       load = await backend.loadModel(loadCfg(cand, model, ctx))
     } catch (e) {
       clearInterval(pidPoll)
+      flush()
+      if (guard) return guardAbort()
+      clearInterval(timer)
       ;(sampler as SessionSampler | null)?.stop()
       const msg = (e as Error).message
       const drift = (e as { failureKind?: string }).failureKind === 'config_drift' // ConfigDriftError (runtimes/llamacpp)
@@ -327,27 +367,16 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     }
     clearInterval(pidPoll)
     if (!sampler && backend.pid !== undefined) { sampler = deps.startSampler(backend.pid); samplerAt = Date.now() }
+    loading = false
+    flush()
+    if (guard) { await backend.unloadModel().catch(() => {}); return guardAbort() }
     const loadDoneAt = Date.now()
     const smp = sampler as SessionSampler | null
-
-    let emitted = 0
-    let guard: string | null = null
-    const flush = () => {
-      const xs = smp?.samples ?? []
-      for (; emitted < xs.length; emitted++) {
-        const s = xs[emitted]
-        send({ type: 'telemetry', configId: cand.id, ctx, sample: s })
-        if (!guard && s.ramAvailBytes != null && s.ramAvailBytes + mmapCredit < ramFloor) guard = `RAM available ${(s.ramAvailBytes / GiB).toFixed(1)} GiB fell below the floor`
-        if (!guard && s.procVramSharedBytes != null && s.procVramSharedBytes > cfg.sharedSpillAbortBytes) guard = `shared GPU memory spill ${(s.procVramSharedBytes / GiB).toFixed(1)} GiB exceeded the abort limit`
-        if (guard) void backend.cancel()
-      }
-    }
     // A guard's cancel() makes the in-flight request fail with "cancelled": the guard reason must win over that.
     const fail = (error: string, timedOut: boolean) => {
       flush()
       return guard ? { status: 'fail' as const, kind: 'guard_abort' as const, reason: guard } : classify(error, timedOut)
     }
-    const timer = setInterval(flush, cfg.guardPollMs)
     const prompt = ladderPrompt(ctx)
     const timeoutMs = cfg.promptTimeoutBaseMs + ctx * cfg.promptTimeoutPerCtxMs
     const reps: PromptResult[] = []

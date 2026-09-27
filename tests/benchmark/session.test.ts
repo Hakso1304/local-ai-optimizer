@@ -204,7 +204,7 @@ describe('runSession', () => {
     const args = h.backend.calls.loads.map((l) => `${l.gpuLayers} ${l.device} ${(l.extraArgs ?? []).join(' ')}`)
     expect(args.some((a) => a.endsWith('-nkvo'))).toBe(true)
     expect(h.backend.calls.loads.every((l) => l.gpuLayers < 64)).toBe(true)
-    expect(h.backend.calls.loads.some((l) => l.gpuLayers === 0 && l.device === 'none')).toBe(true)
+    expect(h.backend.calls.loads.some((l) => l.gpuLayers === 0)).toBe(false) // CPU baseline skipped: file > 50% RAM
   })
 
   it('pause mid-ladder: finishes the current step, unloads, status paused; resume continues from the next step', async () => {
@@ -304,6 +304,34 @@ describe('runSession', () => {
     expect(ctxOf(fresh.backend)).toEqual([2048, 4096])
   })
 
+  it('H1: the RAM guard runs during LOAD (mmap ramps there) and aborts the step before any request', async () => {
+    const tiny = { ...model, fileBytes: 100 * 1024 ** 2 } // no mmap credit
+    const low = { ...sample(2048), ramAvailBytes: 1 * GiB }
+    const { s, backend } = await run(() => ({ load: 'slow' }), { ladder: [2048, 4096] }, {
+      models: [tiny], startSampler: () => ({ samples: [low], unavailable: {}, stop: () => [low] }), config: { guardPollMs: 5 }
+    })
+    expect(s.runs).toHaveLength(1)
+    expect(s.runs[0]).toMatchObject({ ctx: 2048, status: 'fail', failureKind: 'guard_abort' })
+    expect(s.details[0].reason).toBe('RAM available 1.0 GiB fell below the floor')
+    expect(backend.calls.templates).toBe(0)
+    expect(backend.calls.unloads).toBeGreaterThanOrEqual(2) // killed during load, and again before returning
+  })
+
+  it('H2: heavy mode runs full-offload configs first, then partial configs most-offloaded first', async () => {
+    const m27 = { ...model, id: 'C:/models/q27b.gguf', fileBytes: Math.round(16.1 * GiB), layers: 64, nEmbd: 5120, heads: 40, headsKv: 8, keyLength: 128, valueLength: 128, nVocab: 152064 }
+    const h = await run(() => ({}), { workload: 'max_quality', modelIds: [model.id, m27.id], ladder: [2048], heavyMode: true }, { models: [model, m27] })
+    const order = [...new Set(h.s.runs.map((r) => r.configId))]
+    expect(order[0]).toBe(`${model.id}|ngl=all|kv=f16|t=8`)
+    const ngl = order.slice(1).map((id) => Number(/ngl=(\d+)/.exec(id)![1]))
+    expect(ngl).toEqual([...ngl].sort((a, b) => b - a))
+  })
+
+  it('H3: a model with no candidates is named in the recommendation reasons, not only the log', async () => {
+    const m27 = { ...model, id: 'C:/models/q27b.gguf', name: 'Qwen3.8-27B', fileBytes: Math.round(16.1 * GiB), layers: 64 }
+    const r = await run(() => ({}), { workload: 'max_quality', modelIds: [model.id, m27.id] }, { models: [model, m27] })
+    expect(r.rec?.reasons.find((x) => x.startsWith('Not benchmarked: Qwen3.8-27B — '))).toMatch(/enable heavy-model mode/)
+  })
+
   it('emits events in order', async () => {
     const { events } = await run((ctx) => (ctx > 4096 ? { load: 'oom' } : {}), { ladder: [2048, 4096, 8192] })
     const types = events.map((e) => (e.type === 'phase' ? `phase:${e.phase}` : e.type)).filter((t) => t !== 'telemetry' && t !== 'log')
@@ -343,7 +371,7 @@ describe('runSession', () => {
     // Every step skipped by the RAM guard → say so, with the guard's arithmetic (not just "no successful runs").
     expect(rec?.best).toBeNull()
     expect(rec?.reasons[0]).toBe('No recommendation: nothing was run — the RAM guard skipped every step before loading')
-    expect(rec?.reasons[1]).toMatch(/^est\. RAM 0\.5 GiB > available 1\.0 GiB − floor 2\.5 GiB$/) // resident only: weights are on the GPU
+    expect(rec?.reasons[1]).toMatch(/^est\. RAM 0\.5 GiB > available 1\.0 GiB − floor 4\.0 GiB$/) // resident only; floor max(4 GiB, 8%)
     expect(rec?.excluded[0].reasons[0]).toMatch(/^2K: run fail \(skipped_memory\): est\. RAM/)
   })
   it('guard reason wins over the "cancelled" error its own cancel() causes (guard_abort, not request_error)', async () => {

@@ -23,10 +23,16 @@ describe('heavy-model candidate generation (27B, 16.1 GiB, 16 GB VRAM)', () => {
   })
 
   it('heavy mode: ≤4 partial configs (max layers @2K, @target, -nkvo, CPU baseline), all flagged expectDegraded', () => {
-    const { candidates } = generateCandidates(M, m27, { backend: 'vulkan' }, WORKLOADS.max_quality, heavy)
+    const { candidates, rejected } = generateCandidates(M, m27, { backend: 'vulkan' }, WORKLOADS.max_quality, heavy)
     expect(candidates.length).toBeLessThanOrEqual(4)
     expect(candidates.every((c) => c.expectDegraded && !c.gpuLayersAll)).toBe(true)
-    const [short, target, nkvo, cpu] = candidates
+    const [short, target, nkvo] = candidates
+    // 16.1 GiB file > 50% of 31 GiB RAM → the CPU baseline is skipped (it drove a real host to 1 GiB free).
+    expect(candidates.some((c) => c.gpuLayers === 0)).toBe(false)
+    expect(rejected.map((r) => r.reason)).toContain('CPU baseline skipped: model is >50% of system RAM')
+    // With 64 GiB RAM the same model is < 50% of RAM → the CPU baseline is generated.
+    const bigRam = { ...M, ramTotalBytes: { value: 64 * GiB, kind: 'declared' as const }, ramAvailableBytes: { value: 50 * GiB, kind: 'measured' as const } }
+    const cpu = generateCandidates(bigRam, m27, { backend: 'vulkan' }, WORKLOADS.max_quality, heavy).candidates.find((c) => c.gpuLayers === 0)!
     expect(short.gpuLayers).toBeGreaterThan(target.gpuLayers) // fewer layers fit once the target ctx's KV is on the GPU
     expect(target.ctxSteps.at(-1)).toBe(8192) // Maximum Quality target
     expect(nkvo).toMatchObject({ kvOffload: false, id: expect.stringMatching(/\|nkvo$/) })
@@ -36,10 +42,10 @@ describe('heavy-model candidate generation (27B, 16.1 GiB, 16 GB VRAM)', () => {
     expect(nkvo.degradedReason).toMatch(/KV cache in system RAM \(-nkvo\)$/)
   })
 
-  it('heavy RAM check uses the resident part + a 2 GiB reserve (never below 2 GiB)', () => {
-    const tight = { ...M, ramAvailableBytes: { value: 4 * GiB, kind: 'measured' as const } }
+  it('heavy RAM check uses the resident part + a 4 GiB reserve (never below 4 GiB)', () => {
+    const tight = { ...M, ramAvailableBytes: { value: 7 * GiB, kind: 'measured' as const } }
     const { candidates } = generateCandidates(tight, m27, { backend: 'vulkan' }, WORKLOADS.max_quality, { ...heavy, heavyRamReserveBytes: 0 })
-    for (const c of candidates) expect(c.estRamBytes.value!, c.id).toBeLessThanOrEqual(2 * GiB) // 4 GiB − max(2, 0) GiB
+    for (const c of candidates) expect(c.estRamBytes.value!, c.id).toBeLessThanOrEqual(3 * GiB) // 7 GiB − max(4, 0) GiB
   })
 
   it('rulesForRequest carries heavyMode so re-planning yields the same configIds', () => {
@@ -76,5 +82,42 @@ describe('heavy-model recommendation (27B partial @ ~8 t/s vs 8B full offload)',
       expect(rec.best?.configId, w).toBe('llama8b|ngl=all')
       expect(rec.ranked.find((s) => s.configId === cand27.id)!.gateFailures.join(' '), w).toMatch(/below the \d+ t\/s minimum/)
     }
+  })
+})
+
+describe('heavy-model calibration: Qwen3.8-27B 55/65 layers vs Llama-3.1-8B full offload (real RX 9070 XT run)', () => {
+  const fh = load('calib-heavy-qwen38-rx9070.json') as ReturnType<typeof load> & { vramInUseBytes: number }
+  const MH = { ...machine(fh.vramBytes), vramInUseBytes: { value: fh.vramInUseBytes, kind: 'measured' as const } }
+  const Q = 'qwen38|ngl=55', L8 = 'llama8b|ngl=all'
+  const q5 = (id: string, rate: number): QualityResult[] =>
+    ['instruction', 'reasoning', 'coding', 'structured', 'extraction', 'context'].flatMap((category) => [0, 1, 2, 3, 4].map((i) => ({
+      testId: `${id}-${category}-${i}`, category: category as QualityResult['category'], weight: 1, pass: i < rate * 5, score: 1, detail: ''
+    })))
+  const withQ = (qQwen: number, q8: number) => inputs(fh).map((c) => ({ ...c, quality: q5(c.model.id, c.model.id.startsWith('qwen') ? qQwen : q8) }))
+
+  it('the 55/65 partial offload (decode 12–13 t/s, no spill) stays eligible for Maximum Quality', () => {
+    const r = recommend(withQ(1, 0.6), MH, 'max_quality').ranked.find((s) => s.configId === Q)!
+    expect(r.eligible).toBe(true) // decode 13 ≥ Maximum Quality gate 2; TTFT 6.7 s ≤ 20 s at 8K
+  })
+
+  it('Maximum Quality: the 27B wins when its measured quality is higher', () => {
+    const rec = recommend(withQ(1, 0.6), MH, 'max_quality')
+    expect(rec.best?.configId).toBe(Q)
+    expect(rec.reasons.join('\n')).toMatch(/Partial GPU offload \(55\/65 layers\) — degraded speed expected: decode 13\.0 t\/s/)
+    expect(rec.reasons).toContain('Quality measured with thinking disabled (chat template enable_thinking=false)')
+  })
+
+  it('Coding: the 27B passes the 10 t/s gate but the 8B wins on speed, even at quality 100 vs 60', () => {
+    for (const [a, b] of [[0.8, 0.8], [1, 0.6]]) {
+      const rec = recommend(withQ(a, b), MH, 'coding')
+      expect(rec.ranked.find((s) => s.configId === Q)!.eligible).toBe(true)
+      expect(rec.best?.configId, `${a}/${b}`).toBe(L8)
+    }
+  })
+
+  it('Fast Assistant rejects the 27B on the decode gate (13 < 30 t/s)', () => {
+    const rec = recommend(withQ(1, 0.6), MH, 'fast_assistant')
+    expect(rec.best?.configId).toBe(L8)
+    expect(rec.ranked.find((s) => s.configId === Q)!.gateFailures.join(' ')).toMatch(/decode 1[23]\.\d t\/s .* below the 30 t\/s minimum/)
   })
 })

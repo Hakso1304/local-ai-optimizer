@@ -25,8 +25,11 @@ export const DEFAULT_CANDIDATE_RULES = {
    *  partial-offload ladder instead of rejecting the model. Off = full offload only (+ CPU-only without a GPU):
    *  calibration showed partial offload decodes -83 % (8B ngl 20), so it is never offered unasked. */
   heavyMode: false,
-  /** Heavy mode checks RAM against the resident part (non-GPU weights + CPU KV) with this smaller reserve (>= 2 GiB). */
-  heavyRamReserveBytes: 2 * GiB,
+  /** Heavy mode checks RAM against the resident part (non-GPU weights + CPU KV + CPU compute) with this reserve
+   *  (≥ 4 GiB — same floor as the runner; a 2 GiB reserve let a 27B CPU baseline starve the host). */
+  heavyRamReserveBytes: 4 * GiB,
+  /** Heavy mode skips the CPU baseline when the file exceeds this share of total RAM (it would fill RAM). */
+  cpuBaselineMaxRamShare: 0.5,
   /** ngl=0 reference config for models this small even when full offload fits. 0 = off: calibration showed ngl 0 on
    *  the Vulkan build still offloads prefill matmuls (1.1K t/s, 1.8 GiB VRAM), so it is partial, not CPU-only.
    *  ngl=0 is still generated when there is no GPU. */
@@ -103,8 +106,9 @@ export function estimateMemory(m: ModelMeta, gpuLayers: number, ctx: number, kv:
     vramBytes: onGpu > 0 ? wGpu + kvGpu + compute : 0,
     // Resident RAM: weights NOT on the GPU + CPU-side KV + 0.5 GiB. mmap'd pages of offloaded weights are clean and
     // reclaimable (they lower "available" while loaded — the in-step guard credits them), so they are not counted.
-    ramBytes: m.fileBytes - wGpu + kvCpu + 512 * MiB,
-    ramResidentBytes: m.fileBytes - wGpu + kvCpu + 512 * MiB,
+    // ngl 0: + 1.5 GiB CPU compute buffers / working set (a 27B CPU baseline exceeded file + KV + 0.5 GiB).
+    ramBytes: m.fileBytes - wGpu + kvCpu + 512 * MiB + (onGpu === 0 ? 1.5 * GiB : 0),
+    ramResidentBytes: m.fileBytes - wGpu + kvCpu + 512 * MiB + (onGpu === 0 ? 1.5 * GiB : 0),
     kvBytes,
     kvSource,
     kvUnknown
@@ -145,7 +149,7 @@ export function generateCandidates(
   const gpuBudget = vram === null ? null : vram - (num(machine.vramInUseBytes) ?? 0) - rules.vramMarginBytes
   const ramBase = num(machine.ramAvailableBytes) ?? num(machine.ramTotalBytes)
   const ramBudget = ramBase === null ? null : ramBase - rules.ramReserveBytes
-  const heavyRamBudget = ramBase === null ? null : ramBase - Math.max(2 * GiB, rules.heavyRamReserveBytes)
+  const heavyRamBudget = ramBase === null ? null : ramBase - Math.max(4 * GiB, rules.heavyRamReserveBytes)
   const lowConf = isLowConfidence(model)
   const rejected: RejectedCandidate[] = []
   const candidates: CandidateConfig[] = []
@@ -213,8 +217,13 @@ export function generateCandidates(
       ? [[maxNgl(ladder[0], true), true], [maxNgl(ladder[0], false), false], [0, true]]
       : [[maxNgl(ladder[0], true), true], [maxNgl(target, true), true], [maxNgl(target, false), false], [0, true]]
     const seen = new Set<string>()
+    const ramTotal = num(machine.ramTotalBytes)
     plans.forEach(([n, kvOnGpu], i) => {
       if (n === 0 && i < plans.length - 1) return // nothing fits on the GPU for this probe; the CPU baseline covers ngl 0
+      if (n === 0 && ramTotal !== null && model.fileBytes > ramTotal * rules.cpuBaselineMaxRamShare) {
+        rejected.push({ id: idOf(0, 'f16'), modelId: model.id, reason: `CPU baseline skipped: model is >${Math.round(rules.cpuBaselineMaxRamShare * 100)}% of system RAM` })
+        return
+      }
       const key = `${n}|${kvOnGpu}`
       if (seen.has(key)) return
       seen.add(key)

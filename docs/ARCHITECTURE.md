@@ -164,7 +164,7 @@ Every method may be sync or async. For the event list see `src/shared/bench-even
 | Explicit config | `llamacpp.loadModel` | `-fit off`, explicit `-c`, `-ngl` and `--device`, and `--parallel 1`, so llama-server never silently changes the config. `/props` n_ctx ≠ requested → `ConfigDriftError` (e.g. Qwen2.5 served 32K when 48K was requested). |
 | Discrete device only | `pickDiscreteDevice`, `machineFromProfile` | iGPU names are excluded, and the largest non-integrated GPU supplies the VRAM total. |
 | Memory pre-pruning | `candidates.ts` | RAM est (whole mmap'd file) > available − 4 GiB → step skipped (never kept). VRAM est > total − in-use − 1 GiB → the first such step is kept once if ≤ 1.15× the budget; the rest are skipped. |
-| Live RAM floor | `session.ts` | Before each step: est RAM > live available − max(2 GiB, 8 % RAM) → `skipped_memory`. During a step: sample RAM available < floor → cancel, `guard_abort`. |
+| Live RAM floor | `session.ts` | Before each step: est RAM > live available − max(4 GiB, 8 % RAM) → `skipped_memory`. From the start of load (250 ms poll for heavy configs): sample RAM available + mmap credit < floor → kill (during load) or cancel → `guard_abort`. |
 | Spill abort | `session.ts` | Per-PID shared GPU memory > 2 GiB → cancel, `guard_abort` (the guard reason takes precedence over the resulting "cancelled"). |
 | Telemetry glitches | `sampler.ts` | PDH rows with an impossible percentage (e.g. 1.3e13 % GPU util) are dropped whole, never reported. |
 | Timeouts | `llamacpp`, `session.ts` | load: 120 s health wait (hardcoded). prompt: 60 s + 10 ms × ctx. quality: 180 s per test. |

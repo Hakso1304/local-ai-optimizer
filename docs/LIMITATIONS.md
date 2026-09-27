@@ -51,7 +51,9 @@ This is the single consolidated list, and every item is checked against the code
 - **DONE-WITH-CAVEAT: unavailable inputs score a neutral 50.** They are flagged "unknown", never counted as 0 or as a pass.
 - **DONE-WITH-CAVEAT: scoring vs recommended ctx.** Scores are taken at the workload's target ctx, while the recommended `-c` is the largest passing step within the TTFT tolerance. The reasons show both.
 - **DONE-WITH-CAVEAT: partial offload is ineligible** whenever the same model's full offload has a usable step (calibration: −83 % decode; a spilled full offload still beat ngl 30 by 4.7×).
-- **PARTIAL: heavy-model mode** (opt-in partial offload for models that don't fit) has **no calibration of its own**. The thresholds come from the 8B/14B full-offload data; the unit tests use a synthetic 27B plus the headers of the two real heavy models (Qwen3.8-27B, Gemma-4-26B); the live heavy run is pending. `-nkvo` is verified in `--help` only. The `minDecodeTps` gate keeps such models out of Fast Assistant, Chat and Coding.
+- **PARTIAL: heavy-model mode** is calibrated on **one real dense model** (Qwen3.8-27B at 55/65 layers: 12–13 t/s decode, no spill). The **MoE** model (Gemma-4-26B-A4B) and the `-nkvo` / CPU-baseline paths are not yet measured.
+  - The first real run showed a 27B CPU baseline driving RAM to 1.0 GiB free. The fixes: floor max(4 GiB, 8 %) in all modes, +1.5 GiB at ngl 0, the CPU baseline skipped when the file is > 50 % of RAM, the guard active from load with 250 ms polling for heavy configs, and heavy configs ordered most-offloaded first.
+  - The `minDecodeTps` gate keeps such models out of Fast Assistant, Chat and Coding.
 - **PARTIAL: KV layout for hybrid / sliding-window archs.**
   - `kvLayout` handles per-layer KV heads, `full_attention_interval` (qwen35) and `sliding_window_pattern` (gemma4). gguf.ts reads those keys since a456679.
   - Unknown archs without layout keys get the all-layers **upper bound**: conservative, never OOM from an under-estimate.
@@ -67,7 +69,7 @@ This is the single consolidated list, and every item is checked against the code
 
 ## Safety
 - **DONE-WITH-CAVEAT: guard thresholds are heuristics:**
-  - RAM floor max(2 GiB, 8 % RAM)
+  - RAM floor max(4 GiB, 8 % RAM), in heavy mode too
   - 4 GiB candidate RAM reserve
   - 2 GiB shared-spill abort
   - 1 GiB VRAM margin, keep-over ≤ 1.15×

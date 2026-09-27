@@ -61,11 +61,12 @@ describe('heavy-mode candidates on the real heavy models (16 GB VRAM)', () => {
     const [first] = generateCandidates(machine(), gemma4, { backend: 'vulkan' }, WORKLOADS.document_analysis, heavy).candidates
     expect(first.notes.join(' ')).toMatch(/KV estimate: fallback upper bound/)
   })
-  it('KV size unknown → only conservative probes (max ngl @2K, -nkvo, CPU baseline), reasons say so', () => {
-    const { candidates } = generateCandidates(machine(), { ...qwen35, headsKv: 0 }, { backend: 'vulkan' }, WORKLOADS.max_quality, heavy)
+  it('KV size unknown → only conservative probes (max ngl @2K, -nkvo; CPU baseline only if the file is ≤ 50% RAM)', () => {
+    const { candidates, rejected } = generateCandidates(machine(), { ...qwen35, headsKv: 0 }, { backend: 'vulkan' }, WORKLOADS.max_quality, heavy)
     expect(candidates.length).toBeLessThanOrEqual(3)
     expect(candidates.every((c) => c.degradedReason!.endsWith('; KV size unknown'))).toBe(true)
     expect(candidates.some((c) => c.kvOffload === false)).toBe(true)
-    expect(candidates.some((c) => c.gpuLayers === 0)).toBe(true)
+    expect(candidates.some((c) => c.gpuLayers === 0)).toBe(false) // CPU baseline: 15.3 GiB + KV + 2 GiB > 20 − 4 GiB
+    expect(rejected.some((r) => r.id.includes('|ngl=0|'))).toBe(true)
   })
 })

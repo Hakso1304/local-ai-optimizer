@@ -39,7 +39,9 @@ export function recommend(
   inputs: CandidateInput[],
   machine: MachineLimits,
   workload: WorkloadId,
-  cfg: ScoringConfig = DEFAULT_SCORING_CONFIG
+  cfg: ScoringConfig = DEFAULT_SCORING_CONFIG,
+  /** Models the planner produced no candidates for, with its reason — surfaced in reasons, not just the log. */
+  unplanned: { model: string; reason: string }[] = []
 ): Recommendation {
   const profile = cfg.profiles[workload]
   const round = (x: number) => Number(x.toFixed(cfg.tieDecimals))
@@ -130,6 +132,8 @@ export function recommend(
   // X17: only compare like with like; say so when rows come from different runtimes/procedures.
   const vers = [...new Set(inputs.flatMap((i) => i.runs).map((r) => (r.versions ? `${r.versions.runtime ?? '?'}/${r.versions.benchmark}/${r.versions.prompts}` : null)).filter((v): v is string => v !== null))].sort()
   if (vers.length > 1) reasons.push(`Warning: results mix runtime/benchmark versions (${vers.join(', ')}); comparisons may not be like-for-like`)
+
+  for (const u of unplanned) reasons.push(`Not benchmarked: ${u.model} — ${u.reason}`)
 
   let best: Recommendation['best'] = null
   if (top) {
