@@ -32,8 +32,8 @@ export function ramFloor(read: () => number = freemem): number {
   return available
 }
 export const bounded = (signal: AbortSignal, ms = REQUEST_TIMEOUT_MS) => AbortSignal.any([signal, AbortSignal.timeout(ms)])
-const alive = (pid: number) => execFileSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true, timeout: PROBE_TIMEOUT_MS }).split('\n').some((l) => /^"[^\"]+","\d+"/.test(l))
-export async function stopOwned(p: ChildProcess, closed: Promise<void>, isAlive: (pid: number) => boolean = alive, forceKill: (pid: number) => void = (pid) => { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, timeout: PROBE_TIMEOUT_MS }) }): Promise<void> {
+const alive = (pid: number) => execFileSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true, timeout: PROBE_TIMEOUT_MS, env: safeEnv() }).split('\n').some((l) => /^"[^\"]+","\d+"/.test(l))
+export async function stopOwned(p: ChildProcess, closed: Promise<void>, isAlive: (pid: number) => boolean = alive, forceKill: (pid: number) => void = (pid) => { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, timeout: PROBE_TIMEOUT_MS, env: safeEnv() }) }): Promise<void> {
   if (!p.pid) throw new Error('spawned server has no PID; exit cannot be verified')
   const waitClosed = (ms: number) => Promise.race([closed.then(() => true), sleep(ms).then(() => false)])
   if (isAlive(p.pid)) p.kill()
@@ -86,7 +86,38 @@ function vulkanHeaps(): string {
   try { ramFloor(); return execFileSync('vulkaninfo', ['--summary'], { encoding: 'utf8', windowsHide: true, timeout: PROBE_TIMEOUT_MS, env: safeEnv(), stdio: ['ignore', 'pipe', 'ignore'] }).split(/\r?\n/).filter((l) => /heap|MEMORY_HEAP|size\s*=/i.test(l)).slice(0, 30).join('\n') } catch { return 'vulkaninfo not available (skipped)' }
 }
 
-const servers = () => execFileSync('tasklist', ['/FI', 'IMAGENAME eq llama-server.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true, timeout: PROBE_TIMEOUT_MS }).split('\n').filter((l) => /^"llama-server\.exe"/i.test(l)).length
+type SeenServer = { pid: number; image: string }
+let lastServerScan: { observedAt: string; processes: SeenServer[] } = { observedAt: '', processes: [] }
+const servers = () => {
+  const observedAt = new Date().toISOString()
+  const processes = execFileSync('tasklist', ['/FI', 'IMAGENAME eq llama-server.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true, timeout: PROBE_TIMEOUT_MS, env: safeEnv() })
+    .split(/\r?\n/).map((l) => /^"(llama-server\.exe)","(\d+)"/i.exec(l)).filter((m): m is RegExpExecArray => m !== null)
+    .map((m) => ({ image: m[1], pid: Number(m[2]) }))
+  lastServerScan = { observedAt, processes }
+  return processes.length
+}
+export interface CollisionEvidence {
+  observedAt: string
+  tasklist: { observedAt: string; processes: SeenServer[] }
+  cim: { pid: number; parentPid: number | null; path: string | null; commandLine: string | null; creationDate: string | null }[]
+  probeError?: string
+}
+/** Read-only diagnostics for a foreign server. Never terminate a process found here. */
+export function collisionEvidence(): CollisionEvidence {
+  const evidence: CollisionEvidence = { observedAt: new Date().toISOString(), tasklist: lastServerScan, cim: [] }
+  try {
+    const command = '$ErrorActionPreference="Stop"; ConvertTo-Json -InputObject @(Get-CimInstance Win32_Process -Filter "Name=\'llama-server.exe\'" | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine,CreationDate) -Compress -Depth 3'
+    const raw = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true, timeout: PROBE_TIMEOUT_MS, env: safeEnv() }).trim()
+    const rows = raw ? JSON.parse(raw) as Record<string, unknown>[] | Record<string, unknown> : []
+    evidence.cim = (Array.isArray(rows) ? rows : [rows]).map((r) => ({
+      pid: Number(r.ProcessId), parentPid: r.ParentProcessId == null ? null : Number(r.ParentProcessId),
+      path: typeof r.ExecutablePath === 'string' ? r.ExecutablePath : null,
+      commandLine: typeof r.CommandLine === 'string' ? r.CommandLine : null,
+      creationDate: typeof r.CreationDate === 'string' ? r.CreationDate : null
+    }))
+  } catch (e) { evidence.probeError = e instanceof Error ? e.message : String(e) }
+  return evidence
+}
 
 interface Row { t: number; pidDed: number | null; pidShr: number | null; adapterDed: Record<string, number>; adapterShr: Record<string, number> }
 function sampler(pid: number) {
@@ -132,6 +163,8 @@ export interface LaunchProbe {
   loadTimeoutMs?: number
   healthTimeoutMs?: number
   watchIntervalMs?: number
+  settleMs?: number
+  postMs?: number
 }
 export async function launch(label: string, argv: string[], promptTokens: number | null, exe = EXE, probe: LaunchProbe = {}) {
   const readRam = probe.readRam ?? freemem
@@ -139,6 +172,8 @@ export async function launch(label: string, argv: string[], promptTokens: number
   const requestTimeoutMs = Math.min(probe.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, REQUEST_TIMEOUT_MS)
   const loadTimeoutMs = Math.min(probe.loadTimeoutMs ?? LOAD_TIMEOUT_MS, LOAD_TIMEOUT_MS)
   const healthTimeoutMs = Math.min(probe.healthTimeoutMs ?? 5_000, 5_000)
+  const settleMs = Math.min(Math.max(probe.settleMs ?? 2_500, 0), 2_500)
+  const postMs = Math.min(Math.max(probe.postMs ?? 1_500, 0), 1_500)
   const port = 19100 + Math.floor(Math.random() * 500)
   const t0 = Date.now()
   const ramBefore = readRam()
@@ -147,11 +182,19 @@ export async function launch(label: string, argv: string[], promptTokens: number
   let closed: Promise<void> | null = null
   let s: ReturnType<typeof sampler> | null = null
   const controller = new AbortController()
-  let log = ''
+  // Drain both pipes: b11208 may emit load/buffer lines on stdout. Keep the text for audit, even when parsing fails.
+  let stdoutLog = '', stderrLog = ''
+  const LOG_LIMIT = 8 * 1024 * 1024
+  let stdoutTruncated = false, stderrTruncated = false
+  const append = (kind: 'stdout' | 'stderr', chunk: Buffer) => {
+    const text = chunk.toString('utf8')
+    if (kind === 'stdout') { if (stdoutLog.length + text.length > LOG_LIMIT) stdoutTruncated = true; else stdoutLog += text }
+    else { if (stderrLog.length + text.length > LOG_LIMIT) stderrTruncated = true; else stderrLog += text }
+  }
   let error: string | null = null
   let loadMs = 0
   let promptN: number | null = null
-  const reps: { decodeTps: number | null; prefillTps: number | null; promptN: number | null; ttftMs: number | null }[] = []
+  const reps: { decodeTps: number | null; prefillTps: number | null; promptN: number | null; prefillMs: number | null; clientTtftMs: null; requestWallMs: number }[] = []
   const watchdog = watchRam(controller, () => { console.log('RAM WATCHDOG: cancelling request and killing server'); p?.kill() }, readRam, probe.watchIntervalMs ?? 500)
   try {
     ramFloor(readRam)
@@ -161,7 +204,8 @@ export async function launch(label: string, argv: string[], promptTokens: number
     p = spawn(exe, [...argv, '--port', String(port), '--host', '127.0.0.1'], { windowsHide: true, env: safeEnv() })
     let serverClosed = false
     closed = new Promise<void>((resolve) => { p!.once('close', () => { serverClosed = true; resolve() }); p!.once('error', () => { serverClosed = true; resolve() }) })
-    p.stderr?.on('data', (d) => { log += d.toString() })
+    p.stdout?.on('data', (d: Buffer) => append('stdout', d))
+    p.stderr?.on('data', (d: Buffer) => append('stderr', d))
     const loadStart = Date.now()
     let ready = false
     while (Date.now() - loadStart < loadTimeoutMs) {
@@ -176,7 +220,7 @@ export async function launch(label: string, argv: string[], promptTokens: number
     loadMs = Date.now() - t0
     if (!p.pid) throw new Error('server started without PID')
     s = (probe.startSampler ?? sampler)(p.pid)
-    await sleep(2500)
+    await sleep(settleMs)
     if (controller.signal.aborted) throw controller.signal.reason
     if (promptTokens) {
       const pr = await prompt(port, promptTokens, controller.signal, requestTimeoutMs)
@@ -185,10 +229,10 @@ export async function launch(label: string, argv: string[], promptTokens: number
         if (controller.signal.aborted) throw controller.signal.reason
         const r0 = Date.now()
         const j = (await (await fetch(`http://127.0.0.1:${port}/completion`, { signal: bounded(controller.signal, requestTimeoutMs), method: 'POST', body: JSON.stringify({ prompt: pr.text, n_predict: phase === 'warmup' ? 8 : 128, temperature: 0, seed: 1, cache_prompt: false }) })).json()) as { timings?: { prompt_n?: number; prompt_per_second?: number; predicted_per_second?: number; prompt_ms?: number } }
-        if (phase !== 'warmup') reps.push({ decodeTps: j.timings?.predicted_per_second ?? null, prefillTps: j.timings?.prompt_per_second ?? null, promptN: j.timings?.prompt_n ?? null, ttftMs: j.timings?.prompt_ms ?? Date.now() - r0 })
+        if (phase !== 'warmup') reps.push({ decodeTps: j.timings?.predicted_per_second ?? null, prefillTps: j.timings?.prompt_per_second ?? null, promptN: j.timings?.prompt_n ?? null, prefillMs: j.timings?.prompt_ms ?? null, clientTtftMs: null, requestWallMs: Date.now() - r0 })
       }
     }
-    await sleep(1500)
+    await sleep(postMs)
     if (controller.signal.aborted) throw controller.signal.reason
   } catch (e) {
     error = e instanceof Error ? e.message : String(e)
@@ -202,10 +246,12 @@ export async function launch(label: string, argv: string[], promptTokens: number
   const ramMin = Math.min(watchdog.minimum(), readRam())
   const rows = s?.rows ?? []
   const luid = Object.entries(rows[0]?.adapterDed ?? {}).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
-  const base = rows.find((r) => r.pidShr != null)?.pidShr ?? 0
-  const onset = rows.find((r) => r.pidShr != null && r.pidShr > base + 256 * MiB) ?? null
+  const base = rows.find((r) => r.pidShr != null)?.pidShr ?? null
+  const onset = base == null ? null : rows.find((r) => r.pidShr != null && r.pidShr > base + 256 * MiB) ?? null
   const peak = (f: (r: Row) => number | null) => { const v = rows.map(f).filter((x): x is number => x != null); return v.length ? Math.max(...v) : null }
+  const log = `${stdoutLog}\n${stderrLog}`
   const bufs = (kind: string) => [...log.matchAll(/(\S+) (model|KV|compute) buffer size\s*=\s*([\d.]+) MiB/g)].filter((m) => m[2] === kind).map((m) => ({ dev: m[1], mib: Number(m[3]) }))
+  const bufferRows = [...bufs('model'), ...bufs('KV'), ...bufs('compute')]
   const res = {
     label, exe, argv: argv.join(' '), error, ramAbort: watchdog.reason(), loadMs, promptTokensRequested: promptTokens, promptTokensActual: promptN, reps,
     samples: rows.length, adapterLuid: luid, adapterTotalGiB: g(ADAPTER_TOTAL),
@@ -215,22 +261,23 @@ export async function launch(label: string, argv: string[], promptTokens: number
     buffersMiB: { model: bufs('model'), kv: bufs('KV'), compute: bufs('compute') },
     layersPerDevice: [...log.matchAll(/layer\s+\d+ assigned to device (\S+?),?\s/g)].reduce<Record<string, number>>((a, m) => ((a[m[1]] = (a[m[1]] ?? 0) + 1), a), {}),
     offloadLines: log.split(/\r?\n/).filter((l) => /offload(ing|ed) \d+/.test(l)).map((l) => l.trim()),
-    largestBufferMiB: Math.max(0, ...[...bufs('model'), ...bufs('KV'), ...bufs('compute')].map((b) => b.mib)),
+    largestBufferMiB: bufferRows.length ? Math.max(...bufferRows.map((b) => b.mib)) : null,
+    stdoutLog, stderrLog, stdoutTruncated, stderrTruncated,
     listDevicesBefore: devicesBefore, ramAvailBeforeGiB: g(ramBefore), ramAvailMinGiB: g(ramMin)
   }
   console.log(JSON.stringify(res))
   return res
 }
 
-export async function idle(ms: number, read: () => number = freemem, countServers: () => number = servers) {
-  if (countServers() > 0) throw new Error('llama-server already running')
+export async function idle(ms: number, read: () => number = freemem, countServers: () => number = servers, inspectCollision: () => CollisionEvidence = collisionEvidence) {
+  if (countServers() > 0) throw new Error(`llama-server already running; collision=${JSON.stringify(inspectCollision())}`)
   console.log(`idle ${ms / 1000}s (GPU quiet)`)
   ramFloor(read)
   const end = Date.now() + ms
   while (Date.now() < end) {
     await sleep(Math.min(500, end - Date.now()))
     ramFloor(read)
-    if (countServers() > 0) throw new Error('llama-server appeared during idle; stop this experiment')
+    if (countServers() > 0) throw new Error(`llama-server appeared during idle; stop this experiment; collision=${JSON.stringify(inspectCollision())}`)
   }
 }
 function assertCase(row: Awaited<ReturnType<typeof launch>>) {
@@ -284,6 +331,7 @@ async function main() {
   if (IGPU) return igpuAb()
   const results = []
   const heaps = vulkanHeaps()
+  let stopReason: string | null = null
   try {
     await idle(120_000)
     const a1 = await launch('A1 fresh, 36,572-token prompt', baseArgv(65536), 36572)
@@ -300,8 +348,11 @@ async function main() {
     // B2: same as A1 but -ub 256 (smaller compute buffer).
     const b2 = await launch('B2 fresh, -ub 256, 36,572-token prompt', baseArgv(65536).map((a, i, xs) => (xs[i - 1] === '-ub' ? '256' : a)), 36572)
     results.push(b2); assertCase(b2)
+  } catch (e) {
+    stopReason = e instanceof Error ? e.message : String(e)
+    throw e
   } finally {
-    writeFileSync(out, JSON.stringify({ when: new Date().toISOString(), model: MODEL, vulkaninfoHeaps: heaps, results }, null, 1))
+    writeFileSync(out, JSON.stringify({ when: new Date().toISOString(), model: MODEL, vulkaninfoHeaps: heaps, stopReason, results }, null, 1))
   }
   console.log(`wrote ${out}; leftover llama-server ${servers()}`)
 }
