@@ -53,6 +53,10 @@ This is the single consolidated list, and every item is checked against the code
 - **DONE-WITH-CAVEAT: scoring vs recommended ctx.** Scores are taken at the workload's target ctx, while the recommended `-c` is the largest passing step within the TTFT tolerance. The reasons show both.
 - **DONE-WITH-CAVEAT: partial offload is ineligible** whenever the same model's full offload has a usable step (calibration: −83 % decode; a spilled full offload still beat ngl 30 by 4.7×).
 - **PARTIAL: heavy-model mode** (partial offload for models that don't fit) is opt-in. It is tested with a synthetic 27B only; no real >16 GB model has been benchmarked. `-nkvo` is verified in `--help` only. A decode gate (`minDecodeTps`) keeps such models out of Fast Assistant, Chat and Coding.
+- **PARTIAL: KV layout for hybrid / sliding-window archs.**
+  - `kvLayout` handles per-layer KV heads, `full_attention_interval` (qwen35) and `sliding_window_pattern` (gemma4) when ModelMeta carries them.
+  - Until gguf.ts reads those keys, such models get the all-layers **upper bound**. That is conservative, so fewer configs and shorter ladders, never OOM from an under-estimate.
+  - Recurrent state (e.g. DeltaNet layers, about 150 MB) is not modelled; the 1 GiB VRAM margin covers it.
 
 ## Export
 - **PARTIAL: the core generators exist** (`export/config.ts`: llama-server, Ollama Modelfile, LM Studio, JSON, provenance note). The Results page still uses its own simpler llama-server text.
@@ -71,5 +75,8 @@ This is the single consolidated list, and every item is checked against the code
 
 ## Platform and packaging
 - **DONE-WITH-CAVEAT: Windows 11 only** (PowerShell/WMI scanner, typeperf, taskkill). macOS and Linux are not supported.
-- **PARTIAL: packaging is not verified yet.** `electron-builder` is a devDependency, but `vendor/` and `models/` are located via `app.getAppPath()`, which is correct for dev/preview only. Update this item after #2's packaging task.
+- **DONE-WITH-CAVEAT: packaging** (a3dc31e): electron-builder portable exe and a per-user NSIS installer.
+  - The binaries are **unsigned**, so Windows SmartScreen warns on first launch.
+  - The packaged app installs the llama.cpp runtime to `userData/runtime/llama.cpp` on first run, via the System page.
+  - Dev and packaged builds share `%APPDATA%\local-ai-optimizer`.
 - **DONE-WITH-CAVEAT: the runtime download takes the newest `bNNNNN` prerelease that has a win-vulkan asset, and keeps it** (`release-tag.txt`); there is no update check. Upstream flag churn in a newer build can break the argv, and flags are not re-validated against `--help` at install.
