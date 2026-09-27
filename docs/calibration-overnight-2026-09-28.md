@@ -96,3 +96,29 @@ Gemma-4-26B-A4B-It Q4_K_M (16,947,541,728 bytes) ran on Vulkan0 with runtime `b1
 The session ended with status `done` after 2,485 s, `ramAbort=null`, `promptCacheSeen=false`, minimum available RAM 8.85 GiB during ladder and 8.65 GiB during quality, and zero server/typeperf/harness processes after teardown at 03:22:46 KST. The DB export contains one benchmark run, 360 quality rows and one recommendation. Each generation config has 180 unique item/sample keys (60 items, 23 skills, three samples): off has 180 valid rows and 172 raw passes; think has 179 valid rows, one truncated row (EX2-08 at its 1,024-token budget), and 175 raw passes. These raw pass counts are **not** the workload quality score.
 
 Every off row persisted `requestedTemplateKwargs` and `appliedTemplateKwargs` with `enable_thinking:false`; every think row persisted both with `enable_thinking:true`. Both sides share template hash `aa3185dfc65051046349995de1cfc2fbb275491b9a3832b71595f1ff5b31d61b`, the same model fingerprint and runtime, and accepted sampling T=1/top-p approximately 0.95/top-k 64 (with runtime min-p approximately 0.05 and per-sample seeds). The stored generation choice says think minus off was **+3 with a heuristic paired interval [−3, +11]**, which includes zero; it kept off by its tie rule. This does not establish that either config has better quality. The frozen snapshot can persist zero reasoning tokens with `tokenSource=runtime` when the source token count is null, so this session does not support a measured reasoning-token split or an effective-answer-speed claim. Qwen remains a separate held stage.
+
+## Audit (#3) — session 5, Qwen3.8 off / low / medium (runner HEAD 842d396)
+**Verdict: the thinking-side quality in session 5 is INVALID as scored.** Collection, seeds and provenance are sound.
+- Checker defect, fixed in ec4cb18:
+  - The Qwen3.x thinking template ends the prompt with `…assistant\n<think>\n`, so each reply starts inside the reasoning block. Only `</think>` is in the content.
+  - `stripThinking` removed only paired tags, so every checker graded the reasoning text. Example: IF2-01's reply `…\n</think>\n\nREADY` failed `/^READY$/`.
+- Offline rescore of the 540 stored replies (run dump transcripts, aligned 1:1 with the DB rows), checkers at ec4cb18:
+
+  | Raw passes / 180 | As stored | Rescored |
+  |---|---|---|
+  | off | 161 | 161 (0 changed) |
+  | low | 99 | 175 |
+  | medium | 68 | 176 |
+
+  These are raw pass counts, not the workload Q.
+- So the stored I-5.4 figures (low Q 55, medium Q 33) are artifacts.
+- The stored genChoice (off) was decided on time-to-answer above tolerance, not quality. That reason stands, and so does effective speed (1.8 / 1.4 t/s).
+- Session 4 (Gemma) rescored the same way: 0 rows change, because Gemma's template does not open the channel in the prompt.
+- Valid in session 5:
+  - suite seed 424242 on all 540 rows; 60 items × 3 samples per gen config;
+  - applied kwargs equal the requested ones, with `enable_thinking` and `reasoning_effort` both `proved` on every thinking row;
+  - one template hash; accepted sampling T 1 / top-p 0.95 / top-k 20 / min-p 0, with seeds 1–3;
+  - 1 truncated off row (EX2-06, 256-token budget);
+  - min RAM 12.07 GiB (ladder) and 9.86 GiB (quality); promptCacheSeen false; ramAbort null.
+- Not valid: on thinking rows `tokenSource` is `estimated`, so the reasoning-token split and effective-speed figures are estimates.
+- Needed for a claim: re-evaluate session 5's quality rows with ec4cb18. A read-time rescore from the stored replies needs no GPU, but the DB rows hold no replies; the transcripts are in the dump. Alternatively re-run it. Only then do low/medium/xhigh vs off comparisons mean anything.
