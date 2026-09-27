@@ -81,3 +81,9 @@
 - Pushed S2 50dc27e/f49a32e/5626933 and S3 81861f4. 5626933 was pushed before the late dependency warning; 81861f4 now restores committed source/test consistency. No GPU release was implied by either push.
 - Independent ab-spill safety run: 9 tests passed in 7.86 s, including S2 integration cases still pending its next commit. Review flagged optional diagnostics in finally can prevent RAM-abort artifact serialization; S3 to fix before gate.
 - S1 O6-O9 working tests pass; requested harder measured-TTFT provenance and per-row backend scope for CR-04-long/quality reuse before acceptance. Historical raw residency remains evidence; unvalidated spill conclusions must stay flagged (EVIDENCE owner notified).
+
+## Astra - 2026-09-28T01:48:28 local - stage2 released and follow-up accepted
+- Accepted S3 software gate for immutable b868e3a68d123849ab2cdacd32a2a034695fb75b, script SHA256 A0CFA25122D5D333E0AEBC31F38FC03908F99B22CE82BF84705E29B989CC6281. Independent integrated safety tests pass; S3 archive/typecheck and lowercase-env refusal verified. Hardware evidence is still pending.
+- Transferred sole GPU ownership from stopped, quota-limited Opus #3 to S3; notified #3 not to launch on resume. Stage2 ONLY released after fresh process/env/RAM checks; S3 acknowledges checks (17.39 GiB available, 1.12 GiB adapter use, no conflicting processes). Stage3 needs a fresh gate after teardown. Standalone A/B spill attribution remains UNVALIDATED for O1.
+- Pushed through f70b832, including e1ea388 source, d67da70 integration tests, 063f994 review and c23d571 stage3 preflight. Independent five-file recheck: 179 passed; S1/S2 report full 59 files / 786 passed and tsc clean. O6-O9 original scenarios and harder scope/TTFT negatives now pass; no claim of hardware conformance.
+- Transferred EVIDENCE.md ownership from quota-limited Opus #1 to S2 (notified #1) for E29/E31 validation-scope reconciliation and ledger audit. Preserve historical raw observations.
