@@ -2,7 +2,7 @@
 // candidates), so one candidate still scores and adding a bad candidate can't reorder others (X1, X5).
 import type {
   BenchmarkRunResult, CandidateInput, CliffReport, ComponentId, ComponentScore, ComponentScores,
-  MachineLimits, Metric, QualityCategory, WorkloadProfile
+  GenQuality, MachineLimits, Metric, QualityCategory, QualityResult, WorkloadProfile
 } from '../../shared/bench-types'
 import { detectCliffs, isUsable, val } from './cliff'
 import { DEFAULT_SCORING_CONFIG, type ScoringConfig } from './workloads'
@@ -47,20 +47,37 @@ export function referenceStep(
   return ctx === undefined ? null : byCtx.get(ctx)!
 }
 
-function quality(input: CandidateInput, profile: WorkloadProfile, cfg: ScoringConfig): ComponentScore {
-  // Same formula as core/quality qualityScore (not imported: it pulls node:vm), restricted to the profile's categories.
-  const mine = input.quality.filter((q) => profile.promptSetIds.includes(q.category))
-  let num = 0, den = 0
+/** Category-weighted pass rate (0–100) with a 95 % half-width, for any suite size: per category an Agresti–Coull
+ *  interval on the weighted pass rate (Kish effective n = (Σw)²/Σw², so repeated samples count as more items), combined
+ *  with the category weights. n = graded rows (items × samples). null when no category has results. */
+export function qualityStats(results: QualityResult[], categories: QualityCategory[], cfg: ScoringConfig = DEFAULT_SCORING_CONFIG):
+  { value: number; n: number; ci95: number } | null {
+  const z = cfg.qualityCiZ
+  const mine = results.filter((q) => categories.includes(q.category))
+  let num = 0, den = 0, v = 0
+  const parts: { W: number; var: number }[] = []
   for (const cat of Object.keys(cfg.qualityCategoryWeights) as QualityCategory[]) {
     const rows = mine.filter((q) => q.category === cat)
     const w = rows.reduce((s, r) => s + r.weight, 0)
     if (!(w > 0)) continue
-    num += cfg.qualityCategoryWeights[cat] * (rows.reduce((s, r) => s + (r.pass ? r.weight : 0), 0) / w)
-    den += cfg.qualityCategoryWeights[cat]
+    const p = rows.reduce((s, r) => s + (r.pass ? r.weight : 0), 0) / w
+    const nEff = w ** 2 / rows.reduce((s, r) => s + r.weight ** 2, 0)
+    const pt = (p * nEff + z * z / 2) / (nEff + z * z)
+    const W = cfg.qualityCategoryWeights[cat]
+    num += W * p
+    den += W
+    parts.push({ W, var: (pt * (1 - pt)) / (nEff + z * z) })
   }
-  if (den > 0) {
-    const q = (100 * num) / den
-    return { score: q, input: { value: q, kind: 'measured', source: `quality suite, ${mine.length} tests` } }
+  if (!(den > 0)) return null
+  for (const x of parts) v += (x.W / den) ** 2 * x.var
+  return { value: (100 * num) / den, n: mine.length, ci95: 100 * z * Math.sqrt(v) }
+}
+
+function quality(input: CandidateInput, profile: WorkloadProfile, cfg: ScoringConfig, results = input.quality): ComponentScore {
+  // Same formula as core/quality qualityScore (not imported: it pulls node:vm), restricted to the profile's categories.
+  const st = qualityStats(results, profile.promptSetIds, cfg)
+  if (st) {
+    return { score: st.value, n: st.n, ci95: st.ci95, input: { value: st.value, kind: 'measured', source: `quality suite, ${st.n} graded items, ±${st.ci95.toFixed(0)} (95 %)` } }
   }
   const { paramCount, fileBytes } = input.model
   if (!paramCount || !(paramCount > 0)) return unknown(NA('no quality results and parameter count unknown'), cfg)
@@ -97,7 +114,9 @@ export function componentScores(
   input: CandidateInput,
   machine: MachineLimits,
   profile: WorkloadProfile,
-  cfg: ScoringConfig = DEFAULT_SCORING_CONFIG
+  cfg: ScoringConfig = DEFAULT_SCORING_CONFIG,
+  /** Score with this generation config's quality; thinking configs also pay for their reasoning tokens in speed/latency. */
+  gen?: GenQuality
 ): ComponentScores {
   const n = cfg.norm
   const cliff = detectCliffs(input.runs, val(machine.vramBytes, true), cfg.cliff)
@@ -135,13 +154,22 @@ export function componentScores(
 
   const tol = profile.latencyToleranceMs
   const good = tol * n.latencyGoodFraction
+  // Thinking: the reader waits for reasoning tokens too. Effective decode = decode × answer/(answer + reasoning);
+  // time to answer = TTFT + reasoning tokens / decode. Token counts are the suite's medians (estimated for the ladder).
+  let decodeM = ref?.decodeTps, ttftM = ref?.ttftMs
+  if (ref && gen?.gen.thinking) {
+    const d = val(ref.decodeTps, true), t = val(ref.ttftMs, true), a = val(gen.answerTokens, true), r = val(gen.reasoningTokens)
+    const src = `${gen.gen.id}: ${r ?? '?'} reasoning + ${a ?? '?'} answer tokens (suite median)`
+    decodeM = d !== null && a !== null && r !== null ? { value: (d * a) / (a + r), kind: 'estimated', source: `effective decode, ${src}` } : NA(`reasoning token count unavailable for ${gen.gen.id}`)
+    ttftM = d !== null && t !== null && r !== null ? { value: t + (r / d) * 1000, kind: 'estimated', source: `time to answer, ${src}` } : NA(`reasoning token count unavailable for ${gen.gen.id}`)
+  }
   const components: Record<ComponentId, ComponentScore> = {
-    quality: quality(input, profile, cfg),
+    quality: quality(input, profile, cfg, gen ? gen.results : input.quality),
     // Linear, not log: calibration showed log scaling left a 5.7× slower partial offload (17.5 vs 99.9 t/s) only ~6–12
     // points behind; reading speed is felt linearly in t/s. Prefill spans orders of magnitude, so it stays log.
-    genSpeed: ref ? fromRef(ref.decodeTps, (v) => linScore(v, n.decodeFloorTps, profile.genTargetTps), 'decode TPS') : none,
+    genSpeed: ref ? fromRef(decodeM, (v) => linScore(v, n.decodeFloorTps, profile.genTargetTps), 'decode TPS') : none,
     prefillSpeed: ref ? fromRef(ref.prefillTps, (v) => logScore(v, n.prefillFloorTps, profile.prefillTargetTps), 'prefill TPS') : none,
-    latency: ref ? fromRef(ref.ttftMs, (v) => 100 * clamp01(1 - Math.log(Math.max(v, good) / good) / Math.log(tol / good)), 'TTFT') : none,
+    latency: ref ? fromRef(ttftM, (v) => 100 * clamp01(1 - Math.log(Math.max(v, good) / good) / Math.log(tol / good)), 'TTFT') : none,
     memory: ref ? memory(ref, input, machine, cfg) : none,
     stability,
     context

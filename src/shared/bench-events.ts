@@ -1,7 +1,7 @@
 // IPC contract between the benchmark session runner (main) and the live view (renderer). Types only.
 import type { TelemetrySample } from '../core/telemetry/sampler'
 import type { CandidateRules } from '../core/benchmark/candidates'
-import type { BenchmarkRunResult, Recommendation, StepVerdict, WorkloadId } from './bench-types'
+import type { BenchmarkRunResult, GenConfig, Recommendation, StepVerdict, WorkloadId } from './bench-types'
 
 export type { TelemetrySample }
 
@@ -29,6 +29,12 @@ export interface SessionRequest {
   rerunConfigIds?: string[]
   /** Continue this session: (configId, ctx) steps and quality already persisted are skipped. */
   resumeSessionId?: string
+  /** Search generation configs (thinking / effort / temperature) for thinking-capable models. Default true. */
+  genSearch?: boolean
+  /** Explicit generation configs (overrides the search; max 3). */
+  genConfigs?: GenConfig[]
+  /** 'thorough' (default): 3 seeded samples per test for stochastic (T > 0) gen configs. 'quick': 1 sample. */
+  qualityMode?: 'quick' | 'thorough'
 }
 
 export type SessionPhase = 'load' | 'warmup' | 'measure' | 'ladder' | 'quality'

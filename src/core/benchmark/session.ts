@@ -2,7 +2,7 @@
 // telemetry → quality once per model → recommend. One plain async function; every failure becomes data.
 import type { SessionEvent, SessionEventBody, SessionRequest } from '../../shared/bench-events'
 import type {
-  BenchmarkRunResult, CandidateConfig, CandidateInput, FailureKind, Metric, ModelMeta, QualityResult, Recommendation, RunStatus
+  BenchmarkRunResult, CandidateConfig, CandidateInput, FailureKind, GenConfig, GenQuality, Metric, ModelMeta, QualityResult, Recommendation, RunStatus
 } from '../../shared/bench-types'
 import type { SystemProfile } from '../../shared/types'
 import type { ExitInfo } from '../runtimes/llamacpp'
@@ -15,6 +15,7 @@ import { recommend } from '../scoring/recommend'
 import { DEFAULT_SCORING_CONFIG, effectiveProfile, withProfile } from '../scoring/workloads'
 import { estimateMemory, generateCandidates, machineFromProfile, rulesForRequest } from './candidates'
 import { LADDER_FILL, LADDER_PREDICT, PROMPT_VERSION, ladderPrompt } from './prompts'
+import { BASELINE_GEN, genConfigsFor, genLabel, samplingFor, splitReasoning, summarizeGen, templateKwargsFor, type GenRow } from './gen'
 
 /** Bump when the runner's measurement procedure changes (warmup, reps, reduction, timeouts). */
 export const BENCHMARK_VERSION = 'bench-1.0.0'
@@ -76,6 +77,10 @@ export const DEFAULT_SESSION_CONFIG = {
   promptTimeoutBaseMs: 60_000,
   promptTimeoutPerCtxMs: 10, // + 10 ms per context token: 64K → ~12 min cap for a slow partial offload
   qualityTimeoutMs: 180_000,
+  /** Thinking gen configs: maxTokens ×4 (at least this), timeout ×2 per test. */
+  thinkingMinTokens: 1024,
+  /** qualityMode 'thorough': seeded samples per test for stochastic (T > 0) gen configs. */
+  thoroughSamples: 3,
   // Floor = max(4 GiB, 8 % of RAM), heavy mode included: a 27B CPU baseline drove available RAM to 1.0 GiB with a
   // 2 GiB floor before the 1 s guard fired, and the host went into memory pressure (2026-09-27 heavy run).
   ramFloorMinBytes: 4 * GiB,
@@ -220,7 +225,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     send({ type: 'session:started', workload: req.workload, modelIds: req.modelIds, resumed: !!req.resumeSessionId, candidates: plan.length })
 
     const inputs: CandidateInput[] = []
-    const quality = new Map<string, QualityResult[]>() // modelId → results
+    const quality = new Map<string, QualityResult[]>() // modelId → baseline results
+    const genQ = new Map<string, GenQuality[]>() // modelId → every gen config that completed
     const longNotes: string[] = []
     let gpuLost = false
     const paused = () => !signal?.aborted && !!deps.pauseSignal?.aborted
@@ -290,16 +296,26 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         const best = inputs.filter((i) => i.model.id === modelId && i.runs.some(isUsable))
           .sort((a, b) => b.config.gpuLayers - a.config.gpuLayers || decode(b) - decode(a) || (a.config.id < b.config.id ? -1 : 1))[0]
         if (!best) continue
-        // Reuse stored quality only when it is the COMPLETE current suite (every test id, same suite version).
-        const stored = req.resumeSessionId ? await storage.listQuality(sessionId, modelId) : []
+        const gens = genConfigsFor(best.model, req)
+        const samplesOf = (g: GenConfig) => (g.temperature > 0 && req.qualityMode !== 'quick' ? cfg.thoroughSamples : 1)
+        // Reuse stored quality only when it is the COMPLETE current suite (every test id × sample for every gen config,
+        // same suite version). Rows without genId are the baseline (stored before the gen-config search).
+        const stored = (req.resumeSessionId ? await storage.listQuality(sessionId, modelId) : []) as GenRow[]
+        const rowsOf = (g: GenConfig) => stored.filter((r) => (r.genId ?? BASELINE_GEN.id) === g.id)
         const complete = stored.length > 0 && stored.every((r) => (r as { suite?: string }).suite === defaultTestSet.suite) &&
-          defaultTestSet.tests.every((t) => stored.some((r) => r.testId === t.id))
-        if (complete) { quality.set(modelId, stored); continue }
+          gens.every((g) => defaultTestSet.tests.every((t) => rowsOf(g).filter((r) => r.testId === t.id).length >= samplesOf(g)))
+        if (complete) {
+          const list = gens.map((g) => summarizeGen(g, rowsOf(g), samplesOf(g)))
+          quality.set(modelId, list[0].results)
+          if (gens.length > 1) genQ.set(modelId, list)
+          continue
+        }
         if (stored.length) log('warn', `${modelId}: stored quality results are incomplete or from another suite version; re-running the suite`)
         const cliff = detectCliffs(best.runs, vramTotal)
         const usable = best.runs.filter(isUsable).map((r) => r.ctx)
         const qctx = Math.min(profile.targetContext, val(cliff.practicalContextCeiling) ?? Math.max(...usable))
-        const results = await runQuality(best.config, best.model, qctx)
+        const perGen = await runQuality(best.config, best.model, qctx, gens.map((g) => ({ gen: g, samples: samplesOf(g) })))
+        const results = perGen[0]?.gen.id === BASELINE_GEN.id ? perGen[0].results : []
         await unload((e) => log('error', `unload failed: ${(e as Error).message}`))
         // One long-context retrieval test at the required ctx (a full prefill of it), on a config that reached it.
         if (required && required >= 32768 && results.length && !signal?.aborted && !paused()) {
@@ -308,14 +324,16 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
           if (reach) {
             const r = await runLongNeedle(reach.config, reach.model, required)
             await unload()
-            if (r) results.push(r)
+            if (r) for (const g of perGen) g.results.push({ ...r, genId: g.gen.id, sample: 1 } as GenRow)
           } else {
             longNotes.push(`Long-context needle CR-04-long at ${fmtCtx(required)} skipped for ${best.model.name}: practical context ${fmtCtx(val(cliff.practicalContextCeiling) ?? 0)} < ${fmtCtx(required)}`)
           }
         }
         if (results.length) {
           quality.set(modelId, results)
-          await storage.saveQuality(sessionId, modelId, best.config.id, qctx, results.map((r) => ({ ...r, suite: defaultTestSet.suite })))
+          if (gens.length > 1) genQ.set(modelId, perGen)
+          // One transaction for every gen config of the model (resume needs all of them or re-runs).
+          await storage.saveQuality(sessionId, modelId, best.config.id, qctx, perGen.flatMap((g) => g.results).map((r) => ({ ...r, suite: defaultTestSet.suite })))
         }
       }
     }
@@ -331,7 +349,11 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       send({ type: 'session:paused' })
       return null
     }
-    for (const i of inputs) i.quality = quality.get(i.model.id) ?? []
+    for (const i of inputs) {
+      i.quality = quality.get(i.model.id) ?? []
+      const g = genQ.get(i.model.id)
+      if (g) i.genQuality = g
+    }
     const rec = recommend(inputs, machine, req.workload, scoringCfg, unplanned)
     rec.reasons.push(...longNotes)
     await storage.saveRecommendation(sessionId, rec)
@@ -635,7 +657,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     } as QualityTest
     const g = await guardedLoad(cand, model, ctx, 'long-context needle')
     if (!g.ok) { log('error', `${cand.id}: ${g.reason}`); return null }
-    const templateKwargs = model.supportsThinking ? { enable_thinking: false } : undefined
+    const templateKwargs = templateKwargsFor(model, BASELINE_GEN)
     try {
       const prompt = await backend.applyTemplate([{ role: 'user', content: needlePrompt(test.params!, Math.floor(ctx * 0.75)) }], templateKwargs ? { templateKwargs } : undefined)
       const r = await backend.runPrompt({ prompt, maxTokens: test.maxTokens, temperature: 0, seed: 1, timeoutMs: cfg.promptTimeoutBaseMs + ctx * cfg.promptTimeoutPerCtxMs })
@@ -649,34 +671,60 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     }
   }
 
-  async function runQuality(cand: CandidateConfig, model: ModelMeta, ctx: number): Promise<QualityResult[]> {
+  /** The suite once per gen config (× samples for stochastic ones) on ONE guarded load. Returns the gen configs whose
+   *  suite completed, baseline first; an interrupted config and everything after it is dropped (never partial). */
+  async function runQuality(cand: CandidateConfig, model: ModelMeta, ctx: number, gens: { gen: GenConfig; samples: number }[]): Promise<GenQuality[]> {
     send({ type: 'phase', configId: cand.id, ctx, phase: 'quality' })
     const g = await guardedLoad(cand, model, ctx, 'quality suite')
     if (!g.ok) { log('error', `${cand.id}: ${g.reason}`); return [] }
-    // Thinking models (chat template has enable_thinking): quality runs with thinking OFF — deterministic, fast, and the
-    // suite's max_tokens fit. The ×4 token boost (buildQualityPrompts thinking:true) is kept for a future "thinking on".
-    const templateKwargs = model.supportsThinking ? { enable_thinking: false } : undefined
-    if (templateKwargs) log('info', `${model.name}: quality suite runs with thinking disabled (enable_thinking=false)`)
     const prompts = buildQualityPrompts(defaultTestSet, { fillerTokens: Math.min(cfg.qualityFillerMax, Math.floor(ctx * 0.6)), thinking: false })
-    const out: QualityResult[] = []
-    for (const p of prompts) {
-      const why = g.tripped()
-      if (why) { log('error', `${cand.id}: ${why}`); break }
-      if (signal?.aborted || backend.lastExit) break
-      const test = defaultTestSet.tests.find((t) => t.id === p.testId)!
-      try {
-        const prompt = await backend.applyTemplate(p.messages, templateKwargs ? { templateKwargs } : undefined)
-        const r = await backend.runPrompt({ prompt, maxTokens: p.maxTokens, temperature: p.temperature, seed: p.seed, timeoutMs: cfg.qualityTimeoutMs })
-        out.push(r.error
-          ? { testId: test.id, category: test.category, weight: test.weight, pass: false, score: 0, detail: `request failed: ${r.error}` }
-          : await evaluate(test, r.text))
-      } catch (e) {
-        out.push({ testId: test.id, category: test.category, weight: test.weight, pass: false, score: 0, detail: `request failed: ${(e as Error).message}` })
+    const done: GenQuality[] = []
+    try {
+      for (const { gen, samples } of gens) {
+        const templateKwargs = templateKwargsFor(model, gen)
+        if (templateKwargs) log('info', `${model.name}: quality suite with ${genLabel(gen)}${samples > 1 ? `, ${samples} samples` : ''}`)
+        const rows: GenRow[] = []
+        let interrupted = false
+        for (let sample = 1; sample <= samples && !interrupted; sample++) {
+          for (const p of prompts) {
+            const why = g.tripped()
+            if (why) { log('error', `${cand.id}: ${why}`); interrupted = true; break }
+            if (signal?.aborted || backend.lastExit) { interrupted = true; break }
+            const test = defaultTestSet.tests.find((t) => t.id === p.testId)!
+            const tag = { genId: gen.id, sample }
+            try {
+              const prompt = await backend.applyTemplate(p.messages, templateKwargs ? { templateKwargs } : undefined)
+              const s = samplingFor(gen)
+              const preq: PromptRequest & { topP?: number; topK?: number; minP?: number } = {
+                prompt, seed: sample, temperature: s.temperature, topP: s.top_p, topK: s.top_k, minP: s.min_p,
+                maxTokens: gen.thinking ? Math.max(p.maxTokens * 4, cfg.thinkingMinTokens) : p.maxTokens,
+                timeoutMs: gen.thinking ? cfg.qualityTimeoutMs * 2 : cfg.qualityTimeoutMs
+              }
+              const r = await backend.runPrompt(preq)
+              const split = splitReasoning(r.text ?? '')
+              const toks = r.decodeTokens ?? (r as PromptResult & { streamedTokens?: number | null }).streamedTokens ?? null
+              const chars = split.reasoningChars + split.answerChars
+              const reasoningTokens = toks === null ? null : chars > 0 ? Math.round((toks * split.reasoningChars) / chars) : 0
+              const counts = { answerTokens: toks === null || reasoningTokens === null ? null : toks - reasoningTokens, reasoningTokens, totalMs: r.totalMs ?? null }
+              rows.push(r.error
+                ? { testId: test.id, category: test.category, weight: test.weight, pass: false, score: 0, detail: `request failed: ${r.error}`, ...tag, ...counts }
+                : { ...(await evaluate(test, r.text)), ...tag, ...counts })
+            } catch (e) {
+              rows.push({ testId: test.id, category: test.category, weight: test.weight, pass: false, score: 0, detail: `request failed: ${(e as Error).message}`, ...tag })
+            }
+          }
+        }
+        // Partial suites (cancel/crash/guard) are not kept: a missing category must not look like a measured 0.
+        if (interrupted || rows.length < prompts.length * samples) {
+          log('warn', `${cand.id}: quality suite (${gen.id}) incomplete (${rows.length}/${prompts.length * samples}); discarded`)
+          break
+        }
+        done.push(summarizeGen(gen, rows, samples))
       }
+    } finally {
+      g.stop()
     }
-    g.stop()
-    // Partial suites (cancel/crash/guard) are not persisted: a missing category must not look like a measured 0.
-    if (out.length < prompts.length) { log('warn', `${cand.id}: quality suite incomplete (${out.length}/${prompts.length}); discarded`); return [] }
-    return out
+    return done
   }
 }
+

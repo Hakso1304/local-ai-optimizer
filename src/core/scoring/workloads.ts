@@ -20,22 +20,24 @@ const ALL: QualityCategory[] = ['instruction', 'reasoning', 'coding', 'structure
 // (TTFT 1.1 s@4K, 2.2 s@8K, 4.9 s@16K, 12 s@32K, 32 s@64K): fast 4K, chat/reasoning 16K, coding 32K, doc/long-ctx 64K.
 export const WORKLOADS: Record<WorkloadId, WorkloadProfile> = {
   general_chat: { id: 'general_chat', label: 'General Chat', weights: w([0.30, 0.25, 0.05, 0.15, 0.10, 0.10, 0.05]), targetContext: 8192, maxContext: 16384, latencyToleranceMs: 8000, genTargetTps: 60, prefillTargetTps: 1000, minQuality: 40, minDecodeTps: 10, promptSetIds: ['instruction', 'reasoning', 'structured', 'extraction'] },
-  coding: { id: 'coding', label: 'Coding', weights: w([0.40, 0.20, 0.10, 0.10, 0.05, 0.10, 0.05]), targetContext: 16384, maxContext: 65536, latencyToleranceMs: 15000, genTargetTps: 60, prefillTargetTps: 1500, minQuality: 50, minDecodeTps: 10, promptSetIds: ['coding', 'instruction', 'structured'] },
+  coding: { id: 'coding', label: 'Coding', weights: w([0.40, 0.20, 0.10, 0.10, 0.05, 0.10, 0.05]), targetContext: 16384, maxContext: 65536, latencyToleranceMs: 15000, genTargetTps: 60, prefillTargetTps: 1500, minQuality: 50, minDecodeTps: 10, promptSetIds: ['coding', 'instruction', 'structured'], qualityFirst: true },
   long_context_coding: { id: 'long_context_coding', label: 'Long-context Coding', weights: w([0.30, 0.10, 0.20, 0.05, 0.05, 0.10, 0.20]), targetContext: 65536, maxContext: 131072, latencyToleranceMs: 90000, genTargetTps: 40, prefillTargetTps: 2000, minQuality: 50, minDecodeTps: 5, promptSetIds: ['coding', 'context'] },
-  reasoning: { id: 'reasoning', label: 'Reasoning', weights: w([0.45, 0.20, 0.00, 0.05, 0.05, 0.15, 0.10]), targetContext: 8192, maxContext: 16384, latencyToleranceMs: 10000, genTargetTps: 50, prefillTargetTps: 1000, minQuality: 55, minDecodeTps: 5, promptSetIds: ['reasoning', 'instruction'] },
-  document_analysis: { id: 'document_analysis', label: 'Document Analysis', weights: w([0.30, 0.05, 0.25, 0.05, 0.05, 0.10, 0.20]), targetContext: 65536, maxContext: 131072, latencyToleranceMs: 120000, genTargetTps: 30, prefillTargetTps: 2000, minQuality: 45, minDecodeTps: 3, promptSetIds: ['extraction', 'context', 'structured'] },
+  reasoning: { id: 'reasoning', label: 'Reasoning', weights: w([0.45, 0.20, 0.00, 0.05, 0.05, 0.15, 0.10]), targetContext: 8192, maxContext: 16384, latencyToleranceMs: 10000, genTargetTps: 50, prefillTargetTps: 1000, minQuality: 55, minDecodeTps: 5, promptSetIds: ['reasoning', 'instruction'], qualityFirst: true },
+  document_analysis: { id: 'document_analysis', label: 'Document Analysis', weights: w([0.30, 0.05, 0.25, 0.05, 0.05, 0.10, 0.20]), targetContext: 65536, maxContext: 131072, latencyToleranceMs: 120000, genTargetTps: 30, prefillTargetTps: 2000, minQuality: 45, minDecodeTps: 3, promptSetIds: ['extraction', 'context', 'structured'], qualityFirst: true },
   fast_assistant: { id: 'fast_assistant', label: 'Fast Assistant', weights: w([0.15, 0.35, 0.10, 0.25, 0.05, 0.10, 0.00]), targetContext: 4096, maxContext: 8192, latencyToleranceMs: 2000, genTargetTps: 100, prefillTargetTps: 1000, minQuality: 30, minDecodeTps: 30, promptSetIds: ['instruction', 'extraction'] },
   // Large-scale coding: bigger model, slower is fine. Quality/context-heavy; latency advisory (reported, never gating).
   // Calibrated so a 27B partial offload at ~13 t/s with clearly higher measured quality beats an 8B at ~100 t/s when
   // both reach the target context (heavy fixture), while plain Coding still picks the 8B.
-  large_coding: { id: 'large_coding', label: 'Large-scale Coding', weights: w([0.40, 0.10, 0.10, 0.00, 0.05, 0.15, 0.20]), targetContext: 65536, maxContext: 131072, latencyToleranceMs: 180000, genTargetTps: 30, prefillTargetTps: 1000, minQuality: 50, minDecodeTps: 8, latencyAdvisory: true, promptSetIds: ['coding', 'instruction', 'structured', 'context'] },
-  max_quality: { id: 'max_quality', label: 'Maximum Quality', weights: w([0.70, 0.05, 0.00, 0.00, 0.05, 0.15, 0.05]), targetContext: 8192, maxContext: 16384, latencyToleranceMs: 20000, genTargetTps: 15, prefillTargetTps: 500, minQuality: 0, minDecodeTps: 2, promptSetIds: ALL }
+  large_coding: { id: 'large_coding', label: 'Large-scale Coding', weights: w([0.40, 0.10, 0.10, 0.00, 0.05, 0.15, 0.20]), targetContext: 65536, maxContext: 131072, latencyToleranceMs: 180000, genTargetTps: 30, prefillTargetTps: 1000, minQuality: 50, minDecodeTps: 8, latencyAdvisory: true, promptSetIds: ['coding', 'instruction', 'structured', 'context'], qualityFirst: true },
+  max_quality: { id: 'max_quality', label: 'Maximum Quality', weights: w([0.70, 0.05, 0.00, 0.00, 0.05, 0.15, 0.05]), targetContext: 8192, maxContext: 16384, latencyToleranceMs: 20000, genTargetTps: 15, prefillTargetTps: 500, minQuality: 0, minDecodeTps: 2, promptSetIds: ALL, qualityFirst: true }
 }
 
 export const DEFAULT_SCORING_CONFIG = {
   version: 'scoring-1.0.0',
   profiles: WORKLOADS,
   qualityCategoryWeights: { instruction: 0.2, reasoning: 0.25, coding: 0.25, structured: 0.1, extraction: 0.1, context: 0.1 } as Record<QualityCategory, number>,
+  /** z for the quality 95 % band (Agresti–Coull per category, category-weighted; suite-size agnostic). */
+  qualityCiZ: 1.96,
   /** Used only when no quality results exist; labelled ESTIMATED. [A] */
   qualityPrior: { base: 35, perDoubling: 15, max: 90 },
   cliff: {

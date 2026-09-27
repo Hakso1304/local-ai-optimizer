@@ -44,6 +44,8 @@ export interface WorkloadProfile {
   latencyAdvisory?: boolean
   /** Quality-suite categories that count for this profile. */
   promptSetIds: QualityCategory[]
+  /** Quality decides the winner when two candidates' quality confidence bands don't overlap; speed only within the band. */
+  qualityFirst?: boolean
 }
 
 /** Machine facts the scorer/candidate generator needs. Built from SystemProfile (machineFromProfile). */
@@ -91,6 +93,49 @@ export interface ModelMeta {
   /** MoE: `<arch>.expert_count` / `<arch>.expert_used_count` (gemma4: 128 / 8). Absent or 0 = dense. */
   expertCount?: number | null
   expertUsedCount?: number | null
+  /** Generation knobs (filled by #2 from the chat template + optional HF generation_config.json). */
+  genKnobs?: GenKnobs
+}
+
+/** What a model's chat template / model card lets us vary at generation time. */
+export interface GenKnobs {
+  supportsThinking: boolean
+  /** Allowed reasoning-effort values in ascending order (e.g. ['low','medium','high','xhigh']). */
+  effortValues?: string[]
+  /** Template variable that takes the effort (default 'reasoning_effort'). */
+  effortKw?: string
+  /** Template variable for a thinking-token budget, if the template has one (recorded, not searched). */
+  thinkingBudgetKw?: string
+  /** Model-card sampling (generation_config.json). */
+  recommended?: { temperature?: number; topP?: number; topK?: number; minP?: number }
+}
+
+/** One generation setting the quality suite is run with. `id` is deterministic (e.g. 'off', 'think-low-t1'). */
+export interface GenConfig {
+  id: string
+  thinking: boolean
+  effort?: string
+  temperature: number
+  topP?: number
+  topK?: number
+  minP?: number
+  source: 'model-card' | 'default' | 'template'
+}
+
+/** Quality suite results for one GenConfig on the model's best-offload config. Token counts are medians per request. */
+export interface GenQuality {
+  gen: GenConfig
+  /** Every sample of every test (stochastic configs: `samples` rows per test). */
+  results: QualityResult[]
+  samples: number
+  /** T > 0: seeded but not deterministic across builds/hardware. */
+  stochastic: boolean
+  answerTokens: Metric
+  reasoningTokens: Metric
+  /** Median request wall time = effective answer latency for a suite-sized prompt. */
+  effectiveAnswerLatencyMs: Metric
+  /** Answer tokens per total second (reasoning time counts against it). */
+  effectiveTps: Metric
 }
 
 export type KvType = 'f16' | 'q8_0'
@@ -217,6 +262,9 @@ export interface ComponentScore {
   score: number
   input: Metric
   note?: string
+  /** Quality only: effective number of graded items (items × samples) and the 95 % half-width in points. */
+  n?: number
+  ci95?: number
 }
 
 export interface ComponentScores {
@@ -247,14 +295,19 @@ export interface WorkloadScore {
   breakdown: BreakdownRow[]
   referenceCtx: number | null
   recommendedCtx: number | null
+  /** The generation config this score used (absent = the baseline quality). */
+  gen?: GenConfig
 }
 
 export interface CandidateInput {
   config: CandidateConfig
   model: ModelMeta
   runs: BenchmarkRunResult[]
-  /** Quality-suite results for this candidate's model (quality is per model+quant, not per ngl). */
+  /** Quality-suite results for this candidate's model (quality is per model+quant, not per ngl). With genQuality this
+   *  is the deterministic baseline (thinking off, T=0). */
   quality: QualityResult[]
+  /** One entry per generation config that was run (baseline included); the scorer picks the best per workload. */
+  genQuality?: GenQuality[]
 }
 
 export interface Recommendation {
@@ -266,6 +319,8 @@ export interface Recommendation {
     fallback?: 'meets required context; below preferred speed'
     /** "<model> <quant> @ <recommendedCtx> — <decode> t/s, quality <Q>, no spill up to <ctx>" (always set by recommend()). */
     headline?: string
+    /** Chosen generation config, with e.g. "thinking on (effort low, T=1.0): quality 88 ± 6 vs 71 ± 7 with thinking off; answers 2.3× slower". */
+    gen?: { config: GenConfig; reason: string }
     score: WorkloadScore
     practicalContext: Metric
     declaredContext: Metric
@@ -280,5 +335,7 @@ export interface Recommendation {
   reasons: string[]
   /** Why the runners-up lost: the top 2 non-winners by rank, plus any with higher measured quality than the winner.
    *  One sentence each, built only from the numbers the score used. Empty when there is no winner. */
-  whyNot?: { configId: string; model: string; summary: string }[]
+  whyNot?: { configId: string; model: string; summary: string; /** set for the winner's other generation configs */ genId?: string }[]
+  /** Some candidate's quality is an estimated prior (no quality run): the ranking may change once it is measured. */
+  provisional?: boolean
 }

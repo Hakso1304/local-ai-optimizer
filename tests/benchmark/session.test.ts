@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { SessionEvent, SessionRequest } from '../../src/shared/bench-events'
 import type { BenchmarkRunResult, ModelMeta, QualityResult, Recommendation } from '../../src/shared/bench-types'
 import type { SystemProfile } from '../../src/shared/types'
-import type { LoadConfig, PromptResult } from '../../src/core/runtimes/types'
+import type { LoadConfig, PromptRequest, PromptResult } from '../../src/core/runtimes/types'
 import type { ExitInfo } from '../../src/core/runtimes/llamacpp'
 import type { TelemetrySample } from '../../src/core/telemetry/sampler'
 import { runSession, type RunDetail, type SessionBackend, type SessionDeps, type SessionStorage } from '../../src/core/benchmark/session'
@@ -288,8 +288,35 @@ describe('runSession', () => {
     expect(h.s.quality[0].configId).toContain(`ngl=${most}|`)
   })
 
+  it('gen-config search: baseline + thinking @ lowest and middle effort on one load, model-card sampling, 3 seeded samples', async () => {
+    const genKnobs = { supportsThinking: true, effortValues: ['low', 'medium', 'high', 'xhigh'], recommended: { temperature: 0.6, topP: 0.95 } }
+    const seen: PromptRequest[] = []
+    let ref: ReturnType<typeof fakeBackend> | null = null
+    const backend = () => {
+      const b = fakeBackend(() => ({}))
+      const rp = b.runPrompt.bind(b)
+      b.runPrompt = async (q) => { seen.push(q); return rp(q) }
+      return (ref = b)
+    }
+    const m = { ...model, supportsThinking: true, genKnobs }
+    const r = await run(() => ({}), { workload: 'coding', runQuality: true, ladder: [2048] }, { models: [m], backend })
+    const kw = ref!.calls.templateOpts.map((o) => JSON.stringify((o as { templateKwargs?: unknown } | undefined)?.templateKwargs))
+    expect(kw.length).toBe(17 + 17 * 3 * 2)
+    expect([...new Set(kw)]).toEqual(['{"enable_thinking":false}', '{"enable_thinking":true,"reasoning_effort":"low"}', '{"enable_thinking":true,"reasoning_effort":"medium"}'])
+    expect(ref!.calls.loads).toHaveLength(2) // one ladder step + ONE quality load for all three gen configs
+    const stoch = seen.filter((q) => q.temperature === 0.6) as (PromptRequest & { topP?: number })[]
+    expect(stoch.every((q) => q.topP === 0.95 && q.maxTokens >= 1024)).toBe(true)
+    expect([...new Set(stoch.map((q) => q.seed))].sort()).toEqual([1, 2, 3])
+    const rows = r.s.quality[0].results as (QualityResult & { genId: string })[]
+    expect([...new Set(rows.map((x) => x.genId))]).toEqual(['off', 'think-low-t0.6', 'think-medium-t0.6'])
+    const quick = await run(() => ({}), { workload: 'coding', runQuality: true, ladder: [2048], qualityMode: 'quick' }, { models: [m] })
+    expect(quick.backend.calls.templates).toBe(17 * 3)
+    const off = await run(() => ({}), { workload: 'coding', runQuality: true, ladder: [2048], genSearch: false }, { models: [m] })
+    expect(off.backend.calls.templates).toBe(17)
+  })
+
   it('thinking models: quality templates use enable_thinking=false; others get no kwargs', async () => {
-    const thinking = await run(() => ({}), { workload: 'fast_assistant', runQuality: true, ladder: [2048, 4096] }, { models: [{ ...model, supportsThinking: true }] })
+    const thinking = await run(() => ({}), { workload: 'fast_assistant', runQuality: true, ladder: [2048, 4096], genSearch: false }, { models: [{ ...model, supportsThinking: true }] })
     expect(thinking.backend.calls.templateOpts.length).toBe(17)
     expect(thinking.backend.calls.templateOpts.every((o) => JSON.stringify(o) === '{"templateKwargs":{"enable_thinking":false}}')).toBe(true)
     expect(thinking.rec?.reasons).toContain('Quality measured with thinking disabled (chat template enable_thinking=false)')
