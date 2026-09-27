@@ -10,7 +10,7 @@ Conditions:
 - Resume reused every persisted step. Measured anew: Qwen3.8 + Gemma quality (qb-2.0.0, thinking off, T=0) and the Gemma ngl 19 ladder.
 
 Historical stored recommendation (not a validated final ranking while O1-affected alternatives remain unmeasured): **Qwen2.5-14B ngl all f16 @16K**: 54.4 t/s decode, TTFT 6.4 s (9,152 prompt tokens), Q 86 [70, 94].
-- 32K: `guard_abort`. Session 3 run 18's guard reason reports a 3.0 GiB residual and its raw per-PID shared peak is 3.05 GiB, but persisted `peakSharedGpuBytes.value` is **0**. The guard reason and stored adjusted metric disagree; do not use this row as a qualified spill or budget observation.
+- 32K: `guard_abort`. Session 3 run 18's guard reason reports a 3.0 GiB residual and its raw per-PID shared peak is 3.05 GiB, but persisted `peakSharedGpuBytes.value` is **0**: it is the pre-fix row from before b3e671f's unified spill definition, reused by the resume and not re-run. The guard reason and stored adjusted metric disagree; do not use this row as a qualified spill or budget observation.
 - Historical stored `-c` 16K verdict (I-3.7); remeasure affected alternatives before treating it as the final choice.
 
 Quality, qb-2.0.0 (n = 32 scored items for the Coding weights; 1 sample):
