@@ -30,7 +30,7 @@ async function cdp(port: number) {
   const pending = new Map<number, (v: unknown) => void>()
   ws.addEventListener('message', (m) => { const d = JSON.parse(String(m.data)); if (d.id && pending.has(d.id)) { pending.get(d.id)!(d); pending.delete(d.id) } })
   const ev = async <T>(expr: string): Promise<T> => {
-    const r = (await new Promise((res) => { const i = ++id; pending.set(i, res); ws.send(JSON.stringify({ id: i, method: 'Runtime.evaluate', params: { expression: expr, awaitPromise: true, returnByValue: true } })) })) as { result: { result: { value: T } } }
+    const r = (await new Promise((res) => { const i = ++id; pending.set(i, res as (v: unknown) => void); ws.send(JSON.stringify({ id: i, method: 'Runtime.evaluate', params: { expression: expr, awaitPromise: true, returnByValue: true } })) })) as { result: { result: { value: T } } }
     return r.result.result.value
   }
   return { ev, close: () => ws.close() }
