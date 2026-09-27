@@ -1,6 +1,6 @@
 // Core session runner E2E on real hardware, independent of the Electron/IPC wiring.
 // Usage: npx tsx scripts/run-session.ts <A|B|C|H> [--heavy] [--workload coding] [--models a,b] [--ladder 2048,8192] [--no-quality] [--ram-abort-gib 5] [--required-ctx 131072]
-//        [--gen-configs '[{...GenConfig}]'] [--gen-search] [--quality-mode quick|thorough] [--max-per-model 1]
+//        [--gen-configs '[{...GenConfig}]'] [--gen-search] [--quality-mode quick|thorough] [--max-per-model 1] [--db <optimizer.db>]
 //   A  coding workload, qwen2.5-1.5b + llama-3.1-8b, quality on, default ladder/reps
 //   B  same session, abort ~20 s into the 8B ladder (cancel path)
 //   C  RAM floor 64 GiB (guard path: every step skipped_memory, no load)
@@ -18,7 +18,13 @@ import { findGgufModels, toModelMeta } from '../src/core/models/gguf'
 import { LlamaCppBackend } from '../src/core/runtimes/llamacpp'
 import { pickDiscreteDevice } from '../src/core/runtimes/llamacpp/parse'
 import { scanSystem } from '../src/core/system/scanner'
-import { startSampler } from '../src/core/telemetry/sampler'
+import { readVramInUse, startSampler } from '../src/core/telemetry/sampler'
+import { openDb } from '../src/core/storage/db'
+import { makeSessionStorage, type PlanFor } from '../src/core/storage/sessions'
+import { generateCandidates, machineFromProfile, rulesForRequest } from '../src/core/benchmark/candidates'
+import { WORKLOADS } from '../src/core/scoring/workloads'
+import { val } from '../src/core/scoring/cliff'
+import type { SystemProfile } from '../src/shared/types'
 
 const scenario = (process.argv[2] ?? 'A').toUpperCase()
 const MODELS_DIR = 'D:\\llm-models'
@@ -84,7 +90,12 @@ async function main(): Promise<void> {
   }
   const vendor = join('vendor', 'llama.cpp')
   const probe = new LlamaCppBackend(vendor)
-  const [machine, det, devs, infos] = await Promise.all([scanSystem(), probe.detect(), probe.listDevices(), findGgufModels([MODELS_DIR])])
+  const [scanned, det, devs, infos] = await Promise.all([scanSystem(), probe.detect(), probe.listDevices(), findGgufModels([MODELS_DIR])])
+  // Same as main.ts withVramInUse: other-process VRAM measured at planning time (effective budget).
+  const vr = await readVramInUse()
+  const machine: SystemProfile = { ...scanned, vramInUse: vr
+    ? { value: vr.bytes, status: 'available', source: `typeperf GPU Adapter Memory(luid_${vr.luid}_phys_0)\Dedicated Usage` }
+    : { value: null, status: 'unavailable', source: 'typeperf GPU Adapter Memory', error: 'reading failed' } }
   const dev = pickDiscreteDevice(devs)
   const models: ModelMeta[] = []
   for (const name of WANT) {
@@ -113,6 +124,20 @@ async function main(): Promise<void> {
     ...(flag('--ladder') ? { ladder: flag('--ladder')!.split(',').map(Number) } : {})
   }
   const pidFile = join(tmpdir(), `lao-session-${scenario}.pid`)
+  // --db <optimizer.db>: persist through the app's own storage (makeSessionStorage + planFor, as main.ts does), so the
+  // session shows up in the app (Results / Dashboard) and resume/read-time reinterpretation work on it.
+  const dbPath = flag('--db')
+  const git = (args: string[]) => { try { return execFileSync('git', args, { encoding: 'utf8' }).trim() } catch { return null } }
+  const gitState = { head: git(['rev-parse', 'HEAD']), dirty: (git(['status', '--porcelain']) ?? '').split('\n').filter(Boolean) }
+  const planFor: PlanFor = (r) => {
+    const mach = machineFromProfile(machine, dev?.id ?? null)
+    return {
+      machine, vramBytes: val(mach.vramBytes, true),
+      candidates: models.flatMap((model) => generateCandidates(mach, model, { backend: 'vulkan' }, WORKLOADS[r.workload], rulesForRequest(r)).candidates.map((config) => ({ config, model })))
+    }
+  }
+  const appStorage = dbPath ? makeSessionStorage(openDb(dbPath), planFor) : null
+  if (dbPath) console.log(`${el()} persisting to ${dbPath}; vramInUse ${vr ? (vr.bytes / GiB).toFixed(2) + ' GiB' : 'unavailable'}`)
   const file = join('docs', `session-run-${scenario}${scenario === 'H' ? `-${req.workload}${req.heavyMode ? '-heavy' : ''}` : ''}-${new Date(t0).toISOString().replace(/[:.]/g, '-')}.json`)
   let rec: Recommendation | null = null
   let ramAbort: string | null = null
@@ -121,6 +146,7 @@ async function main(): Promise<void> {
     const unloadMs = abortAt !== null && cancelledAt !== null ? cancelledAt - abortAt : null
     writeFileSync(file, JSON.stringify({
       scenario, startedAt: new Date(t0).toISOString(), wallMs: Date.now() - t0, abortToCancelledMs: unloadMs, ramAbort,
+      git: gitState, dbPath: dbPath ?? null, vramInUseAtPlanning: vr ? { bytes: vr.bytes, luid: vr.luid } : null,
       runtime: det.version, device: dev, models, request: req, recommendation: rec, db, transcripts,
       events: events.filter((e) => e.type !== 'telemetry'), telemetryEvents: events.filter((e) => e.type === 'telemetry').length
     }, null, 1))
@@ -136,7 +162,7 @@ async function main(): Promise<void> {
   rec = await runSession(req, {
     backend: () => wrap(new LlamaCppBackend(vendor, { pidFile })),
     startSampler: (pid) => startSampler({ pid }),
-    storage, machine, gpuDevice: dev?.id ?? null, backendKind: 'vulkan', runtimeVersion: det.version ?? null, models,
+    storage: appStorage ?? storage, machine, gpuDevice: dev?.id ?? null, backendKind: 'vulkan', runtimeVersion: det.version ?? null, models,
     clock: { now: () => Date.now() },
     readRamAvailableBytes: () => freemem(), // Windows: GlobalMemoryStatusEx ullAvailPhys = "Available"
     signal: ctl.signal,
