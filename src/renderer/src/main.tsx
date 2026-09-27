@@ -4,6 +4,7 @@ import type { RendererApi } from '../../shared/types'
 import { BenchmarkPage } from './BenchmarkPage'
 import { applyEvent, initialLive } from './benchState'
 import { DashboardPage } from './DashboardPage'
+import { HubPage } from './HubPage'
 import { ModelsPage } from './ModelsPage'
 import { ResultsPage } from './ResultsPage'
 import { SystemPage } from './SystemPage'
@@ -13,7 +14,7 @@ declare global {
   interface Window { api: RendererApi }
 }
 
-const SECTIONS = ['Dashboard', 'Benchmark', 'Models', 'Results', 'System'] as const
+const SECTIONS = ['Dashboard', 'Benchmark', 'Models', 'Download', 'Results', 'System'] as const
 type Section = (typeof SECTIONS)[number]
 
 function App() {
@@ -39,8 +40,9 @@ function App() {
       </nav>
       <main>
         {section === 'Dashboard' && <DashboardPage go={go} />}
-        {section === 'Benchmark' && <BenchmarkPage live={live} />}
+        {section === 'Benchmark' && <BenchmarkPage live={live} onDownload={() => go('Download')} />}
         {section === 'Models' && <ModelsPage />}
+        {section === 'Download' && <HubPage />}
         {section === 'Results' && <ResultsPage key={sessionId ?? 'none'} sessionId={sessionId} />}
         {section === 'System' && <SystemPage />}
       </main>

@@ -10,6 +10,7 @@ import { pickDiscreteDevice } from '../core/runtimes/llamacpp/parse'
 import { openDb } from '../core/storage/db'
 import { getSession, getSessionResume, latestRecommendation, listSessions, makeSessionStorage, markInterrupted, seedDemoSession, telemetryForRun, type PlanFor } from '../core/storage/sessions'
 import { isInside, sanitizeRequest } from './validate'
+import { registerHubIpc } from './hub'
 import { WORKLOADS } from '../core/scoring/workloads'
 import { val } from '../core/scoring/cliff'
 import { runSession, type SessionStorage } from '../core/benchmark/session'
@@ -115,6 +116,7 @@ ipcMain.handle('runtime:install', async () => {
   installing = llama.ensureRuntime(progress, { vendor, cudaMajor: nv?.available ? nv.cudaVersion?.major : undefined })
   try { return await installing } finally { installing = null }
 })
+registerHubIpc(ipcMain, () => BrowserWindow.getAllWindows()[0] ?? null, { userDataDir: app.getPath('userData'), modelDirs })
 ipcMain.handle('settings:get', () => readSettings())
 ipcMain.handle('settings:setWorkload', (_e, w: WorkloadId) => {
   if (!(w in WORKLOADS)) throw new Error(`unknown workload ${String(w)}`)

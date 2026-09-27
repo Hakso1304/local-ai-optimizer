@@ -1,8 +1,11 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { SessionEvent } from '../shared/bench-events'
 import type { RendererApi } from '../shared/types'
+import type { HubApi } from '../shared/hub-types'
+import { hubPreloadApi } from './hub'
 
-const api: RendererApi = {
+const api: RendererApi & HubApi = {
+  ...hubPreloadApi(ipcRenderer),
   scanSystem: () => ipcRenderer.invoke('system:scan'),
   detectRuntimes: () => ipcRenderer.invoke('runtimes:detect'),
   listModels: () => ipcRenderer.invoke('models:list'),

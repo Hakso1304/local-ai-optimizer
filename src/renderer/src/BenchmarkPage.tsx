@@ -7,7 +7,7 @@ import { fmtCtx, gib, num } from './ui'
 const v = (x: number | null | undefined, f: (n: number) => string) => (x == null ? '—' : f(x))
 const LADDER = [2048, 4096, 8192, 16384, 32768, 65536, 131072]
 
-export function BenchmarkPage({ live }: { live: LiveState }) {
+export function BenchmarkPage({ live, onDownload }: { live: LiveState; onDownload: () => void }) {
   const [workloads, setWorkloads] = useState<WorkloadProfile[]>([])
   const [workload, setWorkload] = useState<WorkloadId | null>(null)
   const [models, setModels] = useState<ModelInfo[] | null>(null)
@@ -64,6 +64,7 @@ export function BenchmarkPage({ live }: { live: LiveState }) {
         <button onClick={() => void cancel()} disabled={!running}>Cancel</button>
       </header>
       {msg && <p className="err">{msg}</p>}
+      <div className="bar actions"><button onClick={onDownload}>Download from Hugging Face</button></div>
 
       <table>
         <thead><tr><th /><th>Model</th><th>Source</th><th>Params</th><th>Quant</th><th>Ctx (train)</th><th>Size</th></tr></thead>
