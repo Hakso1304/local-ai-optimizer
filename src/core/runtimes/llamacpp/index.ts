@@ -157,6 +157,7 @@ export class LlamaCppBackend implements InferenceBackend {
   private port = 0
   private abort: AbortController | null = null
   private unloading: ChildProcess | null = null
+  private loadDeclarationListener: ((declared: LoadResult['declared']) => void) | null = null
   private exeOverride?: string
   private pidFile?: string
   private spawnFn: SpawnFn
@@ -176,6 +177,10 @@ export class LlamaCppBackend implements InferenceBackend {
 
   get exePath(): string {
     return this.exeOverride ?? join(this.vendorDir, 'llama-server.exe')
+  }
+
+  setLoadDeclarationListener(listener: ((declared: LoadResult['declared']) => void) | null): void {
+    this.loadDeclarationListener = listener
   }
 
   configure(opts: { exePath?: string; vendorDir?: string }): void {
@@ -307,6 +312,7 @@ export class LlamaCppBackend implements InferenceBackend {
     const onLine = (line: string) => {
       if (!line) return
       parseLogLine(line, declared)
+      this.loadDeclarationListener?.(declared)
       this.log.push(line)
       if (this.log.length > 100) this.log.shift()
     }

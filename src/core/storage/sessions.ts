@@ -146,13 +146,18 @@ export function getSession(db: DatabaseSync, id: number): SessionDetail | null {
     recommendation,
     candidates: p.candidates.map(({ config, model }) => {
       const mine = rows.filter((r) => r.run.configId === config.id)
+      const normalizeRuntime = (x: string) => /^(vulkan|cuda|hip|cpu):/.test(x) ? x : `vulkan:${x}`
+      const runtimes = new Set(mine.map((r) => r.run.versions?.runtime).filter((x): x is string => !!x).map(normalizeRuntime))
+      const qualityRows = quality.filter((q) => q.model_id === model.id).map((q) => json<GenRow & { backend?: string; configId?: string }>(q.payload))
+        .filter((q) => (q.backend ?? (q.configId?.endsWith('|hip') ? 'hip' : 'vulkan')) === (config.backend ?? 'vulkan')
+          && (!q.runtimeVersion || runtimes.has(normalizeRuntime(q.runtimeVersion))))
       return {
         config, model, runs: mine.map((r) => r.run), runIds: mine.map((r) => r.rowId),
         history: all.filter((r) => r.configId === config.id),
         cliff: detectCliffs(mine.map((r) => r.run), p.vramBytes),
         score: recommendation?.ranked.find((s) => s.configId === config.id) ?? null,
-        quality: quality.filter((q) => q.model_id === model.id).map((q) => json<QualityResult>(q.payload)),
-        genQuality: genQualityOf(model, p.request ?? null, quality.filter((q) => q.model_id === model.id).map((q) => json<GenRow>(q.payload)))
+        quality: qualityRows,
+        genQuality: genQualityOf(model, p.request ?? null, qualityRows)
       }
     })
   }

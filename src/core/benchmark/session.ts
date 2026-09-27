@@ -29,6 +29,8 @@ export interface SessionBackend {
   readonly pid: number | undefined
   readonly lastExit: ExitInfo | null
   loadModel(cfg: LoadConfig): Promise<LoadResult>
+  /** Optional stream of parsed host-buffer declarations while the runtime loads. */
+  setLoadDeclarationListener?(listener: ((declared: LoadResult['declared']) => void) | null): void
   unloadModel(): Promise<void>
   warmup(prompt: string): Promise<void>
   runPrompt(req: PromptRequest): Promise<PromptResult>
@@ -343,6 +345,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     const inputs: CandidateInput[] = []
     const quality = new Map<string, QualityResult[]>() // modelId → baseline results
     const genQ = new Map<string, GenQuality[]>() // modelId → every gen config that completed
+    const qualityBackend = new Map<string, string>() // modelId → backend that actually ran the quality suite
+    const qualityRuntime = new Map<string, string | null>() // modelId → source build (never borrowed across builds)
     const longNotes: string[] = []
     let gpuLost = false
     const paused = () => !signal?.aborted && !!deps.pauseSignal?.aborted
@@ -367,13 +371,17 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       // Reuse stored quality only when it is the COMPLETE current suite (every test id × sample for every gen config,
       // same suite version). Rows without genId are the baseline (stored before the gen-config search).
       const stored = (req.resumeSessionId ? await storage.listQuality(sessionId, modelId) : []) as GenRow[]
-      const rowsOf = (g: GenConfig) => stored.filter((r) => (r.genId ?? BASELINE_GEN.id) === g.id)
+      const suiteSource = stored.find((r) => r.testId !== 'CR-04-long') as GenRow & { backend?: string; configId?: string } | undefined
+      const storedBackend = suiteSource?.backend ?? (suiteSource?.configId?.endsWith('|hip') ? 'hip' : 'vulkan')
+      const rowsOf = (g: GenConfig) => stored.filter((r) => (r.genId ?? BASELINE_GEN.id) === g.id && ((r as GenRow & { backend?: string }).backend ?? storedBackend) === storedBackend)
       const complete = stored.length > 0 && stored.every((r) => (r as { suite?: string }).suite === suite.suite && ((r as { suiteSeed?: number | null }).suiteSeed ?? null) === suite.suiteSeed) &&
         gens.every((g) => suite.tests.every((t) => rowsOf(g).filter((r) => r.testId === t.id).length >= samplesOf(g)))
       if (complete) {
         const list = gens.map((g) => summarizeGen(g, rowsOf(g), samplesOf(g)))
         quality.set(modelId, list[0].results)
         if (gens.length > 1) genQ.set(modelId, list)
+        qualityBackend.set(modelId, storedBackend)
+        qualityRuntime.set(modelId, suiteSource?.runtimeVersion ?? null)
         return
       }
       if (stored.length) log('warn', `${modelId}: stored quality results are incomplete or from another suite version; re-running the suite`)
@@ -382,6 +390,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       const rungs = passRungs(best)
       const qctx = rungs.filter((c) => c <= profile.targetContext).at(-1) ?? rungs[0]
       const perGen = await runQuality(best.config, best.model, qctx, gens.map((g) => ({ gen: g, samples: samplesOf(g) })))
+      const sourceRuntime = cur.runtime
       const results = perGen[0]?.gen.id === BASELINE_GEN.id ? perGen[0].results : []
       await unload((e) => log('error', `unload failed: ${(e as Error).message}`))
       // One long-context retrieval test at the required ctx (a full prefill of it), on a config that reached it.
@@ -400,17 +409,26 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         }
       }
       if (results.length) {
-        quality.set(modelId, results)
-        if (gens.length > 1) genQ.set(modelId, perGen)
+        const sourceBackend = best.config.backend ?? 'vulkan'
+        quality.set(modelId, results.filter((r) => ((r as GenRow & { backend?: string }).backend ?? sourceBackend) === sourceBackend))
+        qualityBackend.set(modelId, best.config.backend ?? 'vulkan')
+        qualityRuntime.set(modelId, sourceRuntime)
+        if (gens.length > 1) genQ.set(modelId, perGen.map((g) => ({ ...g, results: g.results.filter((r) => ((r as GenRow & { backend?: string }).backend ?? sourceBackend) === sourceBackend) })))
         // One transaction for every gen config of the model (resume needs all of them or re-runs).
-        await storage.saveQuality(sessionId, modelId, best.config.id, qctx, perGen.flatMap((g) => g.results).map((r) => ({ ...r, suite: suite.suite })))
+        await storage.saveQuality(sessionId, modelId, best.config.id, qctx, perGen.flatMap((g) => g.results).map((r) => ({ backend: best.config.backend ?? 'vulkan', ...r, suite: suite.suite })))
       }
     }
     const withQuality = () => {
       for (const i of inputs) {
-        i.quality = quality.get(i.model.id) ?? []
-        const g = genQ.get(i.model.id)
-        if (g) i.genQuality = g
+        // I-3.9: quality on one runtime build cannot confirm another backend's
+        // quality. A different backend remains provisional until measured there.
+        const sourceRuntime = qualityRuntime.get(i.model.id)
+        const normalizeRuntime = (x: string) => /^(vulkan|cuda|hip|cpu):/.test(x) ? x : `vulkan:${x}`
+        const sameRuntime = !sourceRuntime || i.runs.some((r) => !!r.versions?.runtime && normalizeRuntime(r.versions.runtime) === normalizeRuntime(sourceRuntime))
+        const sameBackend = qualityBackend.get(i.model.id) === (i.config.backend ?? 'vulkan') && sameRuntime
+        i.quality = sameBackend ? (quality.get(i.model.id) ?? []).filter((r) => ((r as GenRow & { backend?: string }).backend ?? qualityBackend.get(i.model.id)) === (i.config.backend ?? 'vulkan')) : []
+        const g = sameBackend ? genQ.get(i.model.id) : undefined
+        if (g) i.genQuality = g.map((x) => ({ ...x, results: x.results.filter((r) => ((r as GenRow & { backend?: string }).backend ?? qualityBackend.get(i.model.id)) === (i.config.backend ?? 'vulkan')) }))
       }
     }
 
@@ -684,8 +702,10 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     // kills the server (unloadModel); afterwards it cancels the in-flight request.
     let emitted = 0
     let guard: string | null = null
-    let guardSpill: { adjusted: number; raw: number } | null = null
+    let guardSpill: { adjusted: number; raw: number; loadGrowth: boolean } | null = null
     let overSamples = 0
+    let lastPressureTs: number | null = null
+    let loadSharedBase: number | null = null
     let loading = true
     let blindPolls = 0
     let minRam: number | null = null // lowest RAM available seen by the guard (OS reading, else telemetry rows)
@@ -714,16 +734,24 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         // Heavy (partial-offload) configs: a shared-memory spill is a measurement (degraded + spill reason, then the
         // ladder moves on), not an abort. The RAM floor always aborts.
         // Budget-independent pressure guard: observed residual (per-PID shared − pinned − baseline) above the limit on
-        // `spillAbortSamples` consecutive samples. An unknown reading neither counts nor resets.
+        // `spillAbortSamples` consecutive measured samples. An unknown reading breaks the streak.
         const adj = s.procVramSharedBytes != null ? adjustedSpill(s.procVramSharedBytes, s.procVramDedicatedBytes, pinned, spillBase).value : null
-        if (adj !== null) overSamples = adj > cfg.sharedSpillAbortBytes ? overSamples + 1 : 0
-        const spillAbort = !cand.expectDegraded && adj !== null && overSamples >= cfg.spillAbortSamples
+        // While load declarations are arriving, protect against a new growth in
+        // residual shared memory. The first observed load level can be host-pinned,
+        // so raw shared by itself cannot justify an abort (I-4.0).
+        if (loading && adj !== null && loadSharedBase === null) loadSharedBase = adj
+        const pressure = loading && adj !== null ? Math.max(0, adj - (loadSharedBase ?? 0)) : adj
+        const over = pressure !== null && pressure > cfg.sharedSpillAbortBytes
+        const adjacent = lastPressureTs !== null && s.ts > lastPressureTs && s.ts - lastPressureTs <= Math.max(3000, cfg.guardPollMs * 3)
+        overSamples = over ? adjacent ? overSamples + 1 : 1 : 0
+        lastPressureTs = over ? s.ts : null
+        const spillAbort = !cand.expectDegraded && overSamples >= cfg.spillAbortSamples
         const trip = !guard && ((s.ramAvailBytes != null && s.ramAvailBytes + mmapCredit < ramFloor) || spillAbort)
         if (!trip) continue
         guard = s.ramAvailBytes != null && s.ramAvailBytes + mmapCredit < ramFloor
           ? `RAM available ${(s.ramAvailBytes / GiB).toFixed(1)} GiB fell below the floor`
-          : `shared GPU memory spill ${(adj! / GiB).toFixed(1)} GiB exceeded the abort limit (uncertain residency: residual per-PID shared above ${(cfg.sharedSpillAbortBytes / GiB).toFixed(1)} GiB on ${overSamples} consecutive samples${loading ? ' during load, before host-pinned buffers were known' : ''}; ${(() => { const sat = adjustedSpill(s.procVramSharedBytes!, s.procVramDedicatedBytes, pinned, spillBase).saturated; return sat === null ? 'saturation unknown' : sat ? 'dedicated near the effective budget' : 'dedicated below the saturation share — may be placement' })()})`
-        if (spillAbort) guardSpill = { adjusted: adj!, raw: s.procVramSharedBytes! }
+          : `shared GPU memory spill ${(pressure! / GiB).toFixed(1)} GiB exceeded the abort limit (uncertain residency: residual per-PID shared above ${(cfg.sharedSpillAbortBytes / GiB).toFixed(1)} GiB on ${overSamples} consecutive samples${loading ? ' during load, using growth from first observed load level while host-pinned buffers were being declared' : ''}; ${(() => { const sat = adjustedSpill(s.procVramSharedBytes!, s.procVramDedicatedBytes, pinned, spillBase).saturated; return sat === null ? 'saturation unknown' : sat ? 'dedicated near the effective budget' : 'dedicated below the saturation share — may be placement' })()})`
+        if (spillAbort) guardSpill = { adjusted: pressure!, raw: s.procVramSharedBytes!, loadGrowth: loading }
         void (loading ? unload() : backend.cancel())
       }
     }
@@ -733,7 +761,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       ;(sampler as SessionSampler | null)?.stop()
       // Record the exact value and definition the guard tripped on (raw kept separately).
       const spill: Partial<BenchmarkRunResult> = guardSpill ? {
-        peakSharedGpuBytes: { value: guardSpill.adjusted, kind: 'measured', source: `guard trip sample: per-PID shared − host-pinned ${(pinned / GiB).toFixed(2)} GiB − baseline ${(spillBase / GiB).toFixed(2)} GiB (ungated)` },
+        peakSharedGpuBytes: { value: guardSpill.adjusted, kind: 'measured', source: `guard trip sample: per-PID shared − host-pinned ${(pinned / GiB).toFixed(2)} GiB − baseline ${(spillBase / GiB).toFixed(2)} GiB (ungated)${guardSpill.loadGrowth ? '; during-load growth above first observed level while buffer declarations were still arriving' : ''}` },
         peakSharedGpuRawBytes: { value: guardSpill.raw, kind: 'measured', source: 'guard trip sample (per-PID shared)' }
       } : {}
       return result('fail', 'guard_abort', guard, spill, { samples: (sampler as SessionSampler | null)?.samples ?? [] })
@@ -741,8 +769,10 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
 
     let load: LoadResult
     try {
+      backend.setLoadDeclarationListener?.((declared) => { pinned = hostPinnedBytes(declared, cand.mmap !== false) })
       load = await backend.loadModel(loadCfg(cand, model, ctx))
     } catch (e) {
+      backend.setLoadDeclarationListener?.(null)
       clearInterval(pidPoll)
       flush()
       if (guard) return guardAbort()
@@ -757,6 +787,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     if (!sampler && backend.pid !== undefined) { sampler = deps.startSampler(backend.pid); samplerAt = Date.now() }
     pinned = hostPinnedBytes(load.declared, cand.mmap !== false)
     loading = false
+    overSamples = 0
+    lastPressureTs = null
     restartIfBlind()
     flush()
     if (guard) { await unload(); return guardAbort() }
@@ -935,6 +967,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       log('warn', `${cand.id}: required ${cand.backend ?? 'vulkan'} backend unavailable for long-context needle (I-3.9)`)
       return null
     }
+    backend.setLoadDeclarationListener?.(null)
     const needle = 'OBSIDIAN-42'
     const test: QualityTest = {
       id: 'CR-04-long', category: 'context', weight: 1, maxTokens: 24, template: 'needle',

@@ -309,20 +309,20 @@ export function interpret(v: Verdicts): Insight[] {
         [num('decodeTps', c.decode, 'measured', ctx ?? undefined, cand.id)], { configId: cand.id })
     }
   }
-  // I-3.9: the same model/config on two backend builds (HIP id = Vulkan id + '|hip'): decode at the largest rung both
-  // measured, and each one's dedicated ceiling (max per-PID dedicated over usable rungs). Backend is a config axis.
+  // I-3.9: pair only measured same-rung timings. A clean peak is an observed
+  // allocation, not a tested capacity ceiling (I-4.0).
   const byId = new Map(everyone.map((c) => [c.input.config.id, c]))
   for (const o of everyone.filter((c) => c.input.config.backend === 'hip')) {
     const b = byId.get(o.input.config.id.replace(/\|hip$/, ''))
     if (!b) continue
-    const ok = (c: typeof o) => c.input.runs.filter(isUsable)
+    const ok = (c: typeof o) => c.scored.runs.filter((r) => isUsable(r) && val(r.decodeTps, true) !== null && r.ttftMs.kind === 'measured' && val(r.ttftMs, true) !== null)
     const common = ok(o).map((r) => r.ctx).filter((x) => ok(b).some((r) => r.ctx === x))
     if (!common.length) continue
     const ctx = Math.max(...common)
     const at = (c: typeof o) => ok(c).find((r) => r.ctx === ctx)!
-    const ceil = (c: typeof o) => { const xs = ok(c).map((r) => val(r.peakVramBytes)).filter((x): x is number => x !== null); return xs.length ? gib(Math.max(...xs)) : 'unavailable' }
-    add('speed.backend', { other: 'HIP', base: 'Vulkan', config: id(b), dOther: t1(val(at(o).decodeTps, true)!), dBase: t1(val(at(b).decodeTps, true)!), ctx: fmtCtx(ctx), cOther: ceil(o), cBase: ceil(b) },
-      [ev('decodeTps', at(o).decodeTps, ctx, id(o)), ev('decodeTps', at(b).decodeTps, ctx, id(b))], { configId: id(o) })
+    const allocation = (c: typeof o) => { const xs = ok(c).map((r) => val(r.peakVramBytes, true)).filter((x): x is number => x !== null); return xs.length ? gib(Math.max(...xs)) : 'unavailable' }
+    add('speed.backend', { other: 'HIP', base: b.input.config.backend === 'cuda' ? 'CUDA' : 'Vulkan', config: id(b), dOther: t1(val(at(o).decodeTps, true)!), dBase: t1(val(at(b).decodeTps, true)!), ctx: fmtCtx(ctx), ttftOther: val(at(o).ttftMs, true)!.toFixed(0), ttftBase: val(at(b).ttftMs, true)!.toFixed(0), cOther: allocation(o), cBase: allocation(b) },
+      [ev('decodeTps', at(o).decodeTps, ctx, id(o)), ev('decodeTps', at(b).decodeTps, ctx, id(b)), ev('ttftMs', at(o).ttftMs, ctx, id(o)), ev('ttftMs', at(b).ttftMs, ctx, id(b))], { configId: id(o) })
   }
   // I-9.2: a smaller sibling quantization of the linked repo would put more layers on the GPU (estimated, not run).
   // Siblings present in this session are benchmarked as their own models and skipped here.
