@@ -43,8 +43,9 @@ export type CandidateRules = typeof DEFAULT_CANDIDATE_RULES
 export const rulesForRequest = (req: Pick<SessionRequest, 'candidateRules' | 'heavyMode'>): CandidateRules =>
   ({ ...DEFAULT_CANDIDATE_RULES, ...req.candidateRules, heavyMode: req.heavyMode ?? false })
 
-// Sliding-window / hybrid / recurrent: KV formula is wrong for them, so KV is not used for pruning.
-const LOW_CONFIDENCE_ARCHS = new Set(['gemma2', 'gemma3', 'gemma3n', 'qwen3next', 'mamba', 'rwkv6', 'rwkv7', 'jamba', 'granitehybrid', 'lfm2'])
+// Sliding-window / hybrid / recurrent archs: without their layout keys the plain formula is an UPPER BOUND (all layers
+// full attention, full ctx). We keep it for pruning — never treat unknown KV as 0 — and say so in the notes.
+const LOW_CONFIDENCE_ARCHS = new Set(['gemma2', 'gemma3', 'gemma3n', 'gemma4', 'qwen3next', 'qwen35', 'mamba', 'rwkv6', 'rwkv7', 'jamba', 'granitehybrid', 'lfm2'])
 const KV_BYTES: Record<KvType, number> = { f16: 2, q8_0: 34 / 32 }
 
 const gib = (b: number) => `${(b / GiB).toFixed(1)} GiB`
@@ -52,16 +53,44 @@ const ctxK = (n: number) => (n % 1024 === 0 ? `${n / 1024}K` : String(n))
 const num = (m: Metric) => (typeof m.value === 'number' && Number.isFinite(m.value) ? m.value : null)
 const est = (value: number, source: string): Metric => ({ value, kind: 'estimated', source })
 
-export const isLowConfidence = (m: ModelMeta) => m.slidingWindow !== null || LOW_CONFIDENCE_ARCHS.has(m.arch)
+/** True when the KV estimate is only an upper bound: an SWA/hybrid arch whose layout keys are missing. */
+export const isLowConfidence = (m: ModelMeta) =>
+  (m.slidingWindow !== null && !m.slidingWindowPattern) || (LOW_CONFIDENCE_ARCHS.has(m.arch) && !m.slidingWindowPattern && !m.fullAttentionInterval)
+
+/** KV bytes per sequence at ctx (f16 = 2 B/elem, q8_0 = 34/32), layer by layer when the layout is declared.
+ *  source says which formula ran. unknown = the heads/head dim needed for any formula are missing. */
+export function kvLayout(m: ModelMeta, ctx: number, kv: KvType, ubatch = DEFAULT_CANDIDATE_RULES.ubatch): { bytes: number; source: string; unknown: boolean } {
+  const dk = m.keyLength ?? m.nEmbd / m.heads
+  const dv = m.valueLength ?? dk
+  const heads = (i: number) => m.headsKvPerLayer?.[i] ?? m.headsKv
+  if (!(m.headsKv > 0) || !(dk > 0) || !Number.isFinite(dk)) return { bytes: 0, source: 'KV size unknown (no head count / head dim in GGUF)', unknown: true }
+  const layout = !!(m.fullAttentionInterval || m.slidingWindowPattern || m.headsKvPerLayer)
+  let bytes = 0
+  let attnLayers = 0
+  for (let i = 0; i < m.layers; i++) {
+    if (m.fullAttentionInterval && (i + 1) % m.fullAttentionInterval !== 0) continue // recurrent layer: no KV
+    attnLayers++
+    const swa = !!m.slidingWindowPattern?.[i] && m.slidingWindow !== null
+    const tokens = swa ? Math.min(ctx, m.slidingWindow! + ubatch) : ctx
+    const k = swa ? (m.keyLengthSwa ?? dk) : dk
+    const v = swa ? (m.valueLengthSwa ?? dv) : dv
+    bytes += tokens * heads(i) * (k + v) * KV_BYTES[kv]
+  }
+  return {
+    bytes,
+    unknown: false,
+    source: layout ? `declared layout: ${attnLayers}/${m.layers} attention layers${m.slidingWindowPattern ? `, sliding window ${m.slidingWindow}` : ''}`
+      : isLowConfidence(m) ? `fallback upper bound: no per-arch KV layout (${m.arch} may use hybrid/linear-attention or sliding-window layers)`
+        : 'standard: all layers full attention'
+  }
+}
 
 /** DESIGN §2.7. gpuLayers ≥ layers means full offload. KV follows its layers (calibration, 8B ngl 20/33 @8K:
  *  KV CPU 416 + Vulkan0 608 MiB) unless kvOnGpu=false (-nkvo: all KV in RAM).
- *  ramBytes counts the whole mmap'd file (available RAM fell ≈ file size even at ngl 99) → conservative A25 check.
- *  ramResidentBytes counts only what must stay in RAM (non-GPU weights + CPU KV) → heavy mode. */
+ *  ramBytes = ramResidentBytes = what must stay in RAM (non-GPU weights + CPU KV + 0.5 GiB). Checked against live
+ *  available RAM after the previous server is unloaded (session.ts); the live floor guard is the safety net. */
 export function estimateMemory(m: ModelMeta, gpuLayers: number, ctx: number, kv: KvType, ubatch = DEFAULT_CANDIDATE_RULES.ubatch, kvOnGpu = true) {
-  const dk = m.keyLength ?? m.nEmbd / m.heads
-  const dv = m.valueLength ?? dk
-  const kvBytes = ctx * m.layers * m.headsKv * (dk + dv) * KV_BYTES[kv]
+  const { bytes: kvBytes, source: kvSource, unknown: kvUnknown } = kvLayout(m, ctx, kv, ubatch)
   const onGpu = Math.min(gpuLayers, m.layers)
   const wGpu = (m.fileBytes * onGpu) / m.layers
   // Calibration (b11208 Vulkan, fa on): compute buffers 61→91 MiB (1.5B, 2K→32K), 102→164 MiB (8B, 2K→64K) ≈
@@ -72,9 +101,13 @@ export function estimateMemory(m: ModelMeta, gpuLayers: number, ctx: number, kv:
   const kvCpu = kvBytes - kvGpu
   return {
     vramBytes: onGpu > 0 ? wGpu + kvGpu + compute : 0,
-    ramBytes: m.fileBytes + kvCpu + 512 * MiB,
+    // Resident RAM: weights NOT on the GPU + CPU-side KV + 0.5 GiB. mmap'd pages of offloaded weights are clean and
+    // reclaimable (they lower "available" while loaded — the in-step guard credits them), so they are not counted.
+    ramBytes: m.fileBytes - wGpu + kvCpu + 512 * MiB,
     ramResidentBytes: m.fileBytes - wGpu + kvCpu + 512 * MiB,
-    kvBytes
+    kvBytes,
+    kvSource,
+    kvUnknown
   }
 }
 
@@ -130,9 +163,8 @@ export function generateCandidates(
     let overVramKept = false
     for (const ctx of ladder) {
       const e = estimateMemory(model, ngl, ctx, kv, rules.ubatch, kvOnGpu)
-      const vramNeed = lowConf ? e.vramBytes - e.kvBytes : e.vramBytes
-      const ramRaw = heavy ? e.ramResidentBytes : e.ramBytes
-      const ramNeed = lowConf && ngl === 0 ? ramRaw - e.kvBytes : ramRaw
+      const vramNeed = e.vramBytes
+      const ramNeed = heavy ? e.ramResidentBytes : e.ramBytes
       const rb = heavy ? heavyRamBudget : ramBudget
       if (rb !== null && ramNeed > rb) {
         skipped.push({ ctx, reason: `skipped_memory: est. RAM ${gib(ramNeed)} > available − reserve ${gib(rb)}` })
@@ -151,7 +183,8 @@ export function generateCandidates(
     }
     if (!steps.length) { rejected.push({ id, modelId: model.id, reason: skipped.find((s) => s.ctx === ladder[0])!.reason + ` at ${ctxK(ladder[0])}` }); return null }
     const e0 = estimateMemory(model, ngl, steps[0], kv, rules.ubatch, kvOnGpu)
-    if (lowConf) notes.push('memory estimate is low-confidence for this architecture; KV not used for pruning')
+    if (e0.kvUnknown) notes.push('KV size unknown: pruned on weights only — runtime guards apply')
+    else if (lowConf || e0.kvSource.startsWith('declared')) notes.push(`KV estimate: ${e0.kvSource}`)
     if (ngl > 0 && gpuBudget === null) notes.push('VRAM size unknown; not pruned by VRAM, runtime guards apply')
     if (ramBudget === null) notes.push('RAM size unknown; not pruned by RAM, runtime guards apply')
     const src = `DESIGN §2.7 at ${ctxK(steps[0])}`
@@ -174,10 +207,14 @@ export function generateCandidates(
     const why = model.fileBytes > gpuBudget ? `weights ${gib(model.fileBytes)} > VRAM budget ${gib(gpuBudget)}` : `weights + KV > VRAM budget ${gib(gpuBudget)}`
     // ponytail: 4 fixed probes (most layers at the smallest ctx, at the target ctx, KV in RAM, CPU baseline);
     // a finer ngl sweep only if measurements show it matters.
-    const plans: [number, boolean][] = [[maxNgl(ladder[0], true), true], [maxNgl(target, true), true], [maxNgl(target, false), false], [0, true]]
+    const kvUnknown = estimateMemory(model, model.layers, target, 'f16', rules.ubatch).kvUnknown
+    // KV size unknown → only the conservative probes: max ngl at the smallest ctx, KV in RAM, CPU baseline.
+    const plans: [number, boolean][] = kvUnknown
+      ? [[maxNgl(ladder[0], true), true], [maxNgl(ladder[0], false), false], [0, true]]
+      : [[maxNgl(ladder[0], true), true], [maxNgl(target, true), true], [maxNgl(target, false), false], [0, true]]
     const seen = new Set<string>()
     plans.forEach(([n, kvOnGpu], i) => {
-      if (n === 0 && i < 3) return // nothing fits on the GPU for this probe; the CPU baseline covers ngl 0
+      if (n === 0 && i < plans.length - 1) return // nothing fits on the GPU for this probe; the CPU baseline covers ngl 0
       const key = `${n}|${kvOnGpu}`
       if (seen.has(key)) return
       seen.add(key)
@@ -186,6 +223,7 @@ export function generateCandidates(
       c.expectDegraded = true
       c.degradedReason = n === 0 ? `${why}; CPU-only baseline (0/${model.layers} layers on GPU)`
         : `${why}; ${n}/${model.layers} layers on GPU${kvOnGpu ? '' : ', KV cache in system RAM (-nkvo)'}`
+      if (kvUnknown) c.degradedReason += '; KV size unknown'
       c.notes.push(`heavy mode: ${c.degradedReason}`)
       add(c)
     })

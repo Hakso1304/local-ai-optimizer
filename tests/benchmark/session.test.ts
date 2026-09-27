@@ -242,6 +242,32 @@ describe('runSession', () => {
     expect(re.s.runs.length).toBe(first.s.runs.length + re.backend.calls.loads.length) // new rows appended; reads keep the last
   })
 
+  it('D1: unloads the previous step before the live RAM pre-check (its mmap must not count against the next rung)', async () => {
+    let backendRef: ReturnType<typeof fakeBackend> | null = null
+    // While a server is loaded "available" is low (its mmap'd weights); once unloaded it is back to 20 GiB.
+    const { s } = await run(() => ({}), {}, {
+      backend: () => (backendRef = fakeBackend(() => ({}))),
+      readRamAvailableBytes: () => (backendRef!.pid !== undefined ? 2 * GiB : 20 * GiB)
+    })
+    expect(s.runs.map((r) => r.status)).toEqual(['pass', 'pass', 'pass', 'pass', 'pass'])
+    expect(backendRef!.calls.unloads).toBeGreaterThanOrEqual(5)
+  })
+
+  it('D9: GPU/CPU means use only rows covering a request, not load-phase or idle rows', async () => {
+    const xs: TelemetrySample[] = []
+    const { s } = await run(() => ({ hook: () => xs.push({ ...sample(2048), ts: Date.now() + 1, gpuUtilPct: 90, cpuPct: 20 }) }), { ladder: [2048] }, {
+      startSampler: () => { xs.length = 0; xs.push({ ...sample(2048), ts: Date.now() - 5000, gpuUtilPct: 0, cpuPct: 100 }); return { samples: xs, unavailable: {}, stop: () => xs } }
+    })
+    expect(s.runs[0].avgGpuUtil).toMatchObject({ value: 90, kind: 'measured' }) // the 0 % load-phase row is excluded
+    expect(s.runs[0].avgCpuUtil.value).toBe(20)
+    expect(s.runs[0].peakVramBytes.kind).toBe('measured') // peaks still use every row
+  })
+
+  it('session:started carries the planned candidate count (progress total)', async () => {
+    const { events } = await run(() => ({}), { workload: 'long_context_coding' })
+    expect(events.find((e) => e.type === 'session:started')).toMatchObject({ candidates: 2 })
+  })
+
   it('emits events in order', async () => {
     const { events } = await run((ctx) => (ctx > 4096 ? { load: 'oom' } : {}), { ladder: [2048, 4096, 8192] })
     const types = events.map((e) => (e.type === 'phase' ? `phase:${e.phase}` : e.type)).filter((t) => t !== 'telemetry' && t !== 'log')
@@ -281,7 +307,7 @@ describe('runSession', () => {
     // Every step skipped by the RAM guard → say so, with the guard's arithmetic (not just "no successful runs").
     expect(rec?.best).toBeNull()
     expect(rec?.reasons[0]).toBe('No recommendation: nothing was run — the RAM guard skipped every step before loading')
-    expect(rec?.reasons[1]).toMatch(/^est\. RAM 5\.1 GiB > available 1\.0 GiB − floor 2\.5 GiB$/)
+    expect(rec?.reasons[1]).toMatch(/^est\. RAM 0\.5 GiB > available 1\.0 GiB − floor 2\.5 GiB$/) // resident only: weights are on the GPU
     expect(rec?.excluded[0].reasons[0]).toMatch(/^2K: run fail \(skipped_memory\): est\. RAM/)
   })
   it('guard reason wins over the "cancelled" error its own cancel() causes (guard_abort, not request_error)', async () => {

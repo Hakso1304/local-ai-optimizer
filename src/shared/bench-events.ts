@@ -32,7 +32,7 @@ export type CandidateStatus = 'done' | 'failed' | 'cancelled' | 'paused' | 'skip
 
 /** Event payload without the session id (what the runner builds). */
 export type SessionEventBody =
-  | { type: 'session:started'; workload: WorkloadId; modelIds: string[]; resumed: boolean }
+  | { type: 'session:started'; workload: WorkloadId; modelIds: string[]; resumed: boolean; /** planned candidate configs (progress total) */ candidates?: number }
   | { type: 'candidate:started'; configId: string; model: string; gpuLayers: number; ctxSteps: number[] }
   | { type: 'phase'; configId: string; ctx: number; phase: SessionPhase }
   | { type: 'step:started'; configId: string; ctx: number }

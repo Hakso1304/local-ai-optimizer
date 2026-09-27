@@ -72,6 +72,16 @@ export interface ModelMeta {
   valueLength: number | null
   nVocab: number
   slidingWindow: number | null
+  /** Optional KV layout keys (GGUF), so hybrid / SWA models aren't estimated as all-full-attention:
+   *  `<arch>.attention.head_count_kv` as a per-layer array (gemma4) — headsKv is then its max. */
+  headsKvPerLayer?: number[] | null
+  /** `<arch>.full_attention_interval` (qwen35/qwen3next hybrids): only layers with (i+1) % n == 0 keep a KV cache;
+   *  the others are recurrent (fixed-size state, covered by the VRAM margin). */
+  fullAttentionInterval?: number | null
+  /** `<arch>.attention.sliding_window_pattern` (true = sliding-window layer) + `<arch>.attention.{key,value}_length_swa`. */
+  slidingWindowPattern?: boolean[] | null
+  keyLengthSwa?: number | null
+  valueLengthSwa?: number | null
 }
 
 export type KvType = 'f16' | 'q8_0'

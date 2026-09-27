@@ -146,7 +146,6 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       r.status === 'cancelled' || r.failureKind === 'skipped_memory' || rerunIds.has(r.configId) ||
       (!!req.retryFailed && (r.status === 'fail' || r.status === 'timeout') && r.failureKind !== 'config_drift')
     const done = new Map((req.resumeSessionId ? await storage.listRuns(sessionId) : []).filter((r) => !rerun(r)).map((r) => [`${r.configId}@${r.ctx}`, r] as const))
-    send({ type: 'session:started', workload: req.workload, modelIds: req.modelIds, resumed: !!req.resumeSessionId })
 
     // All candidates of all requested models, smallest estimated footprint first.
     const plan: { cand: CandidateConfig; model: ModelMeta }[] = []
@@ -159,6 +158,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     }
     const est = (c: CandidateConfig) => (val(c.estVramBytes) ?? 0) + (val(c.estRamBytes) ?? 0)
     plan.sort((a, b) => est(a.cand) - est(b.cand) || (a.cand.id < b.cand.id ? -1 : 1))
+    send({ type: 'session:started', workload: req.workload, modelIds: req.modelIds, resumed: !!req.resumeSessionId, candidates: plan.length })
 
     const inputs: CandidateInput[] = []
     const quality = new Map<string, QualityResult[]>() // modelId → results
@@ -272,7 +272,10 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       detail: { samples: [], reason, stderrTail: backend.lastExit?.tail.slice(-50) ?? [], load: null, startedAt, endedAt: clock.now(), ...detail }
     })
 
-    // A25 pre-check against live RAM (other apps come and go, F10).
+    // A25 pre-check against live RAM (other apps come and go, F10). Unload the previous step's server FIRST: its
+    // mmap'd weights still count against available RAM (14B 4K was skipped with 5.3 GiB "available" otherwise).
+    // unloadModel waits for the process to exit (kill → taskkill /T /F) before returning.
+    await backend.unloadModel().catch((e: Error) => log('warn', `unload before ${ctx}: ${e.message}`))
     const avail = deps.readRamAvailableBytes?.() ?? val(machine.ramAvailableBytes)
     const e = estimateMemory(model, cand.gpuLayersAll ? model.layers : cand.gpuLayers, ctx, cand.kvType, rules.ubatch, cand.kvOffload !== false)
     const need = req.heavyMode ? e.ramResidentBytes : e.ramBytes
@@ -331,15 +334,20 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     const prompt = ladderPrompt(ctx)
     const timeoutMs = cfg.promptTimeoutBaseMs + ctx * cfg.promptTimeoutPerCtxMs
     const reps: PromptResult[] = []
+    const windows: [number, number][] = []
     let warm = false
     let failure: { status: RunStatus; kind: FailureKind | null; reason: string } | null = null
     try {
       send({ type: 'phase', configId: cand.id, ctx, phase: 'warmup' })
       // Size-matched warmup: compiles the pipelines for this batch shape (F7).
+      const w0 = Date.now()
       await backend.warmup(prompt).then(() => { warm = true }, (e: Error) => { failure = fail(e.message, false) })
+      windows.push([w0, Date.now()])
       send({ type: 'phase', configId: cand.id, ctx, phase: 'measure' })
       for (let i = 0; i < cfg.reps && !failure && !signal?.aborted; i++) {
+        const r0 = Date.now()
         const r = await backend.runPrompt({ prompt, maxTokens: cfg.predictTokens, temperature: 0, seed: 1, timeoutMs })
+        windows.push([r0, Date.now()])
         flush()
         if (r.error) { failure = fail(r.error, r.timedOut); break }
         reps.push(r)
@@ -360,7 +368,10 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
 
     // Peaks over every sample (load included: memory stays allocated); means only over warmup+measure (X10).
     const pk = peaks(samples)
-    const win = peaks(samples.filter((x) => x.ts >= loadDoneAt && x.ts <= measureEndAt))
+    // Means only over rows that cover a request: a typeperf row at ts averages (ts − interval, ts], so keep rows
+    // arriving during a request or within one interval after it. Idle gaps between requests are excluded (D9).
+    const inWindow = (t: number) => windows.some(([a, b]) => t > a && t <= b + cfg.guardPollMs)
+    const win = peaks(samples.filter((x) => x.ts >= loadDoneAt && x.ts <= measureEndAt + cfg.guardPollMs && inWindow(x.ts)))
     const tele = (v: number | null, field: Field, n = pk.n): Metric =>
       n === 0 ? { value: null, kind: 'unavailable', reason: 'no telemetry samples in the window (run too short or sampler failed)' }
         : measured(v, 'typeperf', smp?.unavailable[field] ?? 'counter reported nothing')
