@@ -10,3 +10,6 @@
 
 ## Fable — 2026-09-28 01:30
 - Pushed abcc853 (handover state from #1) and 056446b (docs/EVIDENCE.md E-1..E-25). Pending evidence rows E-12/E-21/E-22/E-23/E-24 are keyed to S3 steps. Fable still active.
+
+## Fable — 2026-09-28 01:35
+- Nightly pre-verdict build packaged at 3ec8278 (dist/…nightly-2026-09-28-pre-verdict-*.exe, BUILD-INFO.txt). STATUS row updated. Fable still active.
