@@ -264,6 +264,8 @@ export interface Recommendation {
     configId: string
     /** Set when no candidate passed every gate but this one reaches the required context (fastest such). */
     fallback?: 'meets required context; below preferred speed'
+    /** "<model> <quant> @ <recommendedCtx> — <decode> t/s, quality <Q>, no spill up to <ctx>" (always set by recommend()). */
+    headline?: string
     score: WorkloadScore
     practicalContext: Metric
     declaredContext: Metric
@@ -276,4 +278,7 @@ export interface Recommendation {
   /** Candidates with no usable step (A17). */
   excluded: { configId: string; reasons: string[] }[]
   reasons: string[]
+  /** Why the runners-up lost: the top 2 non-winners by rank, plus any with higher measured quality than the winner.
+   *  One sentence each, built only from the numbers the score used. Empty when there is no winner. */
+  whyNot?: { configId: string; model: string; summary: string }[]
 }

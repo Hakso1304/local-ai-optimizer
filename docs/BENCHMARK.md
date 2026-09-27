@@ -188,6 +188,11 @@ Calibrated on the 8B full offload (TTFT 0.5 s @ 2K, 1.1 s @ 4K, 2.2 s @ 8K, 4.9 
   - no inputs → "No recommendation: no candidates were benchmarked"
   - nothing usable → "No recommendation: no successful runs"
   - all gated → "No recommendation: no candidate meets the <profile> requirements", plus each candidate's gate failures.
+- **Headline** (`best.headline`): "`<model> <quant> [(n/L layers, KV q8_0, KV in RAM)]` @ `<recommendedCtx>` — `<decode>` t/s, quality `<Q>` [(estimated)], no spill up to `<ctx>`". The decode is at the recommended ctx. Example: "Qwen3.8-27B-UD-Q4_K_M (55/65 layers) @ 8K — 13.0 t/s, quality 100, no spill up to 8K".
+- **Why not** (`whyNot: [{configId, model, summary}]`): the top 2 non-winners by rank, plus the best-ranked config of each other model with higher **measured** quality than the winner. Each summary is one sentence built from the facts the score used, never prose without a number:
+  - ineligible → "`<label>`: ineligible — `<gate failures>`";
+  - otherwise "`<label>`: `<pros>` but `<cons>`; `<Profile>` total a vs b". The pros and cons come from four facts: the quality delta (rounded points); decode at each candidate's scoring step, when they differ by ≥ 10 % ("slower (13.0 t/s at 8K vs 93.2 at 16K)"); the first `decode_drop` with any shared spill ("decode fell 51.2 → 26.4 t/s after 16K (shared-VRAM spill 1.05 GiB at 32K)"); and the practical context vs the winner's.
+  - Empty when there is no winner. Asserted on the 8B/14B and heavy fixtures in `tests/scoring/whynot.test.ts`.
 - **Reasons** (deterministic English): the score, "Only one candidate; not compared", the top-2 contributions, "Recommended context 32K: TTFT 12.0 s for a full prompt (tolerance 15 s), decode 72.0 t/s", practical vs declared context plus what bounded it (cliff / failure / "memory-bound at 64K (128K: est. VRAM …)" / declared ctx), a warning when runs mix runtime/benchmark versions, "No VRAM spill up to …", every cliff message, and the estimated-quality notice.
 
 ## 9. Candidate generation (`src/core/benchmark/candidates.ts`)

@@ -9,7 +9,7 @@ renderer (React, sandboxed)            main (Electron, Node 24)                 
 ────────────────────────────           ────────────────────────────                 ──────────────────────────────
 Dashboard / Benchmark / Models   ──►   preload: window.api (contextBridge)   ──►   system/scanner.ts      hardware scan
 Results (ExportMenu, TelemetryChart)   ipcMain.handle(...) in main/index.ts        runtimes/*             llama.cpp, Ollama, LM Studio
-System / HubPage (HF download)        main/validate.ts (request sanitizing)        hub/hf.ts              Hugging Face client
+System / HubPage (HF download)         main/validate.ts (request sanitizing)        hub/hf.ts              Hugging Face client
                                        main/hub.ts (HF IPC + op lock)     
 benchState.ts (event fold)      ◄──   'bench:event' channel (sendBenchEvent) ◄──   benchmark/session.ts   session runner
                                        settings.json (userData)                     benchmark/candidates.ts  config generation

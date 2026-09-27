@@ -46,6 +46,59 @@ function limitWord(input: CandidateInput, cliff: CliffReport, ceiling: number | 
   return 'largest step tested'
 }
 
+/** "Qwen3.8-27B Q4_K_M (54/65 layers)": model, quant (unless the name has it), and what differs from a plain full offload. */
+function label(i: CandidateInput): string {
+  const { model: m, config: c } = i
+  const name = m.quant && !m.name.includes(m.quant) ? `${m.name} ${m.quant}` : m.name
+  const extra = [
+    c.gpuLayersAll ? null : c.gpuLayers === 0 ? 'CPU only' : `${c.gpuLayers}/${m.layers} layers`,
+    c.kvType === 'q8_0' ? 'KV q8_0' : null,
+    c.kvOffload === false ? 'KV in RAM' : null
+  ].filter((x): x is string => x !== null)
+  return extra.length ? `${name} (${extra.join(', ')})` : name
+}
+
+const t1 = (x: number) => x.toFixed(1)
+const gib2 = (b: number) => `${(b / 1024 ** 3).toFixed(2)} GiB`
+const qText = (s: Scored) => `${Math.round(s.cs.components.quality.score)}${s.cs.components.quality.input.kind === 'estimated' ? ' (estimated)' : ''}`
+
+function headline(s: Scored): string {
+  const ctx = s.score.recommendedCtx ?? s.score.referenceCtx
+  const run = s.input.runs.find((r) => r.ctx === ctx)
+  const dec = val(run?.decodeTps, true)
+  const cliff = s.cs.cliff
+  const firstSpill = cliff.steps.find((st) => st.reasons.some((r) => r.code === 'shared_spill' || r.code === 'vram_spill'))
+  const spill = cliff.spillFreeUpTo !== null ? `no spill up to ${fmtCtx(cliff.spillFreeUpTo)}` : firstSpill ? `VRAM spill from ${fmtCtx(firstSpill.ctx)}` : 'spill not measured'
+  return `${label(s.input)}${ctx !== null ? ` @ ${fmtCtx(ctx)}` : ''} — ${dec === null ? 'decode unknown' : `${t1(dec)} t/s`}, quality ${qText(s)}, ${spill}`
+}
+
+/** One sentence per runner-up, from the same facts the score used: gates, quality delta, decode at the scoring step,
+ *  the first decode cliff / spill, practical context and the totals. */
+function whyNotText(s: Scored, top: Scored, profileLabel: string): string {
+  const name = label(s.input)
+  if (!s.score.eligible) return `${name}: ineligible — ${s.score.gateFailures.join('; ')}`
+  const pros: string[] = [], cons: string[] = []
+  const dq = Math.round(s.cs.components.quality.score) - Math.round(top.cs.components.quality.score)
+  if (dq > 0) pros.push(`quality +${dq} pts`)
+  if (dq < 0) cons.push(`quality −${-dq} pts`)
+  if (s.decode !== null && top.decode !== null) {
+    const a = s.score.referenceCtx, b = top.score.referenceCtx
+    const vs = a === b ? `${t1(s.decode)} vs ${t1(top.decode)} t/s${a !== null ? ` at ${fmtCtx(a)}` : ''}`
+      : `${t1(s.decode)} t/s at ${a !== null ? fmtCtx(a) : '?'} vs ${t1(top.decode)} at ${b !== null ? fmtCtx(b) : '?'}`
+    if (s.decode >= top.decode * 1.1) pros.push(`faster (${vs})`)
+    else if (s.decode * 1.1 <= top.decode) cons.push(`slower (${vs})`)
+  }
+  const reasons = s.cs.cliff.steps.flatMap((st) => st.reasons)
+  const drop = reasons.find((r) => r.code === 'decode_drop')
+  const spill = reasons.find((r) => r.code === 'shared_spill')
+  if (drop) cons.push(`decode fell ${t1(drop.from!)} → ${t1(drop.to!)} t/s after ${fmtCtx(drop.fromCtx!)}${spill ? ` (shared-VRAM spill ${gib2(spill.to!)} at ${fmtCtx(spill.toCtx!)})` : ''}`)
+  else if (spill) cons.push(`shared-VRAM spill ${gib2(spill.to!)} at ${fmtCtx(spill.toCtx!)}`)
+  const pc = val(s.cs.cliff.practicalContextCeiling), pt = val(top.cs.cliff.practicalContextCeiling)
+  if (pc !== null && pt !== null && pc !== pt) (pc > pt ? pros : cons).push(`practical context ${fmtCtx(pc)} vs ${fmtCtx(pt)}`)
+  const body = pros.length && cons.length ? `${pros.join(', ')} but ${cons.join(', ')}` : [...pros, ...cons].join(', ')
+  return `${name}: ${body ? `${body}; ` : ''}${profileLabel} total ${Math.round(s.score.total)} vs ${Math.round(top.score.total)}`
+}
+
 export function recommend(
   inputs: CandidateInput[],
   machine: MachineLimits,
@@ -163,7 +216,7 @@ export function recommend(
     const { cliff, components } = top.cs
     const declared = top.input.model.ctxTrain
     const declaredContext: Metric = declared ? { value: declared, kind: 'declared', source: 'GGUF context_length' } : { value: null, kind: 'unavailable', reason: 'GGUF has no context_length' }
-    best = { configId: top.score.configId, score: top.score, practicalContext: cliff.practicalContextCeiling, declaredContext, cliff, ...(fallback ? { fallback: 'meets required context; below preferred speed' as const } : {}) }
+    best = { configId: top.score.configId, headline: headline(top), score: top.score, practicalContext: cliff.practicalContextCeiling, declaredContext, cliff, ...(fallback ? { fallback: 'meets required context; below preferred speed' as const } : {}) }
     reasons.push(fallback
       ? `Meets required context; below preferred speed: ${top.score.configId} (fastest config reaching ${fmtCtx(profile.requiredContext!)}; ${top.score.gateFailures.join('; ')})`
       : `Best for ${profile.label}: ${top.score.configId} scores ${top.score.total.toFixed(1)}/100`)
@@ -208,7 +261,19 @@ export function recommend(
     else if (top.input.model.supportsThinking) reasons.push('Quality measured with thinking disabled (chat template enable_thinking=false)')
   }
 
-  return { workload, scoringVersion: cfg.version, best, alternatives, ranked: scored.map((s) => s.score), excluded, reasons }
+  const whyNot: NonNullable<Recommendation['whyNot']> = []
+  if (top) {
+    const qTop = top.cs.components.quality.score
+    const others = scored.filter((s) => s !== top)
+    const picks = others.slice(0, 2)
+    // Plus the best-ranked config of each other model with higher measured quality (one per model, not every ngl).
+    for (const s of others) {
+      if (s.cs.components.quality.input.kind === 'measured' && s.cs.components.quality.score > qTop && !picks.some((p) => p.input.model.id === s.input.model.id)) picks.push(s)
+    }
+    for (const s of picks) whyNot.push({ configId: s.score.configId, model: s.input.model.name, summary: whyNotText(s, top, profile.label) })
+  }
+
+  return { workload, scoringVersion: cfg.version, best, alternatives, ranked: scored.map((s) => s.score), excluded, reasons, whyNot }
 }
 
 /** Recommendation for any workload from stored session data — no re-run. Same scoring as the runner (effective
