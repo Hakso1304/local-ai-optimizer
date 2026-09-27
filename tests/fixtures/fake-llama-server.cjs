@@ -15,7 +15,10 @@ console.error('load_tensors:      Vulkan0 model buffer size =   500.79 MiB')
 const modelPath = mode === 'wrong' ? 'C:\\somewhere\\other.gguf' : arg('-m')
 http
   .createServer((req, res) => {
-    if (req.url === '/health') return mode === 'slow' ? res.writeHead(503).end('{"error":"loading model"}') : res.end(JSON.stringify({ status: 'ok' }))
+    if (req.url === '/health') {
+      if (mode === 'hang-health') return // accepted connection, response never arrives
+      return mode === 'slow' ? res.writeHead(503).end('{"error":"loading model"}') : res.end(JSON.stringify({ status: 'ok' }))
+    }
     if (req.url === '/props') {
       const nCtx = mode === 'drift' ? Number(arg('-c')) / 2 : Number(arg('-c'))
       return res.end(JSON.stringify({ model_path: modelPath, default_generation_settings: { n_ctx: nCtx }, ...(mode === 'notemplate' ? {} : { chat_template: '{{ messages }}' }) }))
@@ -28,6 +31,7 @@ http
       res.write('data: {"content":"a","stop":false}\n\ndata: {"content":"b","stop":false}\n\ndata: {"content":"c","stop":false}\n\n')
       return res.end('data: {"content":"","stop":true,"stop_type":"limit"}\n\n')
     }
+    if (req.url === '/completion' && mode === 'hang-completion') return // request timeout must cancel this fetch
     if (req.url === '/completion') {
       let body = ''
       req.on('data', (d) => (body += d))

@@ -121,6 +121,26 @@ describe('LlamaCppBackend process handling (fake server, no GPU)', { timeout: 20
     await expect(b.loadModel({ ...cfg, signal: ctl.signal })).rejects.toThrow(/^cancelled$/) // already aborted: no spawn
   })
 
+  it('safety: a health endpoint that never responds is cancellable and its child is reaped', async () => {
+    b = backend('hang-health')
+    const ctl = new AbortController()
+    setTimeout(() => ctl.abort(), 100)
+    await expect(b.loadModel({ ...cfg, signal: ctl.signal })).rejects.toThrow(/^cancelled$/)
+    expect(b.pid).toBeUndefined()
+    expect(existsSync(pidFile)).toBe(false)
+  })
+
+  it('safety: a request that never responds times out; unloading reaps the child', async () => {
+    b = backend('hang-completion')
+    await b.loadModel(cfg)
+    const r = await b.runPrompt({ prompt: 'x', maxTokens: 1, timeoutMs: 100 })
+    expect(r.timedOut).toBe(true)
+    expect(r.error).toMatch(/timed out|abort/i)
+    await b.unloadModel()
+    expect(b.pid).toBeUndefined()
+    expect(existsSync(pidFile)).toBe(false)
+  })
+
   it('rejects a server whose /props reports a different model', async () => {
     b = backend('wrong')
     await expect(b.loadModel(cfg)).rejects.toThrow(/wrong server answered/)
