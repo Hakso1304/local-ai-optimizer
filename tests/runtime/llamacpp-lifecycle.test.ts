@@ -217,18 +217,27 @@ describe('runPrompt', () => {
 describe('unloadModel', () => {
   it('does not kill a foreign process that reuses an exited owned descendant PID', async () => {
     const pid = 424245, startedAt = new Date().toISOString()
-    let current = { pid, name: 'same-name-helper', startedAt }
-    let alive = true
+    const root = { pid: child.pid, name: 'fake-root', startedAt }
+    const owned = { pid, parentPid: child.pid, name: 'same-name-helper', startedAt }
+    const foreign = { ...owned, startedAt: new Date(Date.now() + 5_000).toISOString() }
+    let current = owned
     const killed: number[] = []
     const processTree: ProcessTree = {
       descendants: async () => [current],
-      isAlive: async (candidate) => {
-        if (candidate !== pid) return false
-        // The owned child exited after discovery; this is a different process with the same PID and name.
-        current = { pid, name: 'same-name-helper', startedAt: new Date(Date.now() + 5_000).toISOString() }
-        return alive
+      inspect: async (candidate) => {
+        if (candidate === child.pid) return root
+        if (candidate !== pid) return null
+        const found = current
+        current = foreign // PID reused after inspection, before termination applies
+        return found
       },
-      kill: async (candidate) => { killed.push(candidate); if (candidate === pid) alive = false }
+      killVerified: async (record) => {
+        if (record.pid === pid && record.startedAt !== current.startedAt) return false
+        killed.push(record.pid)
+        return true
+      },
+      isAlive: async () => true,
+      kill: async () => { throw new Error('unverified PID kill') }
     }
     b = new LlamaCppBackend('unused', { pidFile, spawnFn: () => child as unknown as ChildProcess, processTree })
     handler = healthy()
@@ -241,13 +250,15 @@ describe('unloadModel', () => {
 
   it('does not adopt a foreign child born inside the exited root PID grace window', async () => {
     const pid = 424245
-    let alive = true
+    const root = { pid: child.pid, name: 'fake-root', startedAt: new Date().toISOString() }
     const killed: number[] = []
     let foreignBornAt = ''
     const processTree: ProcessTree = {
-      descendants: async () => [{ pid, name: 'same-name-helper', startedAt: foreignBornAt }],
-      isAlive: async (candidate) => candidate === pid && alive,
-      kill: async (candidate) => { killed.push(candidate); if (candidate === pid) alive = false }
+      descendants: async () => foreignBornAt ? [{ pid, parentPid: child.pid, name: 'same-name-helper', startedAt: foreignBornAt }] : [],
+      inspect: async (candidate) => candidate === child.pid ? root : foreignBornAt ? { pid, parentPid: child.pid, name: 'same-name-helper', startedAt: foreignBornAt } : null,
+      killVerified: async (record) => { killed.push(record.pid); return true },
+      isAlive: async () => true,
+      kill: async () => { throw new Error('unverified PID kill') }
     }
     b = new LlamaCppBackend('unused', { pidFile, spawnFn: () => child as unknown as ChildProcess, processTree })
     handler = healthy()
@@ -284,7 +295,7 @@ describe('unloadModel', () => {
     const gate = new Promise<void>((r) => { release = r })
     let scans = 0, rootKills = 0
     const processTree: ProcessTree = {
-      descendants: async () => { if (++scans === 1) { enter(); await gate } return [] },
+      descendants: async () => { if (++scans === 2) { enter(); await gate } return [] },
       kill: async (pid) => { if (pid === child.pid) { rootKills++; child.kill() } },
       isAlive: async (pid) => pid === child.pid && child.exitCode === null && child.signalCode === null
     }
@@ -298,7 +309,7 @@ describe('unloadModel', () => {
     release()
     await Promise.all([first, second])
     expect(rootKills).toBe(1)
-    expect(scans).toBe(2) // one initial tree snapshot and one verification, not two reap sequences
+    expect(scans).toBe(3) // one load snapshot, one unload snapshot, one verification
     expect(existsSync(pidFile)).toBe(false)
   })
 
@@ -307,9 +318,13 @@ describe('unloadModel', () => {
     let descendantAlive = true
     const calls: number[] = []
     const startedAt = new Date().toISOString()
+    const root = { pid: child.pid, name: 'fake-root', startedAt }
+    const descendant = { pid: descendantPid, parentPid: child.pid, name: 'fake-child', startedAt }
     const processTree: ProcessTree = {
-      descendants: async (pid) => { expect(pid).toBe(child.pid); return [{ pid: descendantPid, name: 'fake-child', startedAt }] },
-      kill: async (pid, opts) => { expect(opts).toEqual({ tree: true, force: true }); calls.push(pid); if (pid === descendantPid) descendantAlive = false },
+      descendants: async (pid) => { expect(pid).toBe(child.pid); return descendantAlive ? [descendant] : [] },
+      inspect: async (pid) => pid === child.pid ? root : pid === descendantPid && descendantAlive ? descendant : null,
+      killVerified: async (record) => { calls.push(record.pid); if (record.pid === descendantPid) descendantAlive = false; return true },
+      kill: async () => { throw new Error('unverified PID kill') },
       isAlive: async (pid) => pid === descendantPid && descendantAlive
     }
     b = new LlamaCppBackend('unused', { pidFile, spawnFn: () => child as unknown as ChildProcess, processTree })
