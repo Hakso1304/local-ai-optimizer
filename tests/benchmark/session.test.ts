@@ -27,7 +27,7 @@ const machine: SystemProfile = {
 }
 
 /** Per-ctx script: load failure, prompt failure, or rates. hook runs inside the measured prompt. */
-interface Step { load?: 'oom' | 'drift' | 'slow'; prompt?: 'device_lost' | 'timeout'; warmupBlocks?: boolean; decode?: number; prefill?: number; hook?: () => void }
+interface Step { hostMiB?: number; load?: 'oom' | 'drift' | 'slow'; prompt?: 'device_lost' | 'timeout'; warmupBlocks?: boolean; decode?: number; prefill?: number; hook?: () => void }
 
 function fakeBackend(script: (ctx: number, cfg: LoadConfig) => Step) {
   let ctx = 0
@@ -52,7 +52,7 @@ function fakeBackend(script: (ctx: number, cfg: LoadConfig) => Step) {
       if (s.load === 'drift') throw new ConfigDriftError(`config_drift: requested -c ${ctx} but server serves n_ctx 16384`)
       if (s.load === 'slow') await new Promise((r) => setTimeout(r, 150)) // pid exists, /health not yet ok
       calls.order.push('load-resolved')
-      return { loadTimeMs: 900, declared: { layersOffloaded: 33, layersTotal: 33, modelBufferMiB: {}, kvBufferMiB: {}, computeBufferMiB: {} } }
+      return { loadTimeMs: 900, declared: { layersOffloaded: 33, layersTotal: 33, modelBufferMiB: s.hostMiB ? { Vulkan0: 9000, CPU: s.hostMiB } : {}, kvBufferMiB: {}, computeBufferMiB: {} } }
     },
     async unloadModel() { calls.unloads++; b.pid = undefined },
     async warmup() {
@@ -338,7 +338,7 @@ describe('runSession', () => {
 
   it('heavy configs: a >2 GiB shared spill is recorded (degraded + reason) and the ladder moves to the next config — no abort', async () => {
     const m27 = { ...model, id: 'C:/models/q27b.gguf', fileBytes: Math.round(16.1 * GiB), layers: 64, nEmbd: 5120, heads: 40, headsKv: 8, keyLength: 128, valueLength: 128, nVocab: 152064 }
-    const spill = { ...sample(2048), procVramSharedBytes: Math.round(2.31 * GiB) }
+    const spill = { ...sample(2048), procVramDedicatedBytes: 14 * GiB, procVramSharedBytes: Math.round(2.31 * GiB) } // dedicated ≥ 80 %: real spill
     const h = await run(() => ({}), { workload: 'max_quality', modelIds: [m27.id], ladder: [2048, 4096], heavyMode: true }, {
       models: [m27], startSampler: () => ({ samples: [spill], unavailable: {}, stop: () => [spill] }), config: { guardPollMs: 5, heavyGuardPollMs: 5 }
     })
@@ -365,6 +365,24 @@ describe('runSession', () => {
     expect(s.details[0].samplerErrors).toEqual(['typeperf restarted after 1 samples (pid columns missing)'])
     const ok = await run(() => ({}), { ladder: [2048] })
     expect(ok.s.details[0].samplerErrors).toEqual([]) // fakes without the new fields keep working
+  })
+
+  it('spill: host-pinned buffers (load log) are subtracted — 3.5 GiB of CPU layers + flat shared is not spill', async () => {
+    const xs = (ctx: number) => [{ ...sample(ctx), procVramDedicatedBytes: 14 * GiB, procVramSharedBytes: Math.round(3.5 * GiB) }]
+    const { s } = await run(() => ({ hostMiB: 3.5 * 1024 }), { ladder: [2048, 4096] }, { startSampler: (pid) => { const v = xs(pid - 1000); return { samples: v, unavailable: {}, stop: () => v } } })
+    expect(s.runs.map((r) => r.peakSharedGpuBytes.value)).toEqual([0, 0])
+    expect(s.runs[0].peakSharedGpuRawBytes?.value).toBe(Math.round(3.5 * GiB))
+    expect(s.runs[0].hostPinnedBytes).toMatchObject({ value: 3.5 * GiB, kind: 'declared' })
+    expect(s.runs.every((r) => r.status === 'pass')).toBe(true)
+  })
+
+  it('spill: growth of shared memory while dedicated VRAM is saturated IS spill; with free VRAM it is not', async () => {
+    const at = (ctx: number, ded: number) => [{ ...sample(ctx), procVramDedicatedBytes: ded, procVramSharedBytes: ctx >= 4096 ? Math.round(1.5 * GiB) : Math.round(0.02 * GiB) }]
+    const sat = await run(() => ({}), { ladder: [2048, 4096] }, { startSampler: (pid) => { const v = at(pid - 1000, 14 * GiB); return { samples: v, unavailable: {}, stop: () => v } } })
+    expect(sat.s.runs[1].peakSharedGpuBytes.value).toBe(Math.round(1.5 * GiB)) // step 1 was saturated → no baseline is subtracted
+    const free = await run(() => ({}), { ladder: [2048, 4096] }, { startSampler: (pid) => { const v = at(pid - 1000, 8 * GiB); return { samples: v, unavailable: {}, stop: () => v } } })
+    expect(free.s.runs[1].peakSharedGpuBytes.value).toBe(0)
+    expect(free.s.runs[1].peakSharedGpuBytes.source).toMatch(/dedicated below saturation: not spill/)
   })
 
   it('emits events in order', async () => {

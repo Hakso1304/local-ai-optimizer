@@ -93,7 +93,7 @@ Steps are sorted by ctx. A step is **usable** iff its status is `pass|degraded` 
 |---|---|---|
 | `decodeDropRatio`, `minDecodeDropTps` | 0.60, 2 t/s | dec_b/dec_a ≤ 0.60 **and** dec_a − dec_b ≥ 2 → `decode_drop` |
 | `prefillDropPerDoubling` | 0.5 | pp_b/pp_a < 0.5^log2(ctx_b/ctx_a) → `prefill_drop` |
-| `sharedSpillBytes` | 256 MiB | per-PID shared > 256 MiB, checked at every step including the first → `shared_spill` |
+| `sharedSpillBytes` | 256 MiB | **spill** > 256 MiB → `shared_spill`, checked at every step. Spill = per-PID shared − host-pinned buffers (load log: `Vulkan_Host`/`CPU`, plus `CPU_Mapped` without mmap) − the config's first-step level when that step was unsaturated; counted only while per-PID dedicated ≥ `vramSaturation`. Under `-lm none`, WDDM reports the CPU layers' pinned buffers as shared (Qwen3.8 ngl 50: 3.82 GiB shared with 4 GiB of VRAM free), so raw shared alone was a false positive. `peakSharedGpuRawBytes` and `hostPinnedBytes` are recorded alongside. |
 | `vramSaturation`, `ramGrowthBytes` | 0.80, 1 GiB | per-PID dedicated ≥ 80 % of the VRAM total **and** per-PID private RAM ≥ +1 GiB vs the previous step → `vram_spill`. This corroborates `shared_spill`. RAM growth alone never flags, and available-RAM deltas (mmap) must never be fed in. |
 
 - Verdicts:

@@ -129,6 +129,18 @@ function median(xs: (number | null)[]): number | null {
   return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2
 }
 
+const GPU_DEVICE = /^(Vulkan|CUDA|ROCm|SYCL|Metal|MTL)\d+$/
+/** Host-side buffers from the load log. WDDM reports pinned host memory as the process's "shared GPU memory":
+ *  Qwen3.8 ngl 50 under -lm none showed 3.82 GiB shared with 4 GiB of VRAM free (≈ 15/65 of the weights).
+ *  CPU_Mapped is a file mapping under mmap (not shared: 8B showed 282 MiB CPU_Mapped, 0.02 GiB shared). */
+export function hostPinnedBytes(d: LoadResult['declared'], mmap: boolean): number {
+  let mib = 0
+  for (const map of [d.modelBufferMiB, d.kvBufferMiB, d.computeBufferMiB]) {
+    for (const [dev, v] of Object.entries(map ?? {})) if (!GPU_DEVICE.test(dev) && !(mmap && dev === 'CPU_Mapped')) mib += v
+  }
+  return mib * 1024 ** 2
+}
+
 const failKind = (exit: ExitInfo | null): FailureKind | null =>
   exit ? (exit.reason === 'oom' ? 'oom' : exit.reason === 'device_lost' ? 'device_lost' : 'crash') : null
 
@@ -202,6 +214,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       for (const s of cand.skippedSteps) log('info', `${cand.id} @${s.ctx}: skipped (${s.reason})`)
       const steps = req.ladder ? cand.ctxSteps.filter((c) => req.ladder!.includes(c)) : cand.ctxSteps
       const runs: BenchmarkRunResult[] = []
+      let spillBase = 0 // shared level of the config's first step when VRAM was not saturated (not spill)
       let degradedRun = 0
       let stopReason: string | null = null
 
@@ -212,13 +225,17 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         if (run) {
           log('info', `${cand.id} @${ctx}: already measured in this session; reused`)
         } else {
-          const out = await runStep(cand, model, ctx)
+          const out = await runStep(cand, model, ctx, spillBase)
           run = out.run
           await storage.saveRun(sessionId, run, out.detail)
           if (run.failureKind === 'device_lost') gpuLost = true
           if (out.detail.reason) log(run.status === 'pass' ? 'warn' : 'error', `${cand.id} @${ctx}: ${out.detail.reason}`)
         }
         runs.push(run)
+        if (runs.length === 1) {
+          const raw = val(run.peakSharedGpuRawBytes) ?? val(run.peakSharedGpuBytes), pin = val(run.hostPinnedBytes) ?? 0, ded = val(run.peakVramBytes)
+          if (raw !== null && (vramTotal === null || ded === null || ded < vramTotal * DEFAULT_SCORING_CONFIG.cliff.vramSaturation)) spillBase = Math.max(0, raw - pin)
+        }
         const verdict = detectCliffs(runs, vramTotal).steps.find((s) => s.ctx === ctx)!.verdict
         send({ type: 'step:done', configId: cand.id, ctx, result: run, verdict })
         if (verdict === 'fail') { stopReason = `stopped after ${run.status}${run.failureKind ? ` (${run.failureKind})` : ''} at ${ctx}`; break }
@@ -299,7 +316,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     }
   }
 
-  async function runStep(cand: CandidateConfig, model: ModelMeta, ctx: number): Promise<{ run: BenchmarkRunResult; detail: RunDetail }> {
+  async function runStep(cand: CandidateConfig, model: ModelMeta, ctx: number, spillBase = 0): Promise<{ run: BenchmarkRunResult; detail: RunDetail }> {
+    let pinned = 0 // host-pinned bytes, known once the load log is parsed
     const startedAt = clock.now()
     send({ type: 'step:started', configId: cand.id, ctx })
     const na = (reason: string): Metric => ({ value: null, kind: 'unavailable', reason })
@@ -364,12 +382,12 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         send({ type: 'telemetry', configId: cand.id, ctx, sample: s })
         // Heavy (partial-offload) configs: a shared-memory spill is a measurement (degraded + spill reason, then the
         // ladder moves on), not an abort. The RAM floor always aborts.
-        const spillAbort = !cand.expectDegraded && s.procVramSharedBytes != null && s.procVramSharedBytes > cfg.sharedSpillAbortBytes
+        const spillAbort = !cand.expectDegraded && s.procVramSharedBytes != null && s.procVramSharedBytes - pinned - spillBase > cfg.sharedSpillAbortBytes
         const trip = !guard && ((s.ramAvailBytes != null && s.ramAvailBytes + mmapCredit < ramFloor) || spillAbort)
         if (!trip) continue
         guard = s.ramAvailBytes != null && s.ramAvailBytes + mmapCredit < ramFloor
           ? `RAM available ${(s.ramAvailBytes / GiB).toFixed(1)} GiB fell below the floor`
-          : `shared GPU memory spill ${(s.procVramSharedBytes! / GiB).toFixed(1)} GiB exceeded the abort limit`
+          : `shared GPU memory spill ${((s.procVramSharedBytes! - pinned - spillBase) / GiB).toFixed(1)} GiB exceeded the abort limit`
         void (loading ? backend.unloadModel().catch(() => {}) : backend.cancel())
       }
     }
@@ -396,6 +414,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     }
     clearInterval(pidPoll)
     if (!sampler && backend.pid !== undefined) { sampler = deps.startSampler(backend.pid); samplerAt = Date.now() }
+    pinned = hostPinnedBytes(load.declared, cand.mmap !== false)
     loading = false
     restartIfBlind()
     flush()
@@ -451,6 +470,15 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     const tele = (v: number | null, field: Field, n = pk.n): Metric =>
       n === 0 ? { value: null, kind: 'unavailable', reason: 'no telemetry samples in the window (run too short or sampler failed)' }
         : measured(v, 'typeperf', smp?.unavailable[field] ?? 'counter reported nothing')
+    // Spill = shared − host-pinned − the config's unsaturated baseline, and only while dedicated VRAM is near full:
+    // WDDM moves allocations to shared memory only when dedicated is exhausted (14B spilled at 83 % dedicated).
+    const spillMetric = (): Metric => {
+      const raw = pk.max.procVramSharedBytes, ded = pk.max.procVramDedicatedBytes
+      if (pk.n === 0 || raw == null) return tele(raw, 'procVramSharedBytes')
+      const saturated = vramTotal === null || ded == null || ded >= vramTotal * DEFAULT_SCORING_CONFIG.cliff.vramSaturation
+      const v = saturated ? Math.max(0, raw - pinned - spillBase) : 0
+      return { value: v, kind: 'measured', source: `per-PID shared ${(raw / GiB).toFixed(2)} GiB − host-pinned ${(pinned / GiB).toFixed(2)} GiB − baseline ${(spillBase / GiB).toFixed(2)} GiB${saturated ? '' : ' (dedicated below saturation: not spill)'}` }
+    }
     const prefill = median(reps.map((r) => r.prefillTps))
     const decode = median(reps.map((r) => r.decodeTps))
     const ttft = median(reps.map((r) => r.ttftMs))
@@ -470,7 +498,9 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       decodeTps: tps(decode, estDecode, 'predicted'),
       totalMs: measured(median(reps.map((r) => r.totalMs)), 'client wall clock', 'no successful request'),
       peakVramBytes: tele(pk.max.procVramDedicatedBytes, 'procVramDedicatedBytes'),
-      peakSharedGpuBytes: tele(pk.max.procVramSharedBytes, 'procVramSharedBytes'),
+      peakSharedGpuBytes: spillMetric(),
+      peakSharedGpuRawBytes: tele(pk.max.procVramSharedBytes, 'procVramSharedBytes'),
+      hostPinnedBytes: { value: pinned, kind: 'declared', source: 'llama-server load log: host-side model/KV/compute buffers' },
       peakRamBytes: tele(pk.max.procRamPrivateBytes, 'procRamPrivateBytes'),
       avgGpuUtil: tele(win.meanGpuUtilPct, 'gpuUtilPct', win.n),
       avgCpuUtil: tele(win.meanCpuPct, 'cpuPct', win.n)

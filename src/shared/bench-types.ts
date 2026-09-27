@@ -150,7 +150,13 @@ export interface BenchmarkRunResult {
   /** Per-PID dedicated VRAM peak. */
   peakVramBytes: Metric
   /** Per-PID shared GPU memory peak minus pre-load baseline (spill signal; never adapter totals). */
+  /** SPILL: per-PID shared GPU memory − host-pinned buffers (load log) − the config's unsaturated first-step
+   *  level, counted only while dedicated VRAM is ≥ the saturation share (WDDM spills only near full). */
   peakSharedGpuBytes: Metric
+  /** Raw per-PID shared GPU memory peak (includes pinned host buffers, e.g. CPU layers under -lm none). */
+  peakSharedGpuRawBytes?: Metric
+  /** Host-side model/KV/compute buffers from the load log (Vulkan_Host, CPU, CPU_Mapped without mmap). */
+  hostPinnedBytes?: Metric
   /** Per-PID private working set peak (excludes mmap file cache). */
   peakRamBytes: Metric
   /** Decode-window averages (load phase excluded). */
