@@ -59,7 +59,10 @@ describe('calibration: 8B Q4_K_M full offload 2K→64K', () => {
 
   it('reasons name the TTFT at the chosen ctx and the memory bound (not "no cliff")', () => {
     const rec = recommend(candidates('coding'), M, 'coding')
-    expect(rec.reasons).toContain('Recommended context 32K: TTFT 12.0 s for a full prompt (tolerance 15 s), decode 72.0 t/s')
+    // Scored at the workload target (16K) but recommended at 32K: the reason shows both.
+    expect(rec.reasons).toContain('Recommended context 32K: TTFT 12.0 s for a full prompt (tolerance 15 s), decode 72.0 t/s (scored at 16K: TTFT 4.9 s, decode 88.1 t/s)')
+    const fast = recommend(candidates('fast_assistant'), M, 'fast_assistant') // recommended = scored = 4K → no suffix
+    expect(fast.reasons.find((x) => x.startsWith('Recommended context 4K'))).not.toMatch(/scored at/)
     expect(rec.reasons.find((x) => x.startsWith('Practical context 64K'))).toMatch(/memory-bound at 64K \(128K: est\. VRAM .* > budget/)
   })
 

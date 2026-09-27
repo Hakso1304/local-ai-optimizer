@@ -134,6 +134,8 @@ export interface BenchmarkRunResult {
   /** Decode-window averages (load phase excluded). */
   avgGpuUtil: Metric
   avgCpuUtil: Metric
+  /** Why the step failed / was skipped, as the runner recorded it (e.g. the RAM-guard arithmetic). */
+  reason?: string | null
   /** true = measured after a successful size-matched warmup (X13). Absent in pre-1.0 data. */
   warm?: boolean
   /** What produced this row (X17), all declared. runtime null = not reported by detect(). */

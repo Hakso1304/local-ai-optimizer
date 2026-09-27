@@ -111,7 +111,13 @@ export function recommend(
   const top = eligible[0]
   const reasons: string[] = []
   if (!inputs.length) reasons.push('No recommendation: no candidates were benchmarked')
-  else if (!scored.length) reasons.push('No recommendation: no successful runs')
+  else if (!scored.length) {
+    const all = inputs.flatMap((i) => i.runs)
+    if (all.length && all.every((r) => r.failureKind === 'skipped_memory')) {
+      reasons.push('No recommendation: nothing was run — the RAM guard skipped every step before loading')
+      for (const why of [...new Set(all.map((r) => r.reason).filter((x): x is string => !!x))]) reasons.push(why)
+    } else reasons.push('No recommendation: no successful runs')
+  }
   else if (!top) {
     reasons.push(`No recommendation: no candidate meets the ${profile.label} requirements`)
     for (const s of scored) reasons.push(`${s.score.configId}: ${s.score.gateFailures.join('; ')}`)
@@ -133,10 +139,17 @@ export function recommend(
     reasons.push(`Largest contributions: ${leaders.map((r) => `${LABEL[r.component]} ${r.contribution.toFixed(1)}`).join(', ')}`)
     const pc = val(cliff.practicalContextCeiling)!
     const rc = top.input.runs.find((r) => r.ctx === top.score.recommendedCtx)
+    // Speed/latency are scored at the workload target (referenceCtx); say so when that differs from the recommended -c.
+    const sc = top.input.runs.find((r) => r.ctx === top.score.referenceCtx)
+    const scoredAt = () => {
+      if (!sc || sc.ctx === rc?.ctx) return ''
+      const t = val(sc.ttftMs, true)
+      return ` (scored at ${fmtCtx(sc.ctx)}: TTFT ${t === null ? 'unknown' : `${(t / 1000).toFixed(1)} s`}, decode ${val(sc.decodeTps, true)!.toFixed(1)} t/s)`
+    }
     const ttft = val(rc?.ttftMs, true)
     if (rc) {
       reasons.push(`Recommended context ${fmtCtx(rc.ctx)}: TTFT ${ttft === null ? 'unknown' : `${(ttft / 1000).toFixed(1)} s`} for a full prompt ` +
-        `(tolerance ${(profile.latencyToleranceMs / 1000).toFixed(0)} s), decode ${val(rc.decodeTps, true)!.toFixed(1)} t/s`)
+        `(tolerance ${(profile.latencyToleranceMs / 1000).toFixed(0)} s), decode ${val(rc.decodeTps, true)!.toFixed(1)} t/s` + scoredAt())
     }
     reasons.push(`Practical context ${fmtCtx(pc)} (measured)${declared ? `; model declares ${fmtCtx(declared)}` : ''}; ${limitText(top.input, cliff, pc)}`)
     if (cliff.spillFreeUpTo !== null) reasons.push(`No VRAM spill up to ${fmtCtx(cliff.spillFreeUpTo)}`)

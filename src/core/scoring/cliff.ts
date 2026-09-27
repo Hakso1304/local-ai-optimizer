@@ -45,7 +45,7 @@ export function detectCliffs(
         code: completed ? 'invalid_metrics' : 'run_failed', metric: completed ? 'decodeTps' : 'status', toCtx: to,
         message: completed
           ? `${fmtCtx(to)}: run completed but reported no valid decode TPS`
-          : `${fmtCtx(to)}: run ${s.status}${s.failureKind ? ` (${s.failureKind})` : ''}`
+          : `${fmtCtx(to)}: run ${s.status}${s.failureKind ? ` (${s.failureKind})` : ''}${s.reason ? `: ${s.reason}` : ''}`
       }))
       out.push({ ctx: to, verdict: 'fail', reasons })
       if (!limit) { limit = 'failure'; limitCtx = to }

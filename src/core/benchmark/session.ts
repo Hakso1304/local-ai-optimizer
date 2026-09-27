@@ -245,7 +245,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     const na = (reason: string): Metric => ({ value: null, kind: 'unavailable', reason })
     const result = (status: RunStatus, failureKind: FailureKind | null, reason: string | null, extra: Partial<BenchmarkRunResult> = {}, detail: Partial<RunDetail> = {}) => ({
       run: {
-        configId: cand.id, ctx, promptTokens: null, status, failureKind,
+        configId: cand.id, ctx, promptTokens: null, status, failureKind, reason,
         loadTimeMs: na('not loaded'), ttftMs: na('no request'), prefillTps: na('no request'), decodeTps: na('no request'), totalMs: na('no request'),
         peakVramBytes: na('no telemetry'), peakSharedGpuBytes: na('no telemetry'), peakRamBytes: na('no telemetry'),
         avgGpuUtil: na('no telemetry'), avgCpuUtil: na('no telemetry'), warm: false,

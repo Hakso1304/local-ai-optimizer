@@ -215,9 +215,14 @@ describe('runSession', () => {
   })
 
   it('skips a step whose RAM estimate breaks the live floor (A25) without loading it', async () => {
-    const { s, backend } = await run(() => ({}), {}, { readRamAvailableBytes: () => 1 * GiB })
+    const { s, backend, rec } = await run(() => ({}), {}, { readRamAvailableBytes: () => 1 * GiB })
     expect(backend.calls.loads).toEqual([])
     expect(s.runs[0]).toMatchObject({ status: 'fail', failureKind: 'skipped_memory' })
+    // Every step skipped by the RAM guard → say so, with the guard's arithmetic (not just "no successful runs").
+    expect(rec?.best).toBeNull()
+    expect(rec?.reasons[0]).toBe('No recommendation: nothing was run — the RAM guard skipped every step before loading')
+    expect(rec?.reasons[1]).toMatch(/^est\. RAM 5\.1 GiB > available 1\.0 GiB − floor 2\.5 GiB$/)
+    expect(rec?.excluded[0].reasons[0]).toMatch(/^2K: run fail \(skipped_memory\): est\. RAM/)
   })
   it('guard reason wins over the "cancelled" error its own cancel() causes (guard_abort, not request_error)', async () => {
     const low = { ...sample(2048), ramAvailBytes: 1 * GiB }
