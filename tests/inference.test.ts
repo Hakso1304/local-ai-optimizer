@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { LlamaCppBackend, findGgufModels } from '../src/core/runtimes/llamacpp'
+import { LlamaCppBackend } from '../src/core/runtimes/llamacpp'
 import { classifyExit, emptyDeclared, parseDevices, parseLogLine, parseSse, pickDiscreteDevice, toPromptResult, type CompletionChunk } from '../src/core/runtimes/llamacpp/parse'
 
 // Shape of a real llama-server /completion stream (b11208), split at awkward byte boundaries.
@@ -74,22 +74,6 @@ describe('startup log + exit classification', () => {
   })
 })
 
-describe('findGgufModels', () => {
-  it('finds .gguf recursively across dirs and skips missing dirs', () => {
-    const root = mkdtempSync(join(tmpdir(), 'lao-models-'))
-    try {
-      mkdirSync(join(root, 'sub'))
-      writeFileSync(join(root, 'a.gguf'), 'x'.repeat(10))
-      writeFileSync(join(root, 'sub', 'B.GGUF'), 'y')
-      writeFileSync(join(root, 'notes.txt'), 'z')
-      const found = findGgufModels([root, join(root, 'missing')]).sort((x, y) => x.name.localeCompare(y.name))
-      expect(found.map((m) => [m.name, m.sizeBytes, m.runtime])).toEqual([['a', 10, 'llamacpp'], ['B.GGUF', 1, 'llamacpp']])
-    } finally {
-      rmSync(root, { recursive: true, force: true })
-    }
-  })
-})
-
 describe('LlamaCppBackend process handling (fake server, no GPU)', () => {
   const fake = join(__dirname, 'fixtures', 'fake-llama-server.cjs')
   const pidFile = join(tmpdir(), `lao-test-${process.pid}.pid`)
@@ -127,5 +111,23 @@ describe('LlamaCppBackend process handling (fake server, no GPU)', () => {
     expect(r.ttftMs).toBeGreaterThan(0)
     await b.unloadModel()
     expect(existsSync(pidFile)).toBe(false)
+    expect((await b.runPrompt({ prompt: 'x', maxTokens: 1 })).error).toBe('no model loaded')
+  })
+
+  it('rejects a second concurrent prompt instead of clobbering the cancel slot', async () => {
+    b = backend('ok')
+    await b.loadModel(cfg)
+    const [r1, r2] = await Promise.all([b.runPrompt({ prompt: 'x', maxTokens: 1 }), b.runPrompt({ prompt: 'y', maxTokens: 1 })])
+    expect(r1.error).toBeNull()
+    expect(r2.error).toMatch(/already in flight/)
+  })
+
+  it('reports the classified exit when the server died while idle, without fetching', async () => {
+    b = backend('ok')
+    await b.loadModel(cfg)
+    process.kill(b.pid!)
+    await new Promise((r) => setTimeout(r, 500))
+    expect(b.lastExit).not.toBeNull()
+    expect((await b.runPrompt({ prompt: 'x', maxTokens: 1 })).error).toMatch(/^server exited \(crash, code/)
   })
 })

@@ -39,6 +39,19 @@ export function openDb(path: string): DatabaseSync {
   return db
 }
 
+/** Bulk-insert telemetry samples for one run in a single transaction. Sample objects go in `payload` as JSON. */
+export function insertTelemetrySamples(db: DatabaseSync, sessionId: number, runId: number, samples: { ts: number }[]): void {
+  const stmt = db.prepare('INSERT INTO telemetry_sample (session_id, run_id, created_at, payload) VALUES (?, ?, ?, ?)')
+  db.exec('BEGIN')
+  try {
+    for (const s of samples) stmt.run(sessionId, runId, new Date(s.ts).toISOString(), JSON.stringify(s))
+    db.exec('COMMIT')
+  } catch (e) {
+    db.exec('ROLLBACK')
+    throw e
+  }
+}
+
 export function migrate(db: DatabaseSync): number {
   db.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)')
   const row = db.prepare('SELECT max(version) AS v FROM schema_version').get() as { v: number | null }

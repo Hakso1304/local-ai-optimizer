@@ -51,12 +51,34 @@ export interface SystemProfile {
   runtimes: RuntimeDetection[]
 }
 
+/** Read from the GGUF header without loading the model. Plain fields are DECLARED (from the file);
+ *  `estimated` holds our formulas (pruning only, never shown as fact). */
+export interface GgufMetadata {
+  ggufVersion: number
+  arch: string | null
+  name: string | null
+  sizeLabel: string | null
+  parameterCount: { value: number | null; kind: 'declared' | 'unavailable'; source: string }
+  contextLength: number | null
+  blockCount: number | null
+  headCount: number | null
+  headCountKv: number | null
+  embeddingLength: number | null
+  fileType: number | null
+  quantName: string | null // from general.file_type, else parsed from the filename
+  fileSizeBytes: number
+  headDim: { value: number | null; kind: 'declared' | 'estimated' }
+  estimated: { kvCacheBytesPerToken: number | null }
+}
+
 export interface ModelInfo {
   id: string // absolute path; stable per file
   name: string
   path: string
   sizeBytes: number
   runtime: 'llamacpp'
+  meta: GgufMetadata | null
+  metaError?: string
 }
 
 /** One measured prompt. ttftMs/totalMs are wall clock (measured here); prefill/decode come from

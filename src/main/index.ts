@@ -11,10 +11,13 @@ import type { SmokeResult } from '../shared/types'
 // ponytail: app.getAppPath() is the project root in dev/preview; revisit for packaged builds.
 const llamaDir = () => join(app.getAppPath(), 'vendor', 'llama.cpp')
 
-/** <project>/models plus user-added dirs from userData/settings.json ({ "modelDirs": [...] }). */
+// Large models live on D: (user decision); used when settings.json has no modelDirs key.
+const DEFAULT_MODEL_DIRS = ['D:\\llm-models']
+
+/** <project>/models plus dirs from userData/settings.json ({ "modelDirs": [...] }). Missing dirs are skipped. */
 function modelDirs(): string[] {
   const file = join(app.getPath('userData'), 'settings.json')
-  let extra: string[] = []
+  let extra = DEFAULT_MODEL_DIRS
   if (existsSync(file)) {
     const s = JSON.parse(readFileSync(file, 'utf8')) as { modelDirs?: unknown }
     if (Array.isArray(s.modelDirs)) extra = s.modelDirs.filter((d): d is string => typeof d === 'string')

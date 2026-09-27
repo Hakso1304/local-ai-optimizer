@@ -1,8 +1,9 @@
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { createWriteStream, existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, mkdirSync } from 'node:fs'
+import { findGgufModels } from '../../models/gguf'
 import { createServer, type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
-import { basename, join, dirname, resolve } from 'node:path'
+import { join, dirname, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -30,27 +31,6 @@ export function pickVulkanAsset(releases: GhRelease[]): { tag: string; name: str
     const a = r.assets.find((x) => VULKAN_ASSET.test(x.name))
     if (a) return { tag: r.tag_name, name: a.name, url: a.browser_download_url, size: a.size }
   }
-  return null
-}
-
-/** Recursively list *.gguf files under each existing dir. Missing dirs are skipped. */
-export function findGgufModels(dirs: string[]): ModelInfo[] {
-  const out = new Map<string, ModelInfo>()
-  for (const dir of dirs) {
-    if (!existsSync(dir)) continue
-    for (const rel of readdirSync(dir, { recursive: true, encoding: 'utf8' })) {
-      // ponytail: split shards (-0000N-of-0000M) and mmproj files are listed as-is; group/filter once GGUF metadata lands.
-      if (!rel.toLowerCase().endsWith('.gguf')) continue
-      const path = join(dir, rel)
-      const st = statSync(path)
-      if (st.isFile()) out.set(path, { id: path, name: basename(path, '.gguf'), path, sizeBytes: st.size, runtime: 'llamacpp' })
-    }
-  }
-  return [...out.values()]
-}
-
-/** TODO(next task): parse GGUF header (arch, params, quant, ctx_train). */
-export function readGgufMetadata(_path: string): Record<string, unknown> | null {
   return null
 }
 
@@ -256,6 +236,11 @@ export class LlamaCppBackend implements InferenceBackend {
     this.clearPid()
   }
 
+  /** PID of the running server (for the telemetry sampler). */
+  get pid(): number | undefined {
+    return this.proc?.pid
+  }
+
   /** Synchronous best-effort kill for app quit / process exit handlers. */
   killSync(): void {
     if (this.proc?.pid && alive(this.proc)) this.proc.kill()
@@ -280,6 +265,9 @@ export class LlamaCppBackend implements InferenceBackend {
 
   /** Stream one /completion. Request-level failures (HTTP, timeout, cancel, crash) land in `error`, never thrown. */
   async runPrompt(req: PromptRequest, onToken?: (t: string) => void): Promise<PromptResult> {
+    const early = (error: string) => toPromptResult(null, { ttftMs: null, totalMs: 0, text: '', timedOut: false, error })
+    if (!this.proc) return early(this.lastExit ? `server exited (${this.lastExit.reason}, code ${this.lastExit.code})` : 'no model loaded')
+    if (this.abort) return early('another prompt is already in flight') // --parallel 1; cancel() has a single slot
     const timeoutMs = req.timeoutMs ?? 120_000
     const ctl = new AbortController()
     this.abort = ctl

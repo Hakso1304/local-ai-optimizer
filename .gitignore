@@ -2,7 +2,7 @@ node_modules/
 out/
 dist/
 vendor/
-models/
+/models/
 *.db
 *.log
 .DS_Store

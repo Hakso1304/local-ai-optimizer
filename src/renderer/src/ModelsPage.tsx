@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { ModelInfo, SmokeResult } from '../../shared/types'
 
 const gib = (b: number) => `${(b / 1024 ** 3).toFixed(2)} GiB`
+const params = (n: number | null) => (n == null ? '—' : n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : `${(n / 1e6).toFixed(0)}M`)
 const fmt = (v: unknown) => (v == null ? '—' : typeof v === 'number' ? String(Math.round(v * 100) / 100) : typeof v === 'object' ? JSON.stringify(v) : String(v))
 
 /** Flatten a result into dotted key/value rows (raw view until the Results page exists). */
@@ -34,19 +35,31 @@ export function ModelsPage() {
       </header>
       {err && <p className="err">{err}</p>}
       <table>
-        <thead><tr><th>Name</th><th>Size</th><th>Path</th><th /></tr></thead>
+        <thead><tr><th>Name</th><th>Arch</th><th>Params</th><th>Quant</th><th>Ctx (train)</th><th>KV/token*</th><th>Size</th><th>Path</th><th /></tr></thead>
         <tbody>
           {models?.map((m) => (
             <tr key={m.id}>
               <td>{m.name}</td>
+              {m.meta ? (
+                <>
+                  <td>{m.meta.arch ?? '—'}</td>
+                  <td title={m.meta.parameterCount.source}>{params(m.meta.parameterCount.value)}</td>
+                  <td>{m.meta.quantName ?? '—'}</td>
+                  <td>{m.meta.contextLength ?? '—'}</td>
+                  <td className="muted">{m.meta.estimated.kvCacheBytesPerToken != null ? `${(m.meta.estimated.kvCacheBytesPerToken / 1024).toFixed(0)} KiB` : '—'}</td>
+                </>
+              ) : (
+                <td colSpan={5} className="err">{m.metaError ?? 'no metadata'}</td>
+              )}
               <td>{gib(m.sizeBytes)}</td>
               <td className="muted">{m.path}</td>
               <td className="bar"><button disabled={busy !== null} onClick={() => run(m)}>{busy === m.id ? 'Running…' : 'Smoke test'}</button></td>
             </tr>
           ))}
-          {models?.length === 0 && <tr><td colSpan={4} className="muted">No .gguf files in the configured model directories.</td></tr>}
+          {models?.length === 0 && <tr><td colSpan={9} className="muted">No .gguf files in the configured model directories.</td></tr>}
         </tbody>
       </table>
+      <p className="muted">Declared values come from the GGUF header. *KV/token is ESTIMATED (f16 K+V), used for pruning only.</p>
       {smoke && (
         <>
           <h2>Smoke result — {smoke.model}</h2>
