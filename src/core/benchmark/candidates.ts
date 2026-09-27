@@ -59,6 +59,8 @@ export const rulesForRequest = (req: Pick<SessionRequest, 'candidateRules' | 'he
 // full attention, full ctx). We keep it for pruning — never treat unknown KV as 0 — and say so in the notes.
 const LOW_CONFIDENCE_ARCHS = new Set(['gemma2', 'gemma3', 'gemma3n', 'gemma4', 'qwen3next', 'qwen35', 'mamba', 'rwkv6', 'rwkv7', 'jamba', 'granitehybrid', 'lfm2'])
 const KV_BYTES: Record<KvType, number> = { f16: 2, q8_0: 34 / 32 }
+/** q8_0 / f16 KV size ratio used by the estimator (shared with remedy feasibility, R5). */
+export const KV_Q8_OVER_F16 = KV_BYTES.q8_0 / KV_BYTES.f16
 
 const gib = (b: number) => `${(b / GiB).toFixed(1)} GiB`
 const ctxK = (n: number) => (n % 1024 === 0 ? `${n / 1024}K` : String(n))

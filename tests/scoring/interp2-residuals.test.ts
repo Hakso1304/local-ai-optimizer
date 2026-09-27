@@ -58,9 +58,10 @@ describe('F2 comparable scope for decisive components', () => {
     b.quality = b.quality.map((r) => ({ ...r, ctx: 2048, templateHash: 'other' } as QualityResult)); a.quality = a.quality.map((r) => ({ ...r, ctx: 8192, templateHash: 'tpl' } as QualityResult))
     const v = V([a, b])
     expect(v.ranked.find((x) => x.input.config.id === 'b')!.undecided.map((u) => u.kind)).toContain('unmatched-prompt')
-    const cmp = v.trace.comparisons.find((c) => c.difference === null)
-    expect(v.trace.candidates.find((c) => c.configId === 'b')?.qualityVsWinner?.difference ?? null).toBeNull()
-    void cmp
+    const qb = v.trace.candidates.find((c) => c.configId === 'b')!.qualityVsWinner
+    expect(qb).not.toBeNull()
+    expect(qb!.difference).toBeNull()
+    expect(qb!.reason).toMatch(/not comparable: quality contexts differ \(2048 vs 8192\)/)
   })
 })
 
@@ -162,5 +163,57 @@ describe('F10 coverage and required context from every candidate', () => {
     const t = text(interpret(V([c], 'long_context_coding', {}, { requiredContext: 32768 })), 'I-2.5')
     expect(t).not.toMatch(/tested and failed at 32K \(pass\)/)
     expect(t).toMatch(/measured at 32K but not verified \(warmup not recorded\)/)
+  })
+})
+
+describe('R1–R5 (review-w4k): scope, identity and version strictness', () => {
+  const genBase = (id: string, over: Record<string, unknown> = {}) => quality(10, () => true).map((r) => ({ ...r, genId: id, appliedTemplateKwargs: { enable_thinking: id !== 'off' }, templateHash: 'tpl', runtimeVersion: 'b1', modelFingerprint: 'm1', acceptedSampling: { temperature: 0 }, ...over } as QualityResult))
+  const gq = (id: string, thinking: boolean, results: QualityResult[]): GenQuality => ({ gen: { id, thinking, ...(thinking ? { effort: 'low' } : {}), temperature: 0, source: 'default' }, results, samples: 1, stochastic: false, answerTokens: m(100), reasoningTokens: m(thinking ? 20 : 0), effectiveAnswerLatencyMs: m(2000), effectiveTps: m(50), reasoningMs: m(thinking ? 400 : 0), rawTps: m(60) })
+  const thinker = (rows: QualityResult[]) => {
+    const c = candidate('think')
+    c.model = { ...c.model, genKnobs: { supportsThinking: true, effortValues: ['low'] } }
+    c.quality = genBase('off').map((r, i) => ({ ...r, pass: i % 2 === 0 }))
+    c.genQuality = [gq('off', false, c.quality), gq('think-low', true, rows)]
+    return c
+  }
+  it('R1: f16 vs q8_0 configs are not paired even when the rows do not repeat the KV type', () => {
+    const a = candidate('a'), b = candidate('b'); b.config.kvType = 'q8_0'
+    const q = V([a, b]).trace.candidates.find((c) => c.configId !== V([a, b]).winner?.input.config.id)!.qualityVsWinner
+    expect(q).not.toBeNull()
+    expect(q!.difference).toBeNull()
+    expect(q!.reason).toMatch(/not comparable: KV types differ \((f16 vs q8_0|q8_0 vs f16)\)/)
+  })
+  it('R2: one conflicting template hash among otherwise complete rows breaks the contract', () => {
+    const rows = genBase('think-low').map((r, i) => (i === 1 ? { ...r, templateHash: 'DIFFERENT' } as QualityResult : r))
+    const v = V([thinker(rows)])
+    expect(v.ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')!.why).toMatch(/templateHash not uniform/)
+    expect(v.winner?.gen?.gq.gen.id ?? 'off').toBe('off')
+  })
+  it('R2: accepted sampling that differs from the config breaks the contract', () => {
+    const v = V([thinker(genBase('think-low', { acceptedSampling: { temperature: 0.8 } }))])
+    expect(v.ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')!.why).toMatch(/accepted temperature differs from the config's 0/)
+  })
+  it('R3: mixed quality contexts are reported as mixed, and equal counterfactual totals are "tied"', () => {
+    const c = candidate('a'); c.quality = c.quality.map((r, i) => ({ ...r, ctx: i % 2 ? 4096 : 2048 } as QualityResult))
+    const b = V([c]).trace.candidates[0].basis.find((x) => x.component === 'quality')!
+    expect(b).toMatchObject({ rung: null, scope: 'mixed (2048, 4096)' })
+    const prior = candidate('prior'); prior.quality = []
+    const measured = candidate('measured')
+    const cf = V([measured, { ...prior, runs: measured.runs.map((r) => ({ ...r, configId: 'prior' })) }], 'general_chat').trace.counterfactuals.find((x) => x.configId === 'prior')!
+    expect(cf.total).toBe(cf.vsTotal)
+    expect(cf.result).toBe('tied with measured without those terms')
+  })
+  it('R4: a versions object missing its prompts version is no version proof', () => {
+    const c = candidate('partial-version'); c.runs = c.runs.map((r) => ({ ...r, versions: { ...VER, prompts: undefined as unknown as string } }))
+    const v = V([c])
+    expect(v.winner).toBeNull()
+    expect(v.sessionVersion).toBeNull()
+  })
+  it('R5: the q8_0 remedy uses the estimator exact ratio (13.245 GiB budget does not fit 8 + 8·34/64 + 1)', () => {
+    const c = candidate('a', [8192])
+    c.config.skippedSteps = [{ ctx: 16384, reason: 'kv', skip: { resource: 'vram', estimateBytes: 17 * GiB, budgetBytes: 13.245 * GiB, ruleId: 'I-2.3', weightsBytes: 8 * GiB, kvBytes: 8 * GiB, overheadBytes: GiB } }]
+    expect(interpret(V([c])).find((x) => x.ruleId === 'I-2.3')!.action).not.toBe('enable-kv-q8')
+    c.config.skippedSteps[0].skip!.budgetBytes = 13.25 * GiB
+    expect(interpret(V([c])).find((x) => x.ruleId === 'I-2.3')!.action).toBe('enable-kv-q8')
   })
 })

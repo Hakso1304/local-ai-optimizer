@@ -70,7 +70,7 @@ export interface DecisionTrace {
   candidates: {
     configId: string; confirmed: boolean; undecided: string[]; total: number; qualityContribution: number; gen: string | null
     referenceCtx: number | null; referenceWhy: string | null; recommendedCtx: number | null; recommendedWhy: string | null; failures: string[]
-    basis: { component: string; rung: number | null; kind: string }[]
+    basis: { component: string; rung: number | null; kind: string; scope?: string }[]
     safety: { ramFloor: 'ok' | 'violated' | 'not verified'; spill: 'measured' | 'not verified' }
     qualityVsWinner: { difference: Difference | null; reason?: string } | null
   }[]
@@ -129,7 +129,8 @@ export function speedIneligible(r: BenchmarkRunResult, sessionVersion: string | 
   if (r.warm !== true) return r.warm === false ? 'the warmup failed' : 'warmup not recorded'
   if (r.decodeTps.kind !== 'measured') return `decode is ${r.decodeTps.kind}${r.decodeTps.source ? ` (${r.decodeTps.source})` : ''}`
   if (val(r.decodeTps, true) === null) return 'no valid decode TPS (zero or missing)'
-  const v = r.versions ? `${r.versions.benchmark}/${r.versions.prompts}` : null
+  const ok = (x: unknown) => typeof x === 'string' && x.trim().length > 0
+  const v = r.versions && ok(r.versions.benchmark) && ok(r.versions.prompts) ? `${r.versions.benchmark}/${r.versions.prompts}` : null
   if (!v) return `benchmark/prompt versions not recorded${sessionVersion ? ` (session ${sessionVersion})` : ''} — no version proof`
   if (sessionVersion && v !== sessionVersion) return `benchmark/prompt version ${v} differs from the session's ${sessionVersion}`
   return null
@@ -137,27 +138,42 @@ export function speedIneligible(r: BenchmarkRunResult, sessionVersion: string | 
 
 function sessionVersionOf(runs: BenchmarkRunResult[]): string | null {
   const count = new Map<string, number>()
-  for (const r of runs) if (r.versions) { const k = `${r.versions.benchmark}/${r.versions.prompts}`; count.set(k, (count.get(k) ?? 0) + 1) }
+  const ok = (x: unknown) => typeof x === 'string' && x.trim().length > 0
+  for (const r of runs) if (r.versions && ok(r.versions.benchmark) && ok(r.versions.prompts)) { const k = `${r.versions.benchmark}/${r.versions.prompts}`; count.set(k, (count.get(k) ?? 0) + 1) }
   return [...count].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0]?.[0] ?? null
 }
 
 type ContractRow = UncertaintyRow & { appliedTemplateKwargs?: Record<string, unknown>; templateHash?: string | null; runtimeVersion?: string | null; modelFingerprint?: string | null; acceptedSampling?: Record<string, unknown> | null }
 /** F5: what is missing for a generation config to be comparable with its baseline (empty = contract met). */
-function contractGaps(rows: ContractRow[], base: ContractRow[]): string[] {
+function contractGaps(rows: ContractRow[], base: ContractRow[], gen?: GenQuality['gen']): string[] {
   const gaps: string[] = []
   if (!rows.length) return ['no rows']
   if (!rows.every((r) => r.appliedTemplateKwargs && Object.keys(r.appliedTemplateKwargs).length > 0)) gaps.push('applied template kwargs not verified on every row')
   for (const k of ['templateHash', 'runtimeVersion', 'modelFingerprint'] as const) {
+    const vals = new Set([...rows, ...base].map((r) => r[k]))
     if (!rows.every((r) => !!r[k])) gaps.push(`${k} not recorded`)
-    else if (base.length && !base.every((b) => b[k] === rows[0][k])) gaps.push(`${k} differs from the baseline's`)
+    else if (vals.size !== 1) gaps.push(`${k} not uniform across this config and its baseline (${[...vals].map((x) => x ?? 'missing').join(', ')})`)
   }
   if (!rows.every((r) => r.acceptedSampling && Object.keys(r.acceptedSampling).length > 0)) gaps.push('runtime-accepted sampling not recorded')
+  else if (gen) {
+    const want: [string, number | undefined][] = [['temperature', gen.temperature], ['top_p', gen.topP], ['top_k', gen.topK], ['min_p', gen.minP]]
+    for (const [k, x] of want) {
+      if (x === undefined) continue
+      if (!rows.every((r) => typeof r.acceptedSampling![k] === 'number' && Math.abs((r.acceptedSampling![k] as number) - x) < 1e-6)) { gaps.push(`accepted ${k} differs from the config's ${x}`); break }
+    }
+  }
   return gaps
+}
+
+/** R3: the quality observation scope: one ctx, mixed ctxs, or unknown. */
+function qualityScope(v: CandidateVerdict): string {
+  const cs = [...new Set((v.qualityRows as (UncertaintyRow & { ctx?: number })[]).map((r) => r.ctx).filter((x): x is number => typeof x === 'number'))].sort((a, b) => a - b)
+  return cs.length === 0 ? 'unknown (quality ctx not recorded)' : cs.length === 1 ? `ctx ${cs[0]}` : `mixed (${cs.join(', ')})`
 }
 
 /** F3: the rung each component was actually observed at. */
 function basisRung(v: CandidateVerdict, k: ComponentId): number | null {
-  if (k === 'quality') { const c = (v.qualityRows as (UncertaintyRow & { ctx?: number })[]).map((r) => r.ctx).find((x) => typeof x === 'number'); return c ?? null }
+  if (k === 'quality') { const cs = [...new Set((v.qualityRows as (UncertaintyRow & { ctx?: number })[]).map((r) => r.ctx).filter((x): x is number => typeof x === 'number'))]; return cs.length === 1 ? cs[0] : null }
   if (k === 'context') return v.coverage.largestCleanTested
   if (k === 'stability') return null
   return v.cs.referenceCtx
@@ -222,7 +238,10 @@ function scopeMismatch(A: ScopedRow[], B: ScopedRow[], scope: 'candidates' | 'ge
 export function difference(a: CandidateVerdict | UncertaintyRow[], b: CandidateVerdict | UncertaintyRow[], profile: WorkloadProfile, cfg: ScoringConfig, scope: 'candidates' | 'gen' = 'candidates'):
   { d: Difference | null; reason?: string } {
   const raw = (x: CandidateVerdict | UncertaintyRow[]) => ((Array.isArray(x) ? x : x.qualityRows) as ScopedRow[]).filter((r) => profile.promptSetIds.includes(r.category))
-  const mismatch = scopeMismatch(raw(a), raw(b), scope)
+  // R1: the persisted configs' KV types are part of the scope, whether or not the rows repeat the field.
+  const kvOf = (x: CandidateVerdict | UncertaintyRow[]) => (Array.isArray(x) ? null : x.input.config.kvType)
+  const ka = kvOf(a), kb = kvOf(b)
+  const mismatch = scope === 'candidates' && ka && kb && ka !== kb ? `KV types differ (${ka} vs ${kb})` : scopeMismatch(raw(a), raw(b), scope)
   if (mismatch) return { d: null, reason: `not comparable: ${mismatch}` }
   const rows = (x: CandidateVerdict | UncertaintyRow[]) => stripGen(raw(x))
   const weights = Object.fromEntries(profile.promptSetIds.map((c) => [c, cfg.qualityCategoryWeights[c]]))
@@ -286,7 +305,7 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
       const lat = val(s.cs.components.latency.input, true)
       // F5 (I-8.0): the full application contract on every row — applied kwargs, template/runtime/model identity and
       // the sampling the runtime accepted — and the same identities as the baseline it is compared with.
-      const missing = contractGaps(gq.results as ContractRow[], (sortedGens.find((x) => !x.gen.thinking)?.results ?? input.quality) as ContractRow[])
+      const missing = contractGaps(gq.results as ContractRow[], (sortedGens.find((x) => !x.gen.thinking)?.results ?? input.quality) as ContractRow[], gq.gen)
       const comparable = !gq.gen.thinking || missing.length === 0
       const quarantined = !!s.cs.components.quality.quarantined
       return {
@@ -517,7 +536,7 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
     const without = (x: CandidateVerdict) => x.breakdown.filter((r) => !terms.includes(r.component)).reduce((s, r) => s + r.contribution, 0)
     const w = top && top !== p ? top : null
     return { configId: p.input.config.id, without: [...new Set(terms)], total: Number(without(p).toFixed(3)), vs: w?.input.config.id ?? null, vsTotal: w ? Number(without(w).toFixed(3)) : null,
-      result: !w ? 'no confirmed winner to compare with' : without(p) > without(w) ? `ahead of ${w.input.config.id} without those terms` : `behind ${w.input.config.id} without those terms` }
+      result: !w ? 'no confirmed winner to compare with' : ((a, b) => (a > b ? `ahead of ${w.input.config.id}` : a < b ? `behind ${w.input.config.id}` : `tied with ${w.input.config.id}`))(Number(without(p).toFixed(1)), Number(without(w).toFixed(1))) + ' without those terms' }
   })
   // I-7.4 basis: the winner against the fastest confirmed candidate (stored, so reasons never recompute it).
   const fast = ranked.find((v) => v.input.config.id === alternatives.fastest.configId)
@@ -552,7 +571,7 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
       qualityContribution: Number(qContribution(v).toFixed(3)), gen: v.gen?.gq.gen.id ?? null,
       referenceCtx: v.cs.referenceCtx, referenceWhy: v.cs.referenceWhy ?? null, recommendedCtx: v.cs.recommendedCtx, recommendedWhy: v.cs.recommendedWhy ?? null,
       failures: v.failures.map((f) => f.text),
-      basis: (Object.keys(profile.weights) as ComponentId[]).filter((k) => profile.weights[k] > 0).map((k) => ({ component: k, rung: basisRung(v, k), kind: v.cs.components[k].input.kind })),
+      basis: (Object.keys(profile.weights) as ComponentId[]).filter((k) => profile.weights[k] > 0).map((k) => ({ component: k, rung: basisRung(v, k), kind: v.cs.components[k].input.kind, ...(k === 'quality' ? { scope: qualityScope(v) } : {}) })),
       safety: safety.get(v)!,
       qualityVsWinner: top && v !== top && v.qualityMeasured && top.qualityMeasured ? (({ d, reason }) => ({ difference: d, ...(reason ? { reason } : {}) }))(difference(v, top, profile, cfg)) : null
     })),

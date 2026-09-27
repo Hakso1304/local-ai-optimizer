@@ -4,6 +4,7 @@ import type { CandidateInput, Metric, QualityCategory } from '../../shared/bench
 import { fmtCtx, isUsable, val } from '../scoring/cliff'
 import { categoryFlags, type UncertaintyRow } from '../scoring/uncertainty'
 import { genLabel } from '../benchmark/gen'
+import { KV_Q8_OVER_F16 } from '../benchmark/candidates'
 import { DEFAULT_SCORING_CONFIG } from '../scoring/workloads'
 import { action, cite, P, rule, RULES_VERSION, tag, type Severity } from './catalog'
 import { difference, fmtDiff, type CandidateVerdict, type StoredRun, type Verdicts } from './verdicts'
@@ -37,7 +38,7 @@ const CATS: QualityCategory[] = ['instruction', 'reasoning', 'coding', 'structur
 function vramRemedy(cfg: CandidateInput['config'], s: { estimateBytes?: number; budgetBytes?: number; weightsBytes?: number; kvBytes?: number; overheadBytes?: number }): string {
   if (s.budgetBytes === undefined || s.weightsBytes === undefined || s.kvBytes === undefined || s.overheadBytes === undefined) return action('inspect-diagnostics')
   if (s.weightsBytes + s.overheadBytes > s.budgetBytes) return cfg.gpuLayersAll ? action('enable-heavy-mode') : action('inspect-diagnostics') // weights alone do not fit
-  if (cfg.kvType === 'f16' && s.weightsBytes + s.kvBytes * 0.53 + s.overheadBytes <= s.budgetBytes) return action('enable-kv-q8') // q8_0 ≈ 0.53 × f16 KV
+  if (cfg.kvType === 'f16' && s.weightsBytes + s.kvBytes * KV_Q8_OVER_F16 + s.overheadBytes <= s.budgetBytes) return action('enable-kv-q8') // the estimator's exact q8_0/f16 ratio; the budget already excludes the reserve
   return cfg.gpuLayersAll ? action('enable-heavy-mode') : action('lower-required-context')
 }
 
