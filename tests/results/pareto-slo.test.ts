@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Metric } from '../../src/shared/bench-types'
 import type { SessionCandidate } from '../../src/shared/types'
 import { paretoFrontier, paretoPoints } from '../../src/renderer/src/ParetoChart'
-import { factsOf, meetsSlo, sloDefaults } from '../../src/renderer/src/SloFilter'
+import { factsOf, meetsSlo, parseLimit, sloDefaults } from '../../src/renderer/src/SloFilter'
 import { WORKLOADS } from '../../src/core/scoring/workloads'
 
 const p = (id: string, x: number, y: number) => ({ id, x, y })
@@ -54,10 +54,10 @@ const llama = cand({ id: 'llama8', rec: 32768, ref: 16384, practical: 65536, qua
   runs: [{ ctx: 16384, ttft: 3506, decode: 93, vram: 6.55 * GiB }, { ctx: 32768, ttft: 8130, decode: 79, vram: 8.56 * GiB }, { ctx: 65536, ttft: 20643, decode: 60.7, vram: 12.6 * GiB }] })
 
 describe('factsOf', () => {
-  it('uses the recommended ctx step, peak VRAM over completed steps, practical ceiling', () => {
-    expect(factsOf(llama)).toEqual({ ctx: 32768, ttftMs: 8130, decodeTps: 79, practicalCtx: 65536, peakVramBytes: 12.6 * GiB })
+  it('uses the scored (reference) step for TTFT/decode/VRAM — not recommendedCtx, not the max over rungs', () => {
+    expect(factsOf(llama)).toEqual({ ctx: 16384, ttftMs: 3506, decodeTps: 93, practicalCtx: 65536, peakVramBytes: 6.55 * GiB })
   })
-  it('falls back to the scored ctx; a failed step never supplies numbers', () => {
+  it('a failed step never supplies numbers', () => {
     const c = cand({ id: 'x', rec: null, ref: 8192, practical: 8192, runs: [{ ctx: 8192, ttft: 900, decode: 40 }, { ctx: 16384, status: 'fail', decode: 999, vram: 99 * GiB }] })
     expect(factsOf(c)).toMatchObject({ ctx: 8192, decodeTps: 40, peakVramBytes: null })
   })
@@ -71,10 +71,12 @@ describe('meetsSlo', () => {
   })
   it('each constraint can fail on its own', () => {
     const f = factsOf(llama)
-    expect(meetsSlo(f, { maxTtftS: 5, minDecodeTps: null, minPracticalCtx: null, maxVramGiB: null }).failed).toEqual(['TTFT'])
-    expect(meetsSlo(f, { maxTtftS: null, minDecodeTps: 80, minPracticalCtx: null, maxVramGiB: null }).failed).toEqual(['decode'])
+    expect(meetsSlo(f, { maxTtftS: 3, minDecodeTps: null, minPracticalCtx: null, maxVramGiB: null }).failed).toEqual(['TTFT'])
+    expect(meetsSlo(f, { maxTtftS: null, minDecodeTps: 95, minPracticalCtx: null, maxVramGiB: null }).failed).toEqual(['decode'])
     expect(meetsSlo(f, { maxTtftS: null, minDecodeTps: null, minPracticalCtx: 131072, maxVramGiB: null }).failed).toEqual(['practical ctx'])
-    expect(meetsSlo(f, { maxTtftS: null, minDecodeTps: null, minPracticalCtx: null, maxVramGiB: 12 }).failed).toEqual(['peak VRAM'])
+    expect(meetsSlo(f, { maxTtftS: null, minDecodeTps: null, minPracticalCtx: null, maxVramGiB: 6 }).failed).toEqual(['peak VRAM'])
+    // VRAM of the scored step (6.55 GiB), not of the 64K rung (12.6 GiB): a 7 GiB cap passes
+    expect(meetsSlo(f, { maxTtftS: null, minDecodeTps: null, minPracticalCtx: null, maxVramGiB: 7 }).ok).toBe(true)
   })
   it('an unmeasured value fails an active constraint (unknown ≠ ok) but passes when the constraint is off', () => {
     const f = { ctx: null, ttftMs: null, decodeTps: null, practicalCtx: null, peakVramBytes: null }
@@ -83,15 +85,26 @@ describe('meetsSlo', () => {
   })
 })
 
+describe('parseLimit (input clamp)', () => {
+  it('blank, non-numeric and negative mean off; 0 and positives pass through', () => {
+    expect(parseLimit('')).toBeNull()
+    expect(parseLimit('  ')).toBeNull()
+    expect(parseLimit('abc')).toBeNull()
+    expect(parseLimit('-3')).toBeNull()
+    expect(parseLimit('0')).toBe(0)
+    expect(parseLimit('12.5')).toBe(12.5)
+  })
+})
+
 describe('paretoPoints', () => {
   it('plots measured quality × decode; lists estimated quality and missing decode instead of plotting them', () => {
     const est = cand({ id: 'est', rec: 8192, ref: 8192, practical: 8192, quality: { score: 80, kind: 'estimated' }, runs: [{ ctx: 8192, decode: 20 }] })
     const nodec = cand({ id: 'nodec', rec: null, ref: null, practical: null, quality: { score: 90, kind: 'measured' }, runs: [] })
     const r = paretoPoints([llama, est, nodec])
-    expect(r.points).toEqual([{ id: 'llama8', x: 79, y: 100, label: 'llama8 Q4_K_M @32K' }])
+    expect(r.points).toEqual([{ id: 'llama8', x: 93, y: 100, label: 'llama8 Q4_K_M @16K' }])
     expect(r.skipped.map((s) => [s.id, s.why])).toEqual([
       ['est', 'quality is ESTIMATED, not measured'],
-      ['nodec', 'decode t/s not measured at the recommended context']
+      ['nodec', 'decode t/s not measured at the scored context']
     ])
   })
 })

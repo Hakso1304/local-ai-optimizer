@@ -11,14 +11,15 @@ export function paretoFrontier<P extends { id: string; x: number; y: number }>(p
   return pts.filter((p) => !dominated(p)).sort((a, b) => a.x - b.x || b.y - a.y || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
 }
 
-/** x = decode t/s at the recommended ctx (else the scored ctx); y = MEASURED quality. Anything else is listed, not plotted. */
+/** x = decode t/s at the scored ctx (score.referenceCtx, the rung the score and gates use); y = MEASURED quality.
+ *  Anything else is listed, not plotted. */
 export function paretoPoints(cs: SessionCandidate[]): { points: ParetoPoint[]; skipped: { id: string; why: string }[] } {
   const points: ParetoPoint[] = []
   const skipped: { id: string; why: string }[] = []
   for (const c of cs) {
     const f = factsOf(c)
     const q = c.score?.breakdown.find((b) => b.component === 'quality')
-    if (f.decodeTps == null) skipped.push({ id: c.config.id, why: 'decode t/s not measured at the recommended context' })
+    if (f.decodeTps == null) skipped.push({ id: c.config.id, why: 'decode t/s not measured at the scored context' })
     else if (!q || q.input.kind !== 'measured') skipped.push({ id: c.config.id, why: q ? `quality is ${q.input.kind.toUpperCase()}, not measured` : 'no quality score' })
     else points.push({ id: c.config.id, x: f.decodeTps, y: q.score, label: `${c.model.name} ${c.model.quant ?? ''} @${f.ctx ? fmtCtx(f.ctx) : '?'}${c.config.gpuLayersAll ? '' : ` ngl ${c.config.gpuLayers}`}` })
   }
@@ -46,7 +47,7 @@ export function ParetoChart({ candidates }: { candidates: SessionCandidate[] }) 
               <text x={sx(t * xMax)} y={H - PAD.b + 16} textAnchor="middle" fontSize={11} fill="currentColor">{num(t * xMax, 0)}</text>
             </g>
           ))}
-          <text x={(PAD.l + W - PAD.r) / 2} y={H - 4} textAnchor="middle" fontSize={11} fill="currentColor">decode t/s at recommended ctx</text>
+          <text x={(PAD.l + W - PAD.r) / 2} y={H - 4} textAnchor="middle" fontSize={11} fill="currentColor">decode t/s at each config's scored ctx (label @ctx)</text>
           <text x={12} y={(PAD.t + H - PAD.b) / 2} textAnchor="middle" fontSize={11} fill="currentColor" transform={`rotate(-90 12 ${(PAD.t + H - PAD.b) / 2})`}>quality (measured)</text>
           {front.length > 1 && <polyline points={front.map((p) => `${sx(p.x)},${sy(p.y)}`).join(' ')} fill="none" stroke="#3fb950" strokeWidth={2} />}
           {points.map((p) => (

@@ -5,7 +5,7 @@ import type { TelemetrySample } from '../../shared/bench-events'
 import { ExportMenu } from './ExportMenu'
 import { LineChart, type Band } from './LineChart'
 import { ParetoChart } from './ParetoChart'
-import { SloFilter } from './SloFilter'
+import { SloFilter, type SloCheck } from './SloFilter'
 import { TelemetryChart } from './TelemetryChart'
 import { CtxPick, DemoBanner, M, Prov, fmtCtx, gib, num } from './ui'
 
@@ -34,8 +34,8 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
   // Same model can appear with several configs, so always show the configId too.
   const name = (id: string | null) => (id ? `${d.candidates.find((c) => c.config.id === id)?.model.name ?? '?'} — ${id}` : '—')
   const tag = d.session.demo ? ' (DEMO DATA)' : ''
-  const [slo, setSlo] = useState<(c: SessionCandidate) => boolean>(() => () => true)
-  const onSlo = useCallback((p: (c: SessionCandidate) => boolean) => setSlo(() => p), [])
+  const [slo, setSlo] = useState<SloCheck>(() => () => ({ ok: true, failed: [] }))
+  const onSlo = useCallback((p: SloCheck) => setSlo(() => p), [])
   const [tele, setTele] = useState<{ key: string; samples: TelemetrySample[] } | null>(null)
 
   return (
@@ -47,12 +47,12 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
         <thead><tr><th /><th>Model</th><th>Quant</th><th>Config</th><th>Recommended ctx</th><th>Practical ctx</th><th>Quality</th><th>Decode t/s</th><th>Prefill t/s</th><th>Peak VRAM</th><th>Peak RAM</th><th>Stability</th><th /></tr></thead>
         <tbody>
           {d.candidates.map((c, i) => {
-            if (!slo(c)) return null
-            const q = comp(c, 'quality'), st = comp(c, 'stability'), r = refRun(c)
+            const q = comp(c, 'quality'), st = comp(c, 'stability'), r = refRun(c), fit = slo(c)
             return (
-              <tr key={c.config.id}>
+              <tr key={c.config.id} style={fit.ok ? undefined : { opacity: 0.45 }} title={fit.ok ? undefined : `Outside constraints: ${fit.failed.join(', ')}`}>
                 <td><span className="swatch" style={{ background: COLORS[i % COLORS.length] }} /></td>
-                <td>{c.model.name}{rec?.best?.configId === c.config.id && <span className="pill">best</span>}</td>
+                <td>{c.model.name}{rec?.best?.configId === c.config.id && <span className="pill">best</span>}
+                  {!fit.ok && <span className="pill warn-pill">{rec?.best?.configId === c.config.id ? 'outside your constraints' : 'filtered'}: {fit.failed.join(', ')}</span>}</td>
                 <td>{c.model.quant ?? '—'} <Prov kind="declared" /></td>
                 <td className="muted">ngl {c.config.gpuLayersAll ? 'all' : c.config.gpuLayers}, kv {c.config.kvType}, t {c.config.threads}
                   {c.config.expectDegraded && <span className="pill warn-pill" title={c.config.degradedReason ?? ''}>partial offload — degraded</span>}</td>
@@ -74,7 +74,7 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
       </table>
 
       <h2>Quality vs speed (Pareto){tag}</h2>
-      <ParetoChart candidates={d.candidates.filter(slo)} />
+      <ParetoChart candidates={d.candidates.filter((c) => slo(c).ok)} />
 
       <h2>Context scaling{tag}</h2>
       <div className="charts">

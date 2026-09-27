@@ -6,8 +6,9 @@ import { fmtCtx } from './ui'
 
 /** A constraint left null is off. */
 export interface SloValues { maxTtftS: number | null; minDecodeTps: number | null; minPracticalCtx: number | null; maxVramGiB: number | null }
-/** Measured facts per candidate; null = not measured. */
+/** Measured facts per candidate at its scored step; null = not measured. */
 export interface SloFacts { ttftMs: number | null; decodeTps: number | null; practicalCtx: number | null; peakVramBytes: number | null; ctx: number | null }
+export type SloCheck = (c: SessionCandidate) => { ok: boolean; failed: string[] }
 
 /** Defaults from the workload: its latency tolerance, its decode gate, and the eligibility floor (half the target ctx). */
 export function sloDefaults(p: WorkloadProfile): SloValues {
@@ -16,17 +17,17 @@ export function sloDefaults(p: WorkloadProfile): SloValues {
 
 const ok = (c: SessionCandidate['runs'][number]) => c.status === 'pass' || c.status === 'degraded'
 
-/** The step the recommendation speaks for: recommendedCtx, else the scored (reference) ctx. */
+/** Facts at the scoring step (score.referenceCtx): every config is compared at the rung its score and the eligibility
+ *  gate used, so the default minDecodeTps means the same thing here as in the recommendation. */
 export function factsOf(c: SessionCandidate): SloFacts {
-  const ctx = c.score?.recommendedCtx ?? c.score?.referenceCtx ?? null
+  const ctx = c.score?.referenceCtx ?? null
   const r = c.runs.find((x) => x.ctx === ctx && ok(x))
-  const vram = c.runs.filter(ok).map((x) => x.peakVramBytes.value).filter((v): v is number => v != null)
   return {
     ctx: r ? ctx : null,
     ttftMs: r?.ttftMs.value ?? null,
     decodeTps: r?.decodeTps.value ?? null,
     practicalCtx: c.cliff.practicalContextCeiling.value,
-    peakVramBytes: vram.length ? Math.max(...vram) : null
+    peakVramBytes: r?.peakVramBytes.value ?? null
   }
 }
 
@@ -45,22 +46,28 @@ export function meetsSlo(f: SloFacts, s: SloValues): { ok: boolean; failed: stri
   return { ok: failed.length === 0, failed }
 }
 
+/** Input text → constraint: blank, non-numeric or negative = off. */
+export const parseLimit = (text: string): number | null => {
+  const v = Number(text)
+  return text.trim() === '' || !Number.isFinite(v) || v < 0 ? null : v
+}
+
 const CTX = [2048, 4096, 8192, 16384, 32768, 65536, 131072]
 
 export function SloFilter({ workload, candidates, onChange }: {
   workload: WorkloadId
   candidates: SessionCandidate[]
-  onChange: (pred: (c: SessionCandidate) => boolean) => void
+  onChange: (check: SloCheck) => void
 }) {
   const [s, setS] = useState<SloValues>(() => sloDefaults(WORKLOADS[workload]))
   useEffect(() => setS(sloDefaults(WORKLOADS[workload])), [workload])
-  const pred = useMemo(() => (c: SessionCandidate) => meetsSlo(factsOf(c), s).ok, [s])
-  useEffect(() => onChange(pred), [pred, onChange])
-  const n = candidates.filter(pred).length
+  const check = useMemo<SloCheck>(() => (c) => meetsSlo(factsOf(c), s), [s])
+  useEffect(() => onChange(check), [check, onChange])
+  const n = candidates.filter((c) => check(c).ok).length
   const numIn = (k: keyof SloValues, label: string, step: string) => (
     <label>{label}{' '}
       <input type="number" min="0" step={step} value={s[k] ?? ''} placeholder="off" style={{ width: '6em' }}
-        onChange={(e) => setS({ ...s, [k]: e.target.value === '' ? null : Number(e.target.value) })} />
+        onChange={(e) => setS({ ...s, [k]: parseLimit(e.target.value) })} />
     </label>
   )
   return (
@@ -75,7 +82,7 @@ export function SloFilter({ workload, candidates, onChange }: {
       </label>
       {numIn('maxVramGiB', 'Max peak VRAM GiB', '0.5')}
       <button className="mini" onClick={() => setS(sloDefaults(WORKLOADS[workload]))}>Workload defaults</button>
-      <span className="muted">{n} of {candidates.length} configurations meet the constraints</span>
+      <span className="muted">{n} of {candidates.length} configurations meet the constraints (measured at each config's scored context)</span>
     </div>
   )
 }
