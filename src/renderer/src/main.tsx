@@ -1,6 +1,7 @@
 import { StrictMode, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { RendererApi } from '../../shared/types'
+import { ModelsPage } from './ModelsPage'
 import { SystemPage } from './SystemPage'
 import './styles.css'
 
@@ -21,7 +22,7 @@ function App() {
           <button key={s} className={s === section ? 'active' : ''} onClick={() => setSection(s)}>{s}</button>
         ))}
       </nav>
-      <main>{section === 'System' ? <SystemPage /> : <p className="muted">{section}: not implemented yet.</p>}</main>
+      <main>{section === 'System' ? <SystemPage /> : section === 'Models' ? <ModelsPage /> : <p className="muted">{section}: not implemented yet.</p>}</main>
     </div>
   )
 }

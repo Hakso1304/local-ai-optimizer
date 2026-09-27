@@ -1,10 +1,6 @@
-import type { RuntimeDetection } from '../../shared/types'
+import type { LoadResult, ModelInfo, PromptResult, RuntimeDetection } from '../../shared/types'
 
-export interface ModelRef {
-  id: string
-  path?: string
-  sizeBytes?: number
-}
+export type { LoadResult, ModelInfo, PromptResult }
 
 export interface LoadConfig {
   modelPath: string
@@ -13,6 +9,7 @@ export interface LoadConfig {
   threads?: number
   batchSize?: number
   port?: number
+  device: string // llama-server --device id, e.g. Vulkan0 (from listDevices; never let it default to all devices)
   extraArgs?: string[]
 }
 
@@ -21,12 +18,7 @@ export interface PromptRequest {
   maxTokens: number
   temperature?: number
   seed?: number
-}
-
-export interface PromptResult {
-  text: string
-  /** Raw runtime-reported timings; normalized later by the benchmark layer. */
-  timings: Record<string, number> | null
+  timeoutMs?: number
 }
 
 export interface RuntimeStats {
@@ -41,8 +33,8 @@ export interface HealthStatus {
 export interface InferenceBackend {
   readonly id: RuntimeDetection['id']
   detect(): Promise<RuntimeDetection>
-  enumerateModels(): Promise<ModelRef[]>
-  loadModel(cfg: LoadConfig): Promise<void>
+  enumerateModels(dirs: string[]): Promise<ModelInfo[]>
+  loadModel(cfg: LoadConfig): Promise<LoadResult>
   unloadModel(): Promise<void>
   runPrompt(req: PromptRequest, onToken?: (t: string) => void): Promise<PromptResult>
   getRuntimeStats(): Promise<RuntimeStats>

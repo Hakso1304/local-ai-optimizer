@@ -1,0 +1,131 @@
+import { spawn } from 'node:child_process'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import { LlamaCppBackend, findGgufModels } from '../src/core/runtimes/llamacpp'
+import { classifyExit, emptyDeclared, parseDevices, parseLogLine, parseSse, pickDiscreteDevice, toPromptResult, type CompletionChunk } from '../src/core/runtimes/llamacpp/parse'
+
+// Shape of a real llama-server /completion stream (b11208), split at awkward byte boundaries.
+const STREAM =
+  'data: {"content":"A","stop":false}\n\ndata: {"content":" GPU","stop":false}\n\n' +
+  'data: {"content":"","stop":true,"stop_type":"limit","tokens_predicted":32,"tokens_evaluated":14,' +
+  '"timings":{"cache_n":0,"prompt_n":14,"prompt_ms":8.2,"prompt_per_token_ms":0.59,"prompt_per_second":1707.3,' +
+  '"predicted_n":32,"predicted_ms":95.1,"predicted_per_token_ms":2.97,"predicted_per_second":336.5}}\n\n'
+
+describe('SSE + timings', () => {
+  it('reassembles events across chunk boundaries and maps the final timings', () => {
+    let buf = ''
+    const events: CompletionChunk[] = []
+    for (let i = 0; i < STREAM.length; i += 7) {
+      const r = parseSse(buf + STREAM.slice(i, i + 7))
+      buf = r.rest
+      events.push(...(r.events as CompletionChunk[]))
+    }
+    expect(buf).toBe('')
+    expect(events.map((e) => e.content).join('')).toBe('A GPU')
+    const final = events.find((e) => e.stop)!
+    const r = toPromptResult(final, { ttftMs: 12.5, totalMs: 110, text: 'A GPU', timedOut: false, error: null })
+    expect(r).toEqual({
+      ttftMs: 12.5, promptTokens: 14, prefillMs: 8.2, prefillTps: 1707.3, decodeTokens: 32, decodeMs: 95.1, decodeTps: 336.5,
+      totalMs: 110, text: 'A GPU', stopType: 'limit', timedOut: false, error: null
+    })
+  })
+
+  it('leaves unreported values null instead of inventing them', () => {
+    const r = toPromptResult(null, { ttftMs: null, totalMs: 5, text: '', timedOut: true, error: 'timed out after 5ms' })
+    expect(r.decodeTps).toBeNull()
+    expect(r.stopType).toBeNull()
+    expect(r.timedOut).toBe(true)
+  })
+})
+
+describe('startup log + exit classification', () => {
+  it('parses offload and per-device buffer sizes', () => {
+    const d = emptyDeclared()
+    for (const l of [
+      'load_tensors: offloaded 25/25 layers to GPU',
+      'load_tensors:      Vulkan0 model buffer size =   500.79 MiB',
+      'load_tensors:   CPU_Mapped model buffer size =   137.94 MiB',
+      'llama_kv_cache:    Vulkan0 KV buffer size =    24.00 MiB',
+      'llama_context:    Vulkan0 compute buffer size =    34.01 MiB'
+    ]) parseLogLine(l, d)
+    expect(d).toEqual({
+      layersOffloaded: 25, layersTotal: 25,
+      modelBufferMiB: { Vulkan0: 500.79, CPU_Mapped: 137.94 }, kvBufferMiB: { Vulkan0: 24 }, computeBufferMiB: { Vulkan0: 34.01 }
+    })
+  })
+
+  it('classifies OOM, device lost, and other crashes', () => {
+    expect(classifyExit(['ggml_vulkan: vk::Device::allocateMemory: ErrorOutOfDeviceMemory'])).toBe('oom')
+    expect(classifyExit(['llama_model_load: failed to allocate buffer'])).toBe('oom')
+    expect(classifyExit(['ggml_vulkan: vk::Queue::submit: ErrorDeviceLost'])).toBe('device_lost')
+    expect(classifyExit(['GGML_ASSERT(n_tokens > 0) failed'])).toBe('crash')
+  })
+
+  it('parses --list-devices and picks the discrete GPU over the iGPU', () => {
+    const devs = parseDevices([
+      'Available devices:',
+      '  Vulkan0: AMD Radeon(TM) Graphics (16187 MiB, 15377 MiB free)',
+      '  Vulkan1: AMD Radeon RX 9070 XT (16304 MiB, 15416 MiB free)'
+    ].join('\r\n'))
+    expect(devs).toHaveLength(2)
+    expect(pickDiscreteDevice(devs)).toMatchObject({ id: 'Vulkan1', name: 'AMD Radeon RX 9070 XT', totalMiB: 16304 })
+  })
+})
+
+describe('findGgufModels', () => {
+  it('finds .gguf recursively across dirs and skips missing dirs', () => {
+    const root = mkdtempSync(join(tmpdir(), 'lao-models-'))
+    try {
+      mkdirSync(join(root, 'sub'))
+      writeFileSync(join(root, 'a.gguf'), 'x'.repeat(10))
+      writeFileSync(join(root, 'sub', 'B.GGUF'), 'y')
+      writeFileSync(join(root, 'notes.txt'), 'z')
+      const found = findGgufModels([root, join(root, 'missing')]).sort((x, y) => x.name.localeCompare(y.name))
+      expect(found.map((m) => [m.name, m.sizeBytes, m.runtime])).toEqual([['a', 10, 'llamacpp'], ['B.GGUF', 1, 'llamacpp']])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('LlamaCppBackend process handling (fake server, no GPU)', () => {
+  const fake = join(__dirname, 'fixtures', 'fake-llama-server.cjs')
+  const pidFile = join(tmpdir(), `lao-test-${process.pid}.pid`)
+  const backend = (mode: string) =>
+    new LlamaCppBackend('unused', {
+      pidFile,
+      spawnFn: (_cmd, args, opts) => spawn(process.execPath, [fake, ...args], { ...opts, env: { ...process.env, FAKE_MODE: mode } })
+    })
+  const cfg = { modelPath: join(tmpdir(), 'm.gguf'), contextSize: 2048, gpuLayers: 99, device: 'Vulkan0' }
+  let b: LlamaCppBackend | null = null
+  afterEach(async () => { await b?.unloadModel() })
+
+  it('fails fast and classifies when the server dies before /health', async () => {
+    b = backend('die-oom')
+    const t0 = Date.now()
+    await expect(b.loadModel(cfg)).rejects.toThrow(/exited with code 3 \(oom\)/)
+    expect(Date.now() - t0).toBeLessThan(10_000)
+    expect(b.lastExit).toMatchObject({ code: 3, reason: 'oom' })
+    expect(existsSync(pidFile)).toBe(false)
+  })
+
+  it('rejects a server whose /props reports a different model', async () => {
+    b = backend('wrong')
+    await expect(b.loadModel(cfg)).rejects.toThrow(/wrong server answered/)
+  })
+
+  it('loads, streams a prompt, and cleans up the pid file on unload', async () => {
+    b = backend('ok')
+    const load = await b.loadModel(cfg)
+    expect(load.declared.layersOffloaded).toBe(25)
+    expect(load.declared.modelBufferMiB).toEqual({ Vulkan0: 500.79 })
+    expect(existsSync(pidFile)).toBe(true)
+    const r = await b.runPrompt({ prompt: 'x', maxTokens: 1, timeoutMs: 5_000 })
+    expect(r).toMatchObject({ text: 'Hi', decodeTokens: 1, stopType: 'limit', error: null })
+    expect(r.ttftMs).toBeGreaterThan(0)
+    await b.unloadModel()
+    expect(existsSync(pidFile)).toBe(false)
+  })
+})

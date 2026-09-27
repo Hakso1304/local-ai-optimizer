@@ -15,7 +15,9 @@ export function runProcess(file: string, args: string[], timeoutMs: number): Pro
       (err, stdout, stderr) => {
         if (!err) return resolve({ stdout, stderr })
         const e = err as NodeJS.ErrnoException & { killed?: boolean; signal?: string }
-        const why = e.killed
+        const why = (e.code as string | undefined) === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+          ? 'output exceeded 16 MiB'
+          : e.killed
           ? `timed out after ${timeoutMs}ms`
           : e.code === 'ENOENT'
             ? 'executable not found'

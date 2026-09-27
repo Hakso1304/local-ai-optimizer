@@ -46,7 +46,7 @@ describe('scanSystem', () => {
   it('parses CUDA version from nvidia-smi output', async () => {
     const withNvidia = fixture.replace('VEN_1002\\u0026DEV_7550', 'VEN_10DE\\u0026DEV_2206')
     const p = await scanSystem(deps(withNvidia, '| NVIDIA-SMI 560.94   Driver Version: 560.94   CUDA Version: 12.6 |'))
-    expect(p.cuda).toMatchObject({ status: 'available', value: { available: true, version: '12.6' } })
+    expect(p.cuda).toMatchObject({ status: 'available', value: { available: true, driverCudaVersion: '12.6' } })
   })
 
   it('isolates a failed section', async () => {
@@ -58,6 +58,14 @@ describe('scanSystem', () => {
     expect(p.gpus.status).toBe('available')
     expect(p.gpus.value![0].dedicatedVramBytes).toMatchObject({ status: 'unavailable', value: null })
     expect(p.os.status).toBe('available')
+  })
+
+  it('a missing gpuReg section only loses VRAM, not the GPU list', async () => {
+    const raw = JSON.parse(fixture)
+    delete raw.gpuReg
+    const p = await scanSystem(deps(JSON.stringify(raw)))
+    expect(p.gpus.value!.map((g) => g.name)).toEqual(['AMD Radeon RX 9070 XT', 'AMD Radeon(TM) Graphics'])
+    expect(p.gpus.value![0].dedicatedVramBytes).toMatchObject({ status: 'unavailable', value: null })
   })
 
   it('never throws when PowerShell itself fails', async () => {

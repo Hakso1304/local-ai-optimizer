@@ -46,7 +46,7 @@ export function SystemPage() {
               <Row label="OS" s={p.os} fmt={() => `${p.os.value!.name} ${p.os.value!.version} (build ${p.os.value!.build})`} />
               <Row label="CPU" s={p.cpu} fmt={() => `${p.cpu.value!.model} — ${p.cpu.value!.physicalCores}C/${p.cpu.value!.logicalCores}T`} />
               <Row label="RAM" s={p.ram} fmt={() => `${gb(p.ram.value!.totalBytes)} total, ${gb(p.ram.value!.availableBytes)} available`} />
-              <Row label="CUDA" s={p.cuda} fmt={() => (p.cuda.value!.available ? `yes, ${p.cuda.value!.version}` : 'no')} />
+              <Row label="CUDA" s={p.cuda} fmt={() => (p.cuda.value!.available ? `yes, ${p.cuda.value!.driverCudaVersion}` : 'no')} />
               {p.gpus.value?.map((g) => (
                 <Row key={g.pnpDeviceId} label={`GPU (${g.vendor}${g.isIntegrated ? ', integrated?' : ''})`} s={g.dedicatedVramBytes}
                   fmt={() => `${g.name} — ${gb(g.dedicatedVramBytes.value!)} VRAM, driver ${g.driverVersion ?? '?'}`} />

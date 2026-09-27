@@ -33,7 +33,7 @@ interface RawScan {
   os: Section<{ Caption: string; Version: string; BuildNumber: string; TotalVisibleMemorySize: number; FreePhysicalMemory: number }>
   cpu: Section<OneOrMany<{ Name: string; NumberOfCores: number; NumberOfLogicalProcessors: number }>>
   video: Section<OneOrMany<{ Name: string; PNPDeviceID: string; DriverVersion: string | null; AdapterRAM: number | null; Driver: string | null }>>
-  gpuReg: Section<OneOrMany<{ Key: string; DriverDesc: string | null; QwMemorySize: number | null }>>
+  gpuReg?: Section<OneOrMany<{ Key: string; DriverDesc: string | null; QwMemorySize: number | null }>>
   disks: Section<OneOrMany<{ DeviceID: string; Size: number; FreeSpace: number }>>
 }
 type OneOrMany<T> = T | T[]
@@ -67,9 +67,12 @@ export function vendorFromPnp(pnp: string): GpuVendor {
   return ven === '10DE' ? 'nvidia' : ven === '1002' ? 'amd' : ven === '8086' ? 'intel' : 'other'
 }
 
+/** Names of integrated / virtual adapters. Also used to pick the bench device from llama-server --list-devices. */
+export const INTEGRATED_GPU_NAME = /Radeon\(TM\) Graphics|Radeon Vega|Radeon \d{4}S|Intel.*(UHD|HD Graphics|Iris)|\d{3,4}M Graphics|Microsoft|Virtual|Parsec|Remote/i
+
 // ponytail: name/size heuristic; upgrade to DXGI adapter flags if it misclassifies real hardware.
 function guessIntegrated(name: string, vram: number | null): boolean {
-  if (/Radeon\(TM\) Graphics|Radeon Vega|Intel.*(UHD|HD Graphics|Iris)/i.test(name)) return true
+  if (INTEGRATED_GPU_NAME.test(name)) return true
   return vram != null && vram < 2 * 1024 ** 3
 }
 
@@ -78,13 +81,13 @@ function guessIntegrated(name: string, vram: number | null): boolean {
 export function buildGpus(raw: RawScan): Sourced<GpuInfo[]> {
   const src = 'Win32_VideoController + registry HardwareInformation.qwMemorySize'
   return section(raw.video, src, (videos) => {
-    const reg = new Map(arr(raw.gpuReg.ok ? raw.gpuReg.data : undefined).map((r) => [r.Key, r]))
+    const reg = new Map(arr(raw.gpuReg?.ok ? raw.gpuReg.data : undefined).map((r) => [r.Key, r]))
     return arr(videos).map((v): GpuInfo => {
       const key = v.Driver?.split('\\').pop()
       const entry = key ? reg.get(key) : undefined
       const regSrc = `registry Class\\{4d36e968...}\\${key ?? '?'} HardwareInformation.qwMemorySize`
       let vram: Sourced<number>
-      if (!raw.gpuReg.ok) vram = fail(regSrc, raw.gpuReg.error ?? 'registry query failed')
+      if (!raw.gpuReg?.ok) vram = fail(regSrc, raw.gpuReg?.error ?? 'registry query failed')
       else if (!entry) vram = fail(regSrc, 'no display-class registry entry linked to this adapter')
       else if (typeof entry.QwMemorySize !== 'number') vram = fail(regSrc, 'qwMemorySize not present for this adapter')
       else vram = ok(entry.QwMemorySize, regSrc)
@@ -100,7 +103,7 @@ export function buildGpus(raw: RawScan): Sourced<GpuInfo[]> {
   })
 }
 
-async function detectCuda(gpus: Sourced<GpuInfo[]>, deps: ScanDeps): Promise<Sourced<{ available: boolean; version?: string }>> {
+async function detectCuda(gpus: Sourced<GpuInfo[]>, deps: ScanDeps): Promise<Sourced<{ available: boolean; driverCudaVersion?: string }>> {
   const src = 'nvidia-smi'
   if (gpus.status === 'available' && !gpus.value!.some((g) => g.vendor === 'nvidia')) {
     return { value: { available: false }, status: 'unsupported', source: 'no NVIDIA adapter present' }
@@ -109,7 +112,7 @@ async function detectCuda(gpus: Sourced<GpuInfo[]>, deps: ScanDeps): Promise<Sou
     const out = await deps.exec('nvidia-smi', [])
     const version = /CUDA Version:\s*([\d.]+)/.exec(out)?.[1]
     if (!version) return fail(src, 'nvidia-smi ran but reported no CUDA version')
-    return ok({ available: true, version }, src)
+    return ok({ available: true, driverCudaVersion: version }, src)
   } catch (e) {
     return fail(src, `NVIDIA telemetry unavailable: ${(e as Error).message}`)
   }

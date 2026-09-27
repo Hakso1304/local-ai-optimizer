@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { RuntimeDetection } from '../../shared/types'
-import { NotImplementedError, getJson, type InferenceBackend, type ModelRef } from './types'
+import { NotImplementedError, getJson, type InferenceBackend } from './types'
 
 // Ollama / LM Studio: detect() only for now. Both expose local HTTP APIs; "available" means the API answered.
 
@@ -24,8 +24,8 @@ abstract class HttpDetectBackend implements InferenceBackend {
     }
   }
 
-  async enumerateModels(): Promise<ModelRef[]> { throw new NotImplementedError(`${this.id}.enumerateModels`) }
-  async loadModel(): Promise<void> { throw new NotImplementedError(`${this.id}.loadModel`) }
+  async enumerateModels(): Promise<never> { throw new NotImplementedError(`${this.id}.enumerateModels`) }
+  async loadModel(): Promise<never> { throw new NotImplementedError(`${this.id}.loadModel`) }
   async unloadModel(): Promise<void> { throw new NotImplementedError(`${this.id}.unloadModel`) }
   async runPrompt(): Promise<never> { throw new NotImplementedError(`${this.id}.runPrompt`) }
   async getRuntimeStats(): Promise<never> { throw new NotImplementedError(`${this.id}.getRuntimeStats`) }
