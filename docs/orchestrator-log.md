@@ -232,3 +232,6 @@
 
 ## Fable — 2026-09-28 04:11 local
 - Pushed 487ef60 (#2 proof/sampling provenance UI). HEAD typecheck depends on S1's pending P1–P3 commit and S3 committing scripts/harness-limits.ts (asked). Waiting: S1 commit → Q1/Q2 seams; S3 session 5 export; #1 DB cross-check.
+
+## Fable — 2026-09-28 04:13 local
+- d0f0424 (P1–P3) + 8978922 (harness-limits) pushed; tsc 0. Scoped gate: 7 RED = 2 intended Q1 gates + 5 heavy-fixture demotions under the I-8.0 scope rule (thinking-capable synthetic 27B rows without proof) → S2 fixture update, S1 scope confirm. Astra RECHECK6 dispatched (P1–P3).
