@@ -214,9 +214,20 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     if (budget === null || ded === null) return null
     return adapterFree === null ? budget - ded : Math.min(budget - ded, adapterFree)
   }
-  // L1: the saturation share for spill is taken against what this process could get — VRAM total minus what other
-  // processes held at planning (measured), not the adapter total.
-  const vramEffective = vramTotal === null ? null : vramTotal - (val(machine.vramInUseBytes) ?? 0)
+  // L1: the saturation share for spill is taken against what this process could get — min(VRAM total minus what
+  // other processes held at planning, the per-process budget), not the adapter total.
+  const vramEffective = (): number | null => {
+    const adapter = vramTotal === null ? null : vramTotal - (val(machine.vramInUseBytes) ?? 0)
+    const b = machine.vramEffectiveBudgetBytes ? val(machine.vramEffectiveBudgetBytes, true) : null
+    return adapter === null ? b : b === null ? adapter : Math.min(adapter, b)
+  }
+  /** THE spill definition (guard, persisted metric, verdict): per-PID shared − host-pinned − the config's unsaturated
+   *  baseline, counted only while per-PID dedicated ≥ vramSaturation × the effective budget (unknown dedicated → counted). */
+  const adjustedSpill = (raw: number, ded: number | null | undefined, pinned: number, base: number) => {
+    const eff = vramEffective()
+    const saturated = eff === null || ded == null || ded >= eff * DEFAULT_SCORING_CONFIG.cliff.vramSaturation
+    return { value: saturated ? Math.max(0, raw - pinned - base) : 0, saturated, eff }
+  }
   const ramTotal = val(machine.ramTotalBytes, true)
   // Heavy mode runs close to the RAM limit on purpose: floor = the 2 GiB minimum, never lower.
   const ramFloor = Math.max(cfg.ramFloorMinBytes, (ramTotal ?? 0) * cfg.ramFloorFraction)
@@ -433,7 +444,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         runs.push(run)
         if (runs.length === 1) {
           const raw = val(run.peakSharedGpuRawBytes) ?? val(run.peakSharedGpuBytes), pin = val(run.hostPinnedBytes) ?? 0, ded = val(run.peakVramBytes)
-          if (raw !== null && (vramEffective === null || ded === null || ded < vramEffective * DEFAULT_SCORING_CONFIG.cliff.vramSaturation)) spillBase = Math.max(0, raw - pin)
+          if (raw !== null && !adjustedSpill(raw, ded, pin, 0).saturated) spillBase = Math.max(0, raw - pin)
         }
         const verdict = detectCliffs(runs, vramTotal).steps.find((s) => s.ctx === ctx)!.verdict
         send({ type: 'step:done', configId: cand.id, ctx, result: run, verdict })
@@ -586,6 +597,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     // kills the server (unloadModel); afterwards it cancels the in-flight request.
     let emitted = 0
     let guard: string | null = null
+    let guardSpill: { adjusted: number; raw: number } | null = null
     let loading = true
     let blindPolls = 0
     let minRam: number | null = null // lowest RAM available seen by the guard (OS reading, else telemetry rows)
@@ -613,12 +625,14 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         if (s.ramAvailBytes != null) { minRam = Math.min(minRam ?? s.ramAvailBytes, s.ramAvailBytes); if (loading) minLoadRam = Math.min(minLoadRam ?? s.ramAvailBytes, s.ramAvailBytes) }
         // Heavy (partial-offload) configs: a shared-memory spill is a measurement (degraded + spill reason, then the
         // ladder moves on), not an abort. The RAM floor always aborts.
-        const spillAbort = !cand.expectDegraded && s.procVramSharedBytes != null && s.procVramSharedBytes - pinned - spillBase > cfg.sharedSpillAbortBytes
+        const adj = s.procVramSharedBytes != null ? adjustedSpill(s.procVramSharedBytes, s.procVramDedicatedBytes, pinned, spillBase).value : 0
+        const spillAbort = !cand.expectDegraded && adj > cfg.sharedSpillAbortBytes
         const trip = !guard && ((s.ramAvailBytes != null && s.ramAvailBytes + mmapCredit < ramFloor) || spillAbort)
         if (!trip) continue
         guard = s.ramAvailBytes != null && s.ramAvailBytes + mmapCredit < ramFloor
           ? `RAM available ${(s.ramAvailBytes / GiB).toFixed(1)} GiB fell below the floor`
-          : `shared GPU memory spill ${((s.procVramSharedBytes! - pinned - spillBase) / GiB).toFixed(1)} GiB exceeded the abort limit`
+          : `shared GPU memory spill ${(adj / GiB).toFixed(1)} GiB exceeded the abort limit`
+        if (spillAbort) guardSpill = { adjusted: adj, raw: s.procVramSharedBytes! }
         void (loading ? unload() : backend.cancel())
       }
     }
@@ -626,7 +640,12 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     const guardAbort = () => {
       clearInterval(timer)
       ;(sampler as SessionSampler | null)?.stop()
-      return result('fail', 'guard_abort', guard, {}, { samples: (sampler as SessionSampler | null)?.samples ?? [] })
+      // Record the exact value and definition the guard tripped on (raw kept separately).
+      const spill: Partial<BenchmarkRunResult> = guardSpill ? {
+        peakSharedGpuBytes: { value: guardSpill.adjusted, kind: 'measured', source: `guard trip sample: per-PID shared − host-pinned ${(pinned / GiB).toFixed(2)} GiB − baseline ${(spillBase / GiB).toFixed(2)} GiB, dedicated ≥ ${Math.round(DEFAULT_SCORING_CONFIG.cliff.vramSaturation * 100)} % of the effective budget` },
+        peakSharedGpuRawBytes: { value: guardSpill.raw, kind: 'measured', source: 'guard trip sample (per-PID shared)' }
+      } : {}
+      return result('fail', 'guard_abort', guard, spill, { samples: (sampler as SessionSampler | null)?.samples ?? [] })
     }
 
     let load: LoadResult
@@ -707,9 +726,10 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     const spillMetric = (): Metric => {
       const raw = pk.max.procVramSharedBytes, ded = pk.max.procVramDedicatedBytes
       if (pk.n === 0 || raw == null) return tele(raw, 'procVramSharedBytes')
-      const saturated = vramEffective === null || ded == null || ded >= vramEffective * DEFAULT_SCORING_CONFIG.cliff.vramSaturation
-      const v = saturated ? Math.max(0, raw - pinned - spillBase) : 0
-      return { value: v, kind: 'measured', source: `per-PID shared ${(raw / GiB).toFixed(2)} GiB − host-pinned ${(pinned / GiB).toFixed(2)} GiB − baseline ${(spillBase / GiB).toFixed(2)} GiB${saturated ? '' : ` (dedicated below ${Math.round(DEFAULT_SCORING_CONFIG.cliff.vramSaturation * 100)} % of the effective budget ${vramEffective === null ? '?' : (vramEffective / GiB).toFixed(2)} GiB: not spill)`}` }
+      const { value: v, saturated, eff } = adjustedSpill(raw, ded, pinned, spillBase)
+      // The guard tripped on one sample of the same definition; the peak over all samples is ≥ that value.
+      const gv = guardSpill ? Math.max(v, guardSpill.adjusted) : v
+      return { value: gv, kind: 'measured', source: `per-PID shared ${(raw / GiB).toFixed(2)} GiB − host-pinned ${(pinned / GiB).toFixed(2)} GiB − baseline ${(spillBase / GiB).toFixed(2)} GiB${saturated ? '' : ` (dedicated below ${Math.round(DEFAULT_SCORING_CONFIG.cliff.vramSaturation * 100)} % of the effective budget ${eff === null ? '?' : (eff / GiB).toFixed(2)} GiB: not spill)`}${guardSpill ? `; guard tripped at ${(guardSpill.adjusted / GiB).toFixed(2)} GiB` : ''}` }
     }
     const prefill = median(reps.map((r) => r.prefillTps))
     const decode = median(reps.map((r) => r.decodeTps))

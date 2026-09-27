@@ -27,7 +27,7 @@ A step is one candidate config at one context size. The server is started with `
 | `prefillTps`, `decodeTps` | `timings` `prompt_n/prompt_ms`, `predicted_n/predicted_ms` (`parse.ts` `toPromptResult`) | measured. Without timings: `promptTokens/TTFT` and `decodeTokens/(total−TTFT)`, estimated (A12) |
 | `totalMs` | client wall clock | measured |
 | `peakVramBytes` | max per-PID `GPU Process Memory\Dedicated Usage` | measured |
-| `peakSharedGpuBytes` | **adjusted spill**: max per-PID `GPU Process Memory\Shared Usage` − host-pinned buffers − the config's unsaturated first-step level, counted only while dedicated ≥ 80 % (never adapter totals) | measured |
+| `peakSharedGpuBytes` | **adjusted spill**: max per-PID `GPU Process Memory\Shared Usage` − host-pinned buffers − the config's unsaturated first-step level, counted only while per-PID dedicated ≥ 80 % of the effective budget = min(total − other-process use, per-process budget) (never adapter totals). The in-step guard uses this same definition; a guard_abort row persists the tripping value (raw separately) | measured |
 | `peakSharedGpuRawBytes`, `hostPinnedBytes` | raw per-PID shared peak; host-side buffers from the load log | measured / declared |
 | `repDecodeTps`, `minRamAvailBytes` | decode of each rep (rep-variance rule I-6.1); lowest RAM available seen by the guard (I-4.3) | measured |
 | `peakRamBytes` | max `Process V2(llama-server:<pid>)\Working Set - Private` (excludes the mmap file cache) | measured |
@@ -51,7 +51,7 @@ A step is one candidate config at one context size. The server is started with `
 - Reps: `reps = 2` measured prompts. The first failing rep fails the step.
 - Timeouts: prompt `60 s + 10 ms × ctx`; load 120 s (inside the backend); quality 180 s per test.
 - Pre-check before each step: est. RAM (`estimateMemory`) > live available − floor, where floor = **max(4 GiB, 8 % of RAM)** in every mode → `fail / skipped_memory`, and the model is not loaded. The guard polls from the start of **load** (every 250 ms for heavy configs). A trip during load kills the server, and the step is recorded as `guard_abort` before any request.
-- In-step guard (1 s poll, 250 ms for heavy configs): RAM available **+ mmap credit** < floor, or per-PID shared > 2 GiB → `backend.cancel()` (or kill during load) → `fail / guard_abort`. The guard reason is recorded, not the "cancelled" error its own cancel caused.
+- In-step guard (1 s poll, 250 ms for heavy configs): RAM available **+ mmap credit** < floor, or adjusted spill (the `peakSharedGpuBytes` definition) > 2 GiB → `backend.cancel()` (or kill during load) → `fail / guard_abort`. The guard reason is recorded, not the "cancelled" error its own cancel caused.
   - RAM available is read from the OS (`readRamAvailableBytes` = `os.freemem`) on every poll, independent of typeperf; typeperf rows are the second source. **Fail-safe:** `guardBlindPollsMax` = 3 polls with neither → `guard_abort` "RAM guard inputs unreadable".
   - Heavy configs record a > 2 GiB spill (degraded + reason) and move to the next config instead of aborting; the RAM floor still aborts.
   - mmap credit = file × GPU layers / all layers. The weights already uploaded to the GPU are clean file pages the OS can drop. Calibration showed available RAM falls by ≈ the file size, so without the credit a 16 GiB model would falsely trip the floor.
@@ -280,7 +280,7 @@ Estimates are `kind:'estimated'`, prune only, and never rank.
 
 ## 10. Export (`src/core/export/config.ts`)
 - `exportConfigFrom(rec, cand, model, sessionId)` takes the winner at `recommendedCtx`.
-- `toLlamaServerArgs/Command` reproduce the benchmarked inference parameters (not the operational host/port/log/metrics flags or the executable path, D16): `-dev`, `-fit off`, `-c`, `-ngl 999|n`, `-t`, `-b 2048 -ub 512`, `-fa`, `-ctk/-ctv` for q8_0, `--parallel 1`.
+- `toLlamaServerArgs/Command` reproduce the benchmarked inference parameters (not the operational host/port/log/metrics flags or the executable path, D16): `-dev`, `-fit off`, `-c`, `-ngl 999|n`, `-t`, `-b 2048 -ub 512`, `-fa`, `-ctk/-ctv` for q8_0, `--parallel 1`, `--cache-ram 0`. The last flag turns off the host-RAM prompt cache (default 8 GiB): it saves each previous slot state when a new task starts, so the quality phase's 60+ tasks on one server held ≈ 8.6 GiB more RAM than the ladder's three-task launches (Qwen3.8 ngl 49 @8K). Benchmark and export both run without it, so the measured RAM is the deployed RAM.
 - `toOllamaModelfile(c, {from})` emits FROM plus num_ctx / num_gpu / num_thread / num_batch, with flash attention and KV type as env-var comments.
 - `toLmStudioSettings` uses lmstudio-js keys.
 - `toJson` bundles every format, and `provenanceNote(rec)` says which inputs were measured, estimated or unavailable.

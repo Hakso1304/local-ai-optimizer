@@ -43,6 +43,6 @@ describe('T06 export equivalence', () => {
     const ran = flags(await runnerArgs(cand, model, ctx))
     expect(exported).toEqual(ran)
     // the flags that matter are actually present (not both-missing)
-    for (const f of ['-m', '-c', '-ngl', '-t', '-b', '-ub', '-fa', '-dev', '--parallel', '-fit']) expect(ran).toHaveProperty(f)
+    for (const f of ['-m', '-c', '-ngl', '-t', '-b', '-ub', '-fa', '-dev', '--parallel', '-fit', '--cache-ram']) expect(ran).toHaveProperty(f)
   })
 })

@@ -502,13 +502,22 @@ describe('runSession', () => {
     expect(cap.s.budget).toEqual([{ key: 'RX 9070 XT|?|vulkan:?', o: expect.objectContaining({ ceilingBytes: 12.5 * GiB, ctx: 4096, modelId: model.id, kvType: 'f16' }) }])
   })
 
+  it("quality phase loads the chosen rung with exactly the ladder step's LoadConfig (no RAM-changing drift)", async () => {
+    const { s, backend } = await run(() => ({}), { ladder: [2048, 4096, 8192], runQuality: true })
+    const qctx = s.quality[0].ctx
+    const loads = backend.calls.loads.filter((l) => l.contextSize === qctx).map(({ signal: _s, ...l }) => l)
+    expect(loads.length).toBeGreaterThanOrEqual(2) // ladder step + quality load
+    for (const l of loads.slice(1)) expect(l).toEqual(loads[0])
+  })
+
   it('L1: spill saturation is taken against the effective budget (total − VRAM in use by other processes)', async () => {
-    // 11 GiB dedicated on a 16 GiB card: 69 % of the total (not saturated), but 91 % of 12 GiB left by other processes.
-    const at = (ctx: number) => [{ ...sample(ctx), procVramDedicatedBytes: 11 * GiB, procVramSharedBytes: ctx >= 4096 ? Math.round(2 * GiB) : Math.round(0.02 * GiB) }]
+    // 9 GiB dedicated: 71 % of the 12.74 GiB per-process budget (not saturated), but 82 % of the 10.9 GiB left by
+    // other processes holding 5 GiB (effective = min(total − in use, per-process budget)).
+    const at = (ctx: number) => [{ ...sample(ctx), procVramDedicatedBytes: 9 * GiB, procVramSharedBytes: ctx >= 4096 ? Math.round(2 * GiB) : Math.round(0.02 * GiB) }]
     const sampler = (pid: number) => { const v = at(pid - 1000); return { samples: v, unavailable: {}, stop: () => v } }
-    const busy = { ...machine, vramInUse: { status: 'available' as const, value: 4 * GiB, source: 'test' } } as SystemProfile
+    const busy = { ...machine, vramInUse: { status: 'available' as const, value: 5 * GiB, source: 'test' } } as SystemProfile
     const idle = await run(() => ({}), { ladder: [2048, 4096] }, { startSampler: sampler })
-    expect(idle.s.runs[1].peakSharedGpuBytes.value).toBe(0) // idle GPU: 69 % of the budget is below saturation
+    expect(idle.s.runs[1].peakSharedGpuBytes.value).toBe(0) // idle GPU: 71 % of the budget is below saturation
     const contended = await run(() => ({}), { ladder: [2048, 4096] }, { startSampler: sampler, machine: busy })
     expect(contended.s.runs[1].peakSharedGpuBytes.value).toBeGreaterThan(1.9 * GiB)
   })
@@ -657,12 +666,20 @@ describe('runSession', () => {
     expect(rec?.excluded[0].reasons[0]).toMatch(/^\[I-6\.3\] 2K: run fail \(skipped_memory\): est\. RAM/)
   })
   it('guard reason wins over the "cancelled" error its own cancel() causes (guard_abort, not request_error)', async () => {
-    const spill = { ...sample(2048), procVramSharedBytes: 3 * GiB }
+    // 14B @32K shape: 11.24 GiB dedicated (≥ 80 % of the 12.74 GiB estimated per-process budget), 3 GiB shared
+    const spill = { ...sample(2048), procVramDedicatedBytes: 11.24 * GiB, procVramSharedBytes: 3 * GiB }
     const { s } = await run(() => ({ warmupBlocks: true }), { ladder: [2048] }, {
       startSampler: () => ({ samples: [spill], unavailable: {}, stop: () => [spill] }), config: { guardPollMs: 5 }
     })
     expect(s.runs[0]).toMatchObject({ status: 'fail', failureKind: 'guard_abort' })
     expect(s.details[0].reason).toBe('shared GPU memory spill 3.0 GiB exceeded the abort limit')
+    // the persisted metric is the value the guard tripped on (same definition), raw kept separately — never 0.00
+    expect(s.runs[0].peakSharedGpuBytes).toMatchObject({ value: 3 * GiB, kind: 'measured', source: expect.stringMatching(/^guard trip sample/) })
+    expect(s.runs[0].peakSharedGpuRawBytes).toMatchObject({ value: 3 * GiB })
+    // below saturation of the budget (the -lm none pinned-buffer shape) the same 3 GiB is not spill → no abort
+    const pinnedShape = { ...spill, procVramDedicatedBytes: 5 * GiB }
+    const quiet = await run(() => ({}), { ladder: [2048] }, { startSampler: () => ({ samples: [pinnedShape], unavailable: {}, stop: () => [pinnedShape] }), config: { guardPollMs: 5 } })
+    expect(quiet.s.runs[0]).toMatchObject({ status: 'pass', peakSharedGpuBytes: { value: 0 } })
   })
 
   it('RAM floor credits mmap pages of GPU-offloaded weights (not pressure); trips when no credit applies', async () => {

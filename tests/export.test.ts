@@ -43,8 +43,8 @@ describe('export', () => {
   })
 
   it('llama-server args mirror the benchmarked launch', () => {
-    expect(toLlamaServerArgs(cfg)).toEqual(['-m', model.id, '-dev', 'Vulkan0', '-fit', 'off', '-c', '32768', '-ngl', '999', '-t', '8', '-b', '2048', '-ub', '512', '-fa', 'on', '--parallel', '1'])
-    expect(toLlamaServerCommand(cfg)).toBe(`llama-server -m "${model.id}" -dev Vulkan0 -fit off -c 32768 -ngl 999 -t 8 -b 2048 -ub 512 -fa on --parallel 1`)
+    expect(toLlamaServerArgs(cfg)).toEqual(['-m', model.id, '-dev', 'Vulkan0', '-fit', 'off', '-c', '32768', '-ngl', '999', '-t', '8', '-b', '2048', '-ub', '512', '-fa', 'on', '--parallel', '1', '--cache-ram', '0'])
+    expect(toLlamaServerCommand(cfg)).toBe(`llama-server -m "${model.id}" -dev Vulkan0 -fit off -c 32768 -ngl 999 -t 8 -b 2048 -ub 512 -fa on --parallel 1 --cache-ram 0`)
     const q8: ExportConfig = { ...cfg, kvType: 'q8_0', gpuLayersAll: false, gpuLayers: 20 }
     expect(toLlamaServerArgs(q8)).toEqual(expect.arrayContaining(['-ctk', 'q8_0', '-ctv', 'q8_0']))
     expect(toLlamaServerArgs(q8)[toLlamaServerArgs(q8).indexOf('-ngl') + 1]).toBe('20')

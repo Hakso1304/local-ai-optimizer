@@ -71,7 +71,8 @@ export function toLlamaServerArgs(c: ExportConfig): string[] {
     ...(c.kvType === 'f16' ? [] : ['-ctk', c.kvType, '-ctv', c.kvType]),
     ...(c.kvOffload ? [] : ['-nkvo']),
     ...(c.mmap ? [] : ['-lm', 'none']),
-    '--parallel', '1'
+    '--parallel', '1',
+    '--cache-ram', '0' // as benchmarked: the default 8 GiB host prompt cache is RAM the measurement never saw
   ]
 }
 

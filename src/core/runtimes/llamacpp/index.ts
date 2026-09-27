@@ -266,7 +266,9 @@ export class LlamaCppBackend implements InferenceBackend {
     this.templateHash = null
     const args = ['-m', cfg.modelPath, '-c', String(cfg.contextSize), '-ngl', String(cfg.gpuLayers), '--host', '127.0.0.1', '--port', String(this.port)]
     // -fit off: otherwise llama-server silently changes ctx/ngl to fit. -lv 4: device/offload lines we parse.
-    args.push('-fit', 'off', '--parallel', '1', '--device', cfg.device, '-lv', '4', '--metrics')
+    // --cache-ram 0: the host-RAM prompt cache (default 8 GiB) saves every previous slot state on a new task — the
+    // quality phase's 60+ tasks grew a 27B hybrid's RAM by ≈ 8.6 GiB over its ladder steps (3 tasks per launch).
+    args.push('-fit', 'off', '--parallel', '1', '--cache-ram', '0', '--device', cfg.device, '-lv', '4', '--metrics')
     if (cfg.threads) args.push('-t', String(cfg.threads))
     if (cfg.batchSize) args.push('-b', String(cfg.batchSize))
     args.push(...(cfg.extraArgs ?? []))
