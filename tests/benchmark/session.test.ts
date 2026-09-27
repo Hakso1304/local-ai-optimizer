@@ -408,6 +408,37 @@ describe('runSession', () => {
     expect(backend.calls.unloads).toBeGreaterThanOrEqual(2) // killed during load, and again before returning
   })
 
+  it('H1: a load-time RAM guard aborts the exact combined signal passed to loadModel', async () => {
+    const ac = new AbortController()
+    const b = fakeBackend(() => ({}))
+    const original = b.loadModel.bind(b)
+    let received: AbortSignal | undefined, observedAt = Infinity
+    b.loadModel = async (cfg) => {
+      const loaded = await original(cfg)
+      received = cfg.signal
+      const started = Date.now()
+      await new Promise<void>((done) => {
+        if (cfg.signal?.aborted) return done()
+        cfg.signal?.addEventListener('abort', () => done(), { once: true })
+        setTimeout(done, 300) // bounded failure when the load signal is never aborted
+      })
+      if (cfg.signal?.aborted) observedAt = Date.now() - started
+      return loaded
+    }
+    const { s } = await run(() => ({}), { ladder: [2048] }, {
+      backend: () => b, signal: ac.signal, models: [{ ...model, fileBytes: 100 * 1024 ** 2 }],
+      readRamAvailableBytes: () => b.pid === undefined ? 20 * GiB : GiB,
+      config: { guardPollMs: 5 }
+    })
+    expect(s.runs[0].failureKind).toBe('guard_abort')
+    expect(received).toBe(b.calls.loads[0].signal)
+    expect(received).not.toBe(ac.signal)
+    expect(received?.aborted).toBe(true)
+    expect(ac.signal.aborted).toBe(false)
+    expect(observedAt).toBeLessThan(100)
+    expect(b.calls.prompts).toHaveLength(0)
+  })
+
   it('H2: heavy mode runs full-offload configs first, then partial configs most-offloaded first', async () => {
     const m27 = { ...model, id: 'C:/models/q27b.gguf', fileBytes: Math.round(16.1 * GiB), layers: 64, nEmbd: 5120, heads: 40, headsKv: 8, keyLength: 128, valueLength: 128, nVocab: 152064 }
     const h = await run(() => ({}), { workload: 'max_quality', modelIds: [model.id, m27.id], ladder: [2048], heavyMode: true }, { models: [model, m27] })

@@ -86,6 +86,21 @@ afterEach(async () => {
 })
 
 describe('loadModel', () => {
+  it('rejects a combined abort signal promptly while health stays 503 and reaps its child', async () => {
+    handler = (_req, res) => json(res, 503, { status: 'loading' })
+    const session = new AbortController(), guard = new AbortController()
+    const signal = AbortSignal.any([session.signal, guard.signal])
+    const started = Date.now()
+    const pending = b.loadModel({ ...cfg, port, signal })
+    setTimeout(() => guard.abort(new Error('RAM guard')), 50)
+    await expect(pending).rejects.toThrow(/cancelled/i)
+    expect(Date.now() - started).toBeLessThan(500)
+    expect(signal.aborted).toBe(true)
+    expect(session.signal.aborted).toBe(false)
+    expect(child.kills).toBe(1)
+    expect(existsSync(pidFile)).toBe(false)
+  })
+
   it.each([
     ['oom', ['ggml_vulkan: Device memory allocation of size 9000000000 failed.', 'ggml_vulkan: vk::Device::allocateMemory: ErrorOutOfDeviceMemory']],
     ['device_lost', ['ggml_vulkan: vk::Queue::submit: ErrorDeviceLost']],
@@ -200,6 +215,29 @@ describe('runPrompt', () => {
 })
 
 describe('unloadModel', () => {
+  it('shares one in-flight tree reap across concurrent unload callers', async () => {
+    let enter!: () => void, release!: () => void
+    const entered = new Promise<void>((r) => { enter = r })
+    const gate = new Promise<void>((r) => { release = r })
+    let scans = 0, rootKills = 0
+    const processTree: ProcessTree = {
+      descendants: async () => { if (++scans === 1) { enter(); await gate } return [] },
+      kill: async (pid) => { if (pid === child.pid) { rootKills++; child.kill() } },
+      isAlive: async (pid) => pid === child.pid && child.exitCode === null && child.signalCode === null
+    }
+    b = new LlamaCppBackend('unused', { pidFile, spawnFn: () => child as unknown as ChildProcess, processTree })
+    handler = healthy()
+    await load()
+    const first = b.unloadModel()
+    await entered
+    const second = b.unloadModel()
+    release()
+    await Promise.all([first, second])
+    expect(rootKills).toBe(1)
+    expect(scans).toBe(2) // one initial tree snapshot and one verification, not two reap sequences
+    expect(existsSync(pidFile)).toBe(false)
+  })
+
   it('Q2: reaps an owned descendant even when the server parent exits promptly', async () => {
     const descendantPid = 424245
     let descendantAlive = true
