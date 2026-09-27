@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ModelMeta } from '../../src/shared/bench-types'
-import { estimateMemory, generateCandidates } from '../../src/core/benchmark/candidates'
+import { estimateMemory, generateCandidates, machineFromProfile } from '../../src/core/benchmark/candidates'
+import type { SystemProfile } from '../../src/shared/types'
 import { WORKLOADS } from '../../src/core/scoring/workloads'
 import { load, machine } from './helpers'
 
@@ -71,5 +72,38 @@ describe('generateCandidates (16 GB VRAM / 31 GB RAM)', () => {
     const { candidates } = generateCandidates(m, q14b, vulkan, WORKLOADS.coding)
     expect(candidates.length).toBeGreaterThan(0)
     expect(candidates[0].notes).toContain('VRAM size unknown; not pruned by VRAM, runtime guards apply')
+  })
+})
+
+describe('machineFromProfile: measured VRAM in use from the profile', () => {
+  const GiB = 1024 ** 3
+  const profile = (vramInUse?: SystemProfile['vramInUse']): SystemProfile => ({
+    scannedAt: 't0',
+    os: { value: { name: 'Windows 11', version: '10', build: '26200' }, status: 'available', source: 't' },
+    cpu: { value: { model: 'Ryzen', physicalCores: 8, logicalCores: 16 }, status: 'available', source: 't' },
+    ram: { value: { totalBytes: 31 * GiB, availableBytes: 20 * GiB }, status: 'available', source: 't' },
+    gpus: { value: [{ name: 'RX 9070 XT', vendor: 'amd', pnpDeviceId: 'x', driverVersion: null, isIntegrated: false, dedicatedVramBytes: { value: 17095983104, status: 'available', source: 'registry' } }], status: 'available', source: 't' },
+    cuda: { value: { available: false }, status: 'unsupported', source: 't' },
+    disks: { value: [], status: 'available', source: 't' },
+    runtimes: [],
+    ...(vramInUse ? { vramInUse } : {})
+  }) as SystemProfile
+  const budgetOf = (p: SystemProfile) => {
+    const [c] = generateCandidates(machineFromProfile(p, 'Vulkan0'), q14b, vulkan, WORKLOADS.coding).candidates
+    return { reason: c.skippedSteps.find((s) => /budget/.test(s.reason))!.reason, notes: c.notes }
+  }
+  it('a measured 1.2 GiB in use lowers the VRAM budget by 1.2 GiB', () => {
+    const m = machineFromProfile(profile({ value: 1.2 * GiB, status: 'available', source: 'GPU Adapter Memory\Dedicated Usage' }), 'Vulkan0')
+    expect(m.vramInUseBytes).toMatchObject({ value: 1.2 * GiB, kind: 'measured' })
+    const with12 = budgetOf(profile({ value: 1.2 * GiB, status: 'available', source: 'pdh' })).reason
+    const none = budgetOf(profile()).reason
+    const b = (r: string) => Number(/budget ([\d.]+) GiB/.exec(r)![1])
+    expect(b(none) - b(with12)).toBeCloseTo(1.2, 1)
+  })
+  it('an unavailable reading keeps the budget and says why in the notes; the explicit arg still wins', () => {
+    const p = profile({ value: null, status: 'unavailable', source: 'pdh', error: 'counter read failed' })
+    expect(machineFromProfile(p, 'Vulkan0').vramInUseBytes).toMatchObject({ value: null, kind: 'unavailable', reason: 'counter read failed' })
+    expect(budgetOf(p).notes).toContain('VRAM in use by other apps unknown (counter read failed); budget assumes 0')
+    expect(machineFromProfile(p, 'Vulkan0', 2 * GiB).vramInUseBytes.value).toBe(2 * GiB)
   })
 })

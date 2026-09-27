@@ -130,9 +130,11 @@ export function machineFromProfile(p: SystemProfile, gpuDevice: string | null, v
     .sort((a, b) => (b.dedicatedVramBytes.value ?? 0) - (a.dedicatedVramBytes.value ?? 0))[0]
   const v = gpu?.dedicatedVramBytes
   const ram = p.ram.value
+  // Explicit arg wins; else the profile's pre-launch reading. Runner and main's planFor both come through here.
+  const inUse = vramInUseBytes ?? (p.vramInUse?.status === 'available' ? p.vramInUse.value ?? undefined : undefined)
   return {
     vramBytes: !gpu ? NA('no discrete GPU') : v?.status === 'available' && v.value ? { value: v.value, kind: 'declared', source: v.source } : NA(v?.error ?? 'VRAM size not reported'),
-    vramInUseBytes: vramInUseBytes === undefined ? NA('not measured before launch') : { value: vramInUseBytes, kind: 'measured', source: 'GPU Adapter Memory\\Dedicated Usage' },
+    vramInUseBytes: inUse === undefined ? NA(p.vramInUse?.error ?? 'not measured before launch') : { value: inUse, kind: 'measured', source: p.vramInUse?.source ?? 'GPU Adapter Memory\\Dedicated Usage' },
     ramTotalBytes: ram ? { value: ram.totalBytes, kind: 'declared', source: p.ram.source } : NA(p.ram.error ?? 'RAM not reported'),
     ramAvailableBytes: ram ? { value: ram.availableBytes, kind: 'measured', source: p.ram.source } : NA(p.ram.error ?? 'RAM not reported'),
     physicalCores: p.cpu.value?.physicalCores ?? 1,
@@ -198,6 +200,7 @@ export function generateCandidates(
     if (e0.kvUnknown) notes.push('KV size unknown: pruned on weights only — runtime guards apply')
     else if (lowConf || e0.kvSource.startsWith('declared')) notes.push(`KV estimate: ${e0.kvSource}`)
     if (ngl > 0 && gpuBudget === null) notes.push('VRAM size unknown; not pruned by VRAM, runtime guards apply')
+    if (ngl > 0 && gpuBudget !== null && machine.vramInUseBytes.value === null) notes.push(`VRAM in use by other apps unknown (${machine.vramInUseBytes.reason ?? 'unavailable'}); budget assumes 0`)
     if (ramBudget === null) notes.push('RAM size unknown; not pruned by RAM, runtime guards apply')
     const src = `DESIGN §2.7 at ${ctxK(steps[0])}`
     return {
