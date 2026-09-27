@@ -230,6 +230,8 @@ export function generateCandidates(
       const c = build(n, 'f16', { kvOnGpu })
       if (!c) return
       c.expectDegraded = true
+      c.mmap = false
+      c.notes.push('loaded without mmap (-lm none): host RAM ≈ CPU-side layers + KV')
       c.degradedReason = n === 0 ? `${why}; CPU-only baseline (0/${model.layers} layers on GPU)`
         : `${why}; ${n}/${model.layers} layers on GPU${kvOnGpu ? '' : ', KV cache in system RAM (-nkvo)'}`
       if (kvUnknown) c.degradedReason += '; KV size unknown'

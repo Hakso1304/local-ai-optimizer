@@ -107,6 +107,9 @@ export interface CandidateConfig {
   notes: string[]
   /** false = KV cache in system RAM (llama-server -nkvo). Absent = true. */
   kvOffload?: boolean
+  /** false = load without mmap (llama-server `-lm none`). Heavy/partial configs: with mmap the whole GGUF stays
+   *  resident (a 16.4 GB 27B cost ≈17 GiB of available RAM at 55/65 layers); without it host RAM ≈ CPU layers + KV. */
+  mmap?: boolean
   /** Heavy-model mode: partial offload chosen on purpose; slow decode is expected, with the reason. */
   expectDegraded?: boolean
   degradedReason?: string

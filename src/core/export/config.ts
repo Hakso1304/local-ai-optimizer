@@ -25,6 +25,10 @@ export interface ExportConfig {
   kvType: KvType
   /** llama-server device id (e.g. Vulkan0); null = CPU only. */
   device: string | null
+  /** false = KV cache in system RAM (-nkvo). */
+  kvOffload: boolean
+  /** false = loaded without mmap (-lm none), as the heavy configs were measured. */
+  mmap: boolean
   workload: Recommendation['workload']
 }
 
@@ -37,7 +41,8 @@ export function exportConfigFrom(rec: Recommendation, cand: CandidateConfig, mod
   return {
     sessionId, configId: cand.id, modelPath: model.id, modelName: model.name, ctx,
     gpuLayers: cand.gpuLayers, gpuLayersAll: cand.gpuLayersAll, layers: model.layers, threads: cand.threads,
-    batch: BENCH_BATCH, ubatch: BENCH_UBATCH, flashAttn: cand.flashAttn, kvType: cand.kvType, device: cand.device, workload: rec.workload
+    batch: BENCH_BATCH, ubatch: BENCH_UBATCH, flashAttn: cand.flashAttn, kvType: cand.kvType, device: cand.device, workload: rec.workload,
+    kvOffload: cand.kvOffload !== false, mmap: cand.mmap !== false
   }
 }
 
@@ -52,6 +57,8 @@ export function toLlamaServerArgs(c: ExportConfig): string[] {
     '-b', String(c.batch), '-ub', String(c.ubatch),
     '-fa', c.flashAttn ? 'on' : 'off',
     ...(c.kvType === 'f16' ? [] : ['-ctk', c.kvType, '-ctv', c.kvType]),
+    ...(c.kvOffload ? [] : ['-nkvo']),
+    ...(c.mmap ? [] : ['-lm', 'none']),
     '--parallel', '1'
   ]
 }
@@ -78,6 +85,7 @@ export function toOllamaModelfile(c: ExportConfig, opts: { from: string }): stri
     `PARAMETER num_gpu ${c.gpuLayersAll ? 999 : c.gpuLayers}`,
     `PARAMETER num_thread ${c.threads}`,
     `PARAMETER num_batch ${c.ubatch}`,
+    ...(c.mmap ? [] : ['PARAMETER use_mmap false']),
     ''
   ].join('\n')
 }
@@ -91,6 +99,8 @@ export function toLmStudioSettings(c: ExportConfig): Record<string, unknown> {
     flashAttention: c.flashAttn,
     evalBatchSize: c.ubatch,
     cpuThreads: c.threads,
+    ...(c.mmap ? {} : { tryMmap: false }),
+    ...(c.kvOffload ? {} : { offloadKVCacheToGpu: false }),
     ...(c.kvType === 'f16' ? {} : { llamaKCacheQuantizationType: c.kvType, llamaVCacheQuantizationType: c.kvType })
   }
 }

@@ -281,7 +281,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       modelPath: model.id, contextSize: ctx, gpuLayers: cand.gpuLayersAll ? 999 : cand.gpuLayers, device: cand.device ?? 'none',
       threads: cand.threads, batchSize: 2048,
       extraArgs: ['-ub', String(rules.ubatch), '-fa', cand.flashAttn ? 'on' : 'off', ...(cand.kvType === 'f16' ? [] : ['-ctk', cand.kvType, '-ctv', cand.kvType]),
-        ...(cand.kvOffload === false ? ['-nkvo'] : [])] // -nkvo / --no-kv-offload: KV cache in RAM (b11208 --help)
+        ...(cand.kvOffload === false ? ['-nkvo'] : []), // -nkvo / --no-kv-offload: KV cache in RAM (b11208 --help)
+        ...(cand.mmap === false ? ['-lm', 'none'] : [])] // --load-mode none: no mmap (b11208 --help)
     }
   }
 
@@ -309,7 +310,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     const need = req.heavyMode ? e.ramResidentBytes : e.ramBytes
     // mmap'd weights already uploaded to the GPU are clean file pages the OS can drop: they lower 'available RAM'
     // (calibration: ≈ file size) without being memory pressure. Credit them in the in-step floor check.
-    const mmapCredit = (model.fileBytes * Math.min(cand.gpuLayersAll ? model.layers : cand.gpuLayers, model.layers)) / model.layers
+    // Without mmap (heavy configs) there are no reclaimable file pages to credit.
+    const mmapCredit = cand.mmap === false ? 0 : (model.fileBytes * Math.min(cand.gpuLayersAll ? model.layers : cand.gpuLayers, model.layers)) / model.layers
     if (avail !== null && need > avail - ramFloor) {
       return result('fail', 'skipped_memory', `est. RAM ${(need / GiB).toFixed(1)} GiB > available ${(avail / GiB).toFixed(1)} GiB − floor ${(ramFloor / GiB).toFixed(1)} GiB`)
     }

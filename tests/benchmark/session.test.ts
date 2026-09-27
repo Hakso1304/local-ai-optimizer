@@ -202,7 +202,11 @@ describe('runSession', () => {
     expect(normal.backend.calls.loads).toEqual([]) // does not fit → nothing to run
     const h = await run(() => ({}), { workload: 'max_quality', modelIds: [m27.id], ladder: [2048], heavyMode: true }, { models: [m27] })
     const args = h.backend.calls.loads.map((l) => `${l.gpuLayers} ${l.device} ${(l.extraArgs ?? []).join(' ')}`)
-    expect(args.some((a) => a.endsWith('-nkvo'))).toBe(true)
+    expect(args.some((a) => / -nkvo( |$)/.test(a))).toBe(true)
+    // Partial-offload (heavy) loads run without mmap; the 8B-style full offload keeps the default.
+    expect(h.backend.calls.loads.every((l) => (l.extraArgs ?? []).join(' ').includes('-lm none'))).toBe(true)
+    const full = await run(() => ({}), { ladder: [2048] })
+    expect(full.backend.calls.loads.every((l) => !(l.extraArgs ?? []).includes('-lm'))).toBe(true)
     expect(h.backend.calls.loads.every((l) => l.gpuLayers < 64)).toBe(true)
     expect(h.backend.calls.loads.some((l) => l.gpuLayers === 0)).toBe(false) // CPU baseline skipped: file > 50% RAM
   })
