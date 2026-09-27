@@ -284,8 +284,8 @@ ipcMain.handle('bench:smoke', async (_e, modelPath: string): Promise<SmokeResult
 })
 
 /** The scan plus a fresh reading of VRAM already in use (other apps), so planning budgets what is actually free. */
-async function withVramInUse(p: SystemProfile): Promise<SystemProfile> {
-  const r = await readVramInUse()
+async function withVramInUse(p: SystemProfile, signal?: AbortSignal): Promise<SystemProfile> {
+  const r = await readVramInUse(20_000, signal)
   return {
     ...p,
     vramInUse: r
@@ -307,7 +307,8 @@ async function startSession(req: SessionRequest, storedMachine?: SystemProfile, 
   try {
     // ponytail: static facts cached per app run; RAM is re-read live via freemem(). A resume re-uses the stored scan
     // so generateCandidates yields the same configIds/ctxSteps as the original plan (review item d).
-    const profile = storedMachine ?? (await withVramInUse((profileCache ??= await scanSystem())))
+    const profile = storedMachine ?? (await withVramInUse((profileCache ??= await scanSystem()), me.cancel.signal))
+    if (me.cancel.signal.aborted) throw new Error('cancelled')
     const runtime = await llama.detect()
     if (runtime.status !== 'available') throw new Error('llama.cpp runtime is not installed: install it on the System page first')
     const [infos, devices] = await Promise.all([listAllModels(), llama.listDevices()])

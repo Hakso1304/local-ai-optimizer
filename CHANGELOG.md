@@ -2,10 +2,10 @@
 
 ## Unreleased
 
-- Use CIM creation time for Windows process identity, restoring session completion after `0a20d21`..`bbe12dc` (`127d96f`).
+- Use CIM creation time for inspection and a tolerant creation-time match for kill, restoring session completion after `0a20d21`..`bbe12dc` (`127d96f`).
 - Keep standalone quality MEASURED and disclose an unverified thinking state (`127d96f`).
-- Disclose paired quality, answer-time ratio and estimated answer time in generation choices (`340f3ee`).
-- Cancel the typeperf VRAM preflight through an AbortSignal (`7e122fe`).
+- Disclose paired quality and answer-time ratio when a thinking option exceeds tolerance; never accept estimated answer time as within tolerance, leaving that choice provisional (`340f3ee`).
+- Accept an optional AbortSignal in the typeperf VRAM probe (`7e122fe`); pass the harness signal in session and A/B preflights (`f0fda83`, `3a52076`).
 - Supervise session preflight and reap owned process chains (`0d74210`).
 - Supervise A/B case teardown and separate host buffer evidence (`147a5a8`).
 - Verify measurement dependencies before and after launch (`9e34367`).
