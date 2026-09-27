@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import type { WorkloadId, WorkloadProfile } from '../../shared/bench-types'
 import type { SessionDetail, SystemProfile } from '../../shared/types'
+import { LARGE, LARGE_PRESET, LargeCodingCard, type BenchPreset } from './LargeCodingCard'
 import { COMPONENT_LABEL, CtxPick, DemoBanner, M, ScoreBar, fmtCtx, gib } from './ui'
 
-type Go = (section: 'Benchmark' | 'Results', sessionId?: number) => void
+type Go = (section: 'Benchmark' | 'Results', sessionId?: number, preset?: BenchPreset) => void
 
 function SystemSummary() {
   const [p, setP] = useState<SystemProfile | null>(null)
@@ -79,6 +80,8 @@ export function DashboardPage({ go }: { go: Go }) {
     void window.api.listSessions().then(async (ss) => { const d = ss.find((s) => s.demo); setDemo(d ? await window.api.getSession(d.id) : null) })
   }, [workload])
 
+  const fastBest = real?.recommendation?.best
+  const fastDecode = fastBest ? real!.candidates.find((c) => c.config.id === fastBest.configId)?.runs.find((r) => r.ctx === fastBest.score.referenceCtx)?.decodeTps.value ?? null : null
   const pick = (w: WorkloadId) => { setWorkload(w); void window.api.setWorkload(w) }
 
   return (
@@ -92,6 +95,7 @@ export function DashboardPage({ go }: { go: Go }) {
         </label>
       </header>
       <SystemSummary />
+      <div className="cards">
       {real === undefined ? <p className="muted">Loading…</p> : real ? <RecommendedCard d={real} go={go} /> : (
         <>
           <div className="card">
@@ -102,6 +106,10 @@ export function DashboardPage({ go }: { go: Go }) {
           {demo && <RecommendedCard d={demo} go={go} />}
         </>
       )}
+        {workload !== LARGE && (
+          <LargeCodingCard fastDecode={fastDecode} onBenchmark={() => go('Benchmark', undefined, LARGE_PRESET)} onDetails={(id) => go('Results', id)} />
+        )}
+      </div>
     </section>
   )
 }

@@ -145,6 +145,15 @@ export interface SmokeResult {
   prompt: PromptResult
 }
 
+/** A recommendation re-computed from a stored session's measurements for another workload. Never persisted. */
+export interface ComputedRecommendation {
+  sessionId: number
+  workload: WorkloadId
+  recommendation: Recommendation
+  /** e.g. "computed from session #12" */
+  label: string
+}
+
 /** userData/settings.json */
 export interface AppSettings {
   workload?: WorkloadId
@@ -167,6 +176,8 @@ export interface RendererApi {
   saveFile(defaultName: string, content: string): Promise<{ saved: string | null }>
   /** Raw telemetry samples of one benchmark_run row. */
   telemetryForRun(runId: number): Promise<TelemetrySample[]>
+  /** Re-score a stored session for another workload (not saved). null = session not found. */
+  computeRecommendation(sessionId: number, w: WorkloadId): Promise<ComputedRecommendation | null>
   latestRecommendation(w: WorkloadId): Promise<{ sessionId: number; recommendation: Recommendation } | null>
   startBench(req: SessionRequest): Promise<StartResult>
   cancelBench(): Promise<{ ok: boolean; error?: string }>
@@ -218,6 +229,8 @@ export interface SessionSummary {
   requiredContext: number | null
   /** SessionRequest.minDecodeTps of this session; null = workload default gate. */
   minDecodeTps: number | null
+  /** Session was run with heavy-model mode. */
+  heavyMode: boolean
   candidateCount: number
   bestConfigId: string | null
 }

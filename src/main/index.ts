@@ -8,7 +8,7 @@ import { detectRuntimes } from '../core/runtimes'
 import { LlamaCppBackend, killStaleServer } from '../core/runtimes/llamacpp'
 import { pickDiscreteDevice } from '../core/runtimes/llamacpp/parse'
 import { openDb } from '../core/storage/db'
-import { getSession, getSessionResume, latestRecommendation, listSessions, makeSessionStorage, markInterrupted, seedDemoSession, telemetryForRun, type PlanFor } from '../core/storage/sessions'
+import { sessionInputs, getSession, getSessionResume, latestRecommendation, listSessions, makeSessionStorage, markInterrupted, seedDemoSession, telemetryForRun, type PlanFor } from '../core/storage/sessions'
 import { REQUIRED_CTX, isInside, sanitizeRequest } from './validate'
 import { registerHubIpc } from './hub'
 import { WORKLOADS } from '../core/scoring/workloads'
@@ -22,7 +22,8 @@ import { probeNvidiaSmi, startNvidiaSampler, type NvidiaProbe } from '../core/te
 import { evaluateAsync } from '../core/quality'
 import type { SessionEvent, SessionRequest } from '../shared/bench-events'
 import type { CandidateConfig, ModelMeta, WorkloadId } from '../shared/bench-types'
-import type { AppSettings, ModelInfo, SmokeResult, StartResult, SystemProfile } from '../shared/types'
+import { recommend } from '../core/scoring/recommend'
+import type { AppSettings, ComputedRecommendation, ModelInfo, SmokeResult, StartResult, SystemProfile } from '../shared/types'
 
 // Dev/test runs get their own userData so they never write the installed app's database or settings.
 // Must run before anything calls app.getPath('userData') (the llama pid file below does).
@@ -140,6 +141,17 @@ ipcMain.handle('file:save', async (e, name: string, content: string) => {
   return { saved: r.filePath }
 })
 ipcMain.handle('telemetry:run', (_e, runId: number) => telemetryForRun(needDb(), Number(runId)))
+/** Same measurements, other workload: never written back as the session's own recommendation. */
+ipcMain.handle('recommendation:compute', async (_e, id: number, w: WorkloadId): Promise<ComputedRecommendation | null> => {
+  if (!(w in WORKLOADS)) throw new Error(`unknown workload ${String(w)}`)
+  const s = sessionInputs(needDb(), Number(id))
+  if (!s) return null
+  const device = s.inputs.find((i) => i.config.device)?.config.device ?? null
+  const machine = machineFromProfile(s.machine ?? (profileCache ??= await scanSystem()), device)
+  // TODO(#1): switch to recommendForWorkload(sessionData, w, request) once it lands (applies requiredContext/minDecodeTps).
+  const recommendation = recommend(s.inputs, machine, w)
+  return { sessionId: Number(id), workload: w, recommendation, label: `computed from session #${Number(id)}` }
+})
 ipcMain.handle('recommendation:latest', (_e, w: WorkloadId) => latestRecommendation(needDb(), w))
 ipcMain.handle('bench:start', (_e, raw: unknown) => {
   const v = sanitizeRequest(raw, modelRoots())

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { openDb } from '../src/core/storage/db'
-import { getSession, getSessionResume, latestRecommendation, listSessions, makeSessionStorage, markInterrupted, saveRecommendation, saveSession, seedDemoSession, telemetryForRun } from '../src/core/storage/sessions'
+import { sessionInputs, getSession, getSessionResume, latestRecommendation, listSessions, makeSessionStorage, markInterrupted, saveRecommendation, saveSession, seedDemoSession, telemetryForRun } from '../src/core/storage/sessions'
 import { insertTelemetrySamples } from '../src/core/storage/db'
 import type { BenchmarkRunResult, CandidateConfig, ModelMeta, Recommendation } from '../src/shared/bench-types'
 import type { SystemProfile } from '../src/shared/types'
@@ -103,6 +103,22 @@ describe('session storage', () => {
     const b = saveSession(db, { workload: 'coding', vramBytes: null, candidates: [] }, 'done')
     expect(markInterrupted(db)).toBe(1)
     expect(listSessions(db).map((s) => [s.id, s.status])).toEqual([[b, 'done'], [a, 'interrupted']])
+    db.close()
+  })
+
+  it('sessionInputs re-scores stored measurements for another workload without touching the stored recommendation', async () => {
+    const { recommend } = await import('../src/core/scoring/recommend')
+    const { machineFromProfile } = await import('../src/core/benchmark/candidates')
+    const db = openDb(join(dir, 'g.db'))
+    const id = seedDemoSession(db, fixtures)
+    const s = sessionInputs(db, id)!
+    expect(s.inputs).toHaveLength(2)
+    expect(s.inputs[0].runs.length).toBeGreaterThan(0)
+    const machine = machineFromProfile({ gpus: { value: [], status: 'available', source: '' }, ram: { value: null, status: 'unavailable', source: '' }, cpu: { value: null, status: 'unavailable', source: '' } } as never, 'Vulkan0')
+    const rec = recommend(s.inputs, machine, 'coding')
+    expect(rec.workload).toBe('coding')
+    expect(getSession(db, id)!.recommendation!.workload).toBe('long_context_coding') // stored one unchanged
+    expect(sessionInputs(db, 999)).toBeNull()
     db.close()
   })
 })

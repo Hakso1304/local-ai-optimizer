@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { Metric } from '../../shared/bench-types'
-import type { SessionCandidate, SessionDetail, SessionSummary } from '../../shared/types'
+import type { WorkloadId } from '../../shared/bench-types'
+import type { ComputedRecommendation, SessionCandidate, SessionDetail, SessionSummary } from '../../shared/types'
 import type { TelemetrySample } from '../../shared/bench-events'
 import { WORKLOADS } from '../../core/scoring/workloads'
 import { ExportMenu } from './ExportMenu'
@@ -146,6 +147,20 @@ export function ResultsPage({ sessionId }: { sessionId?: number }) {
   const [list, setList] = useState<SessionSummary[] | null>(null)
   const [sel, setSel] = useState<number | undefined>(sessionId)
   const [detail, setDetail] = useState<SessionDetail | null>(null)
+  // "View as": the same measurements re-scored for another workload (computed, never saved).
+  const [viewAs, setViewAs] = useState<WorkloadId | null>(null)
+  const [computed, setComputed] = useState<ComputedRecommendation | null>(null)
+  useEffect(() => { setViewAs(null); setComputed(null) }, [sel])
+  useEffect(() => {
+    if (!detail || !viewAs || viewAs === detail.session.workload) return setComputed(null)
+    window.api.computeRecommendation(detail.session.id, viewAs).then(setComputed, (e: Error) => setErr(e.message))
+  }, [detail, viewAs])
+  const shown: SessionDetail | null = detail && computed ? {
+    ...detail,
+    session: { ...detail.session, workload: computed.workload },
+    recommendation: computed.recommendation,
+    candidates: detail.candidates.map((c) => ({ ...c, score: computed.recommendation.ranked.find((r) => r.configId === c.config.id) ?? null }))
+  } : detail
   const [err, setErr] = useState<string | null>(null)
   const [tick, setTick] = useState(0)
   useEffect(() => { window.api.listSessions().then(setList, (e: Error) => setErr(e.message)) }, [tick])
@@ -187,7 +202,17 @@ export function ResultsPage({ sessionId }: { sessionId?: number }) {
           <button onClick={() => act(window.api.resumeBench(detail.session.id, { retryFailed: true }))} title="Re-run steps that failed or timed out">Retry failed tests</button>
         </div>
       )}
-      {detail && <Detail d={detail} onRerun={(configId) => act(window.api.resumeBench(detail.session.id, { rerunConfigIds: [configId] }))} />}
+      {detail && (
+        <div className="bar actions">
+          <label>View as{' '}
+            <select value={viewAs ?? detail.session.workload} onChange={(e) => setViewAs(e.target.value as WorkloadId)}>
+              {Object.values(WORKLOADS).map((w) => <option key={w.id} value={w.id}>{w.label}{w.id === detail.session.workload ? ' (benchmarked)' : ''}</option>)}
+            </select>
+          </label>
+          {computed && <span className="pill warn-pill">{computed.label} — not the session's own recommendation</span>}
+        </div>
+      )}
+      {shown && <Detail d={shown} onRerun={(configId) => act(window.api.resumeBench(shown.session.id, { rerunConfigIds: [configId] }))} />}
     </section>
   )
 }

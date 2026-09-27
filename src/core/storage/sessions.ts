@@ -71,6 +71,7 @@ function summary(db: DatabaseSync, row: SessionRow): SessionSummary {
     error: p.error ?? null,
     requiredContext: p.request?.requiredContext ?? null,
     minDecodeTps: p.request?.minDecodeTps ?? null,
+    heavyMode: p.request?.heavyMode === true,
     candidateCount: p.candidates.length,
     bestConfigId: rec ? json<Recommendation>(rec.payload).best?.configId ?? null : null
   }
@@ -103,6 +104,20 @@ export function getSession(db: DatabaseSync, id: number): SessionDetail | null {
         quality: quality.filter((q) => q.model_id === model.id).map((q) => json<QualityResult>(q.payload))
       }
     })
+  }
+}
+
+/** Scoring inputs of a stored session (latest row per step, quality per model) + the scan it was planned with,
+ *  for re-scoring the same measurements under another workload. */
+export function sessionInputs(db: DatabaseSync, id: number): { inputs: CandidateInput[]; machine: SessionPayload['machine']; request: SessionRequest | null } | null {
+  const d = getSession(db, id)
+  const row = db.prepare('SELECT payload FROM benchmark_session WHERE id = ?').get(id) as { payload: string } | undefined
+  if (!d || !row) return null
+  const p = json<SessionPayload>(row.payload)
+  return {
+    inputs: d.candidates.map((c) => ({ config: c.config, model: c.model, runs: c.runs, quality: c.quality })),
+    machine: p.machine,
+    request: p.request ?? null
   }
 }
 

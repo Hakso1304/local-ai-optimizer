@@ -5,6 +5,7 @@ import { BenchmarkPage } from './BenchmarkPage'
 import { applyEvent, initialLive } from './benchState'
 import { DashboardPage } from './DashboardPage'
 import { HubPage } from './HubPage'
+import type { BenchPreset } from './LargeCodingCard'
 import { ModelsPage } from './ModelsPage'
 import { ResultsPage } from './ResultsPage'
 import { SystemPage } from './SystemPage'
@@ -20,7 +21,8 @@ type Section = (typeof SECTIONS)[number]
 function App() {
   const [section, setSection] = useState<Section>('Dashboard')
   const [sessionId, setSessionId] = useState<number | undefined>()
-  const go = useCallback((s: Section, id?: number) => { setSection(s); setSessionId(id) }, [])
+  const [preset, setPreset] = useState<BenchPreset | undefined>()
+  const go = useCallback((s: Section, id?: number, p?: BenchPreset) => { setSection(s); setSessionId(id); setPreset(p) }, [])
   // Live benchmark state lives here so leaving the Benchmark page mid-run doesn't lose it.
   const [live, dispatch] = useReducer(applyEvent, initialLive)
   useEffect(() => window.api.onBenchEvent(dispatch), [])
@@ -40,7 +42,7 @@ function App() {
       </nav>
       <main>
         {section === 'Dashboard' && <DashboardPage go={go} />}
-        {section === 'Benchmark' && <BenchmarkPage live={live} onDownload={() => go('Download')} />}
+        {section === 'Benchmark' && <BenchmarkPage key={preset ? 'preset' : 'plain'} live={live} preset={preset} onDownload={() => go('Download')} />}
         {section === 'Models' && <ModelsPage />}
         {section === 'Download' && <HubPage />}
         {section === 'Results' && <ResultsPage key={sessionId ?? 'none'} sessionId={sessionId} />}

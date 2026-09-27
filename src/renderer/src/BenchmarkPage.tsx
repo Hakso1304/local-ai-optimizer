@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react'
 import type { WorkloadId, WorkloadProfile } from '../../shared/bench-types'
 import type { ModelInfo } from '../../shared/types'
 import type { LiveState } from './benchState'
+import type { BenchPreset } from './LargeCodingCard'
 import { fmtCtx, gib, num } from './ui'
 
 const v = (x: number | null | undefined, f: (n: number) => string) => (x == null ? '—' : f(x))
 const LADDER = [2048, 4096, 8192, 16384, 32768, 65536, 131072]
 
-export function BenchmarkPage({ live, onDownload }: { live: LiveState; onDownload: () => void }) {
+export function BenchmarkPage({ live, preset, onDownload }: { live: LiveState; preset?: BenchPreset; onDownload: () => void }) {
   const [workloads, setWorkloads] = useState<WorkloadProfile[]>([])
   const [workload, setWorkload] = useState<WorkloadId | null>(null)
   const [models, setModels] = useState<ModelInfo[] | null>(null)
@@ -21,7 +22,12 @@ export function BenchmarkPage({ live, onDownload }: { live: LiveState; onDownloa
   const [fit, setFit] = useState<Record<string, string | null>>({})
 
   useEffect(() => {
-    void Promise.all([window.api.listWorkloads(), window.api.getSettings()]).then(([ws, s]) => { setWorkloads(ws); setWorkload(s.workload ?? ws[0]?.id ?? null); setReqCtx(s.requiredContext ?? 0) })
+    void Promise.all([window.api.listWorkloads(), window.api.getSettings()]).then(([ws, s]) => { setWorkloads(ws)
+      // A preset (e.g. Dashboard "Benchmark for large-scale coding") wins over the saved choices.
+      setWorkload(preset?.workload ?? s.workload ?? ws[0]?.id ?? null)
+      setReqCtx(preset ? preset.requiredContext ?? 0 : s.requiredContext ?? 0)
+      if (preset) setHeavy(preset.heavyMode)
+    })
     window.api.listModels().then(setModels, (e: Error) => setMsg(e.message))
   }, [])
 

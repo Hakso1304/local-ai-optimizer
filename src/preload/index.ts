@@ -19,6 +19,7 @@ const api: RendererApi & HubApi = {
   getSession: (id) => ipcRenderer.invoke('sessions:get', id),
   saveFile: (name, content) => ipcRenderer.invoke('file:save', name, content),
   telemetryForRun: (runId) => ipcRenderer.invoke('telemetry:run', runId),
+  computeRecommendation: (id, w) => ipcRenderer.invoke('recommendation:compute', id, w),
   latestRecommendation: (w) => ipcRenderer.invoke('recommendation:latest', w),
   startBench: (req) => ipcRenderer.invoke('bench:start', req),
   cancelBench: () => ipcRenderer.invoke('bench:cancel'),
