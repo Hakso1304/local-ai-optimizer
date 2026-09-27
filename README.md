@@ -107,6 +107,29 @@ workload's gates (measured quality for quality-weighted workloads, quality floor
 comparison, context/memory scaling charts with the cliff marked, the reasons verbatim, and an export of the
 benchmarked llama-server parameters.
 
+## Reading the results
+
+- **Interpretation panel** (top of each Results session, and the short lines on the Dashboard cards): the app's
+  reading of the numbers, grouped by the sections of [docs/INTERPRETATION.md](docs/INTERPRETATION.md) — the practical
+  context ceiling and quality first, then speed, memory, stability, the comparison and generation settings. Each
+  item can be expanded to show its evidence (metric, value, provenance, context step).
+- **Every reason cites a rule.** Recommendation reasons and insights start with a tag such as `[I-2.1]`; hover it
+  for the rule text. The guide explains each rule and its thresholds. Recommendations made under older rules are
+  shown as recorded and labelled "reinterpreted with rules …" when the current rules are applied for display.
+- **Provenance badges**: MEASURED (observed on this machine in this session), DECLARED (read from the GGUF, driver,
+  OS or runtime log), ESTIMATED (computed by the app's formulas, e.g. the quality prior or memory estimates),
+  UNAVAILABLE (could not be obtained — shown as "—", never as 0).
+- **Quality "Q ± u (n)"**: the score with a band and the number of graded items. With the current small suite the
+  band is a heuristic, not a statistical guarantee; thorough mode (repeated samples) and the larger v2 suite
+  tighten it. Two configs whose bands overlap are not meaningfully different in quality.
+- **Provisional vs confirmed**: a recommendation is *provisional* when some candidate's quality is only an estimated
+  prior (no quality run); run the quality suite to confirm it. Quality-weighted workloads may give no
+  recommendation at all without measured quality, and the panel says why.
+- **Action buttons** (next steps suggested by a rule): *Enable heavy mode* and *Run thorough quality* / *Search
+  generation settings* open the Benchmark page preset accordingly; *Download* opens the Hugging Face page; *Use N K
+  in export* pins that context in the Export menu. Other suggestions (e.g. try a smaller quant, re-run on an idle
+  GPU) are shown as hints.
+
 ## Current limitations
 
 The full, code-checked list is in [docs/LIMITATIONS.md](docs/LIMITATIONS.md). Highlights:
