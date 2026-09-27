@@ -37,8 +37,14 @@ describe('storage', () => {
       const rows = db.prepare('SELECT created_at, payload FROM telemetry_sample WHERE run_id = ? ORDER BY id').all(rid) as { created_at: string; payload: string }[]
       expect(rows.map((r) => JSON.parse(r.payload).cpuPct)).toEqual([5, 7])
       expect(rows[0].created_at).toBe(new Date(1000).toISOString())
-      // FK violation (unknown run) -> throws, batch rolled back
-      expect(() => insertTelemetrySamples(db, sid, 999, [{ ts: 3000 }])).toThrow()
+      // Mid-batch failure (W4c T05): the first row is valid and is written inside the transaction, the second can't be
+      // serialized. Without BEGIN/ROLLBACK the first row would survive, so this fails if atomicity is removed.
+      const circular: { ts: number; self?: unknown } = { ts: 4000 }
+      circular.self = circular
+      expect(() => insertTelemetrySamples(db, sid, rid, [{ ts: 3000 }, circular])).toThrow()
+      expect(db.prepare('SELECT count(*) AS n FROM telemetry_sample').get()).toEqual({ n: 2 })
+      // FK violation (unknown run) on the first row also leaves nothing behind
+      expect(() => insertTelemetrySamples(db, sid, 999, [{ ts: 5000 }])).toThrow()
       expect(db.prepare('SELECT count(*) AS n FROM telemetry_sample').get()).toEqual({ n: 2 })
       db.close()
     } finally {
