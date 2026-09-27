@@ -97,7 +97,9 @@ this run: 16K (declared 131K). Stopped because <limitKind>: <structured reason w
 numbers>." When `limitKind` is largest-tested/user-cap/cancelled: "higher contexts were
 not attempted".
 Rule I-2.2 (`ctx.spill`, warn, threshold 256 MiB adjusted spill, origin
-measured-calibration cal-2026-09-27 14B@32K): "adjusted shared-GPU usage exceeded
+measured-calibration cal-2026-09-27 14B@32K; adjusted spill = raw shared − host-pinned
+− baseline, NEVER gated by a budget or saturation estimate — saturation is disclosed as
+supporting evidence only; an unknown reading is unknown, not "below threshold"): "adjusted shared-GPU usage exceeded
 <t> at <ctx> (<spill> GiB)". Append "decode fell <a> → <b> t/s" only if the previous
 rung is a comparable measured row. A single-sample excursion is provisional. Action:
 `use-context <last clean rung>` only if one exists (never at a first-rung spill);
@@ -202,13 +204,17 @@ observations (ceiling at spill onset, with model, KV bytes and largest single bu
 keyed by GPU identity + driver + backend build; the most conservative comparable
 observation wins, MEASURED). Observations are recorded only from rungs with a successful MEASURED
 request whose residency was reproduced by the I-2.8 placement retry (originating run,
-status and retry linkage persisted); a placement event, a failed/timed-out request or an
+status, MEASURED request timings and retry linkage persisted; estimated timings never
+qualify); a placement event, a failed/timed-out request or an
 estimate is never a budget. Until an observation is qualified it is ADVISORY (shown,
 not used for pruning). Non-comparable observations (different largest runtime buffer
 or backend build) are estimates for this allocation and never prune; an allocation
 observed clean at X cannot be pruned by an observation below X. Observations are keyed
-by the selected adapter's stable identity + verified driver + backend build; unknown
-identity ⇒ advisory only. With no observation the
+by the selected adapter's stable identity + verified driver + backend build; identity is
+verified again when an observation is APPLIED — ambiguous or unverified identity ⇒
+advisory only, even for previously qualified records. Advisory or estimated ceilings
+never decide an abort; the in-run guard rests on observed residual growth/pressure with
+an explicit uncertain-residency reason. With no observation the
 0.80 × total figure is DISCLOSED as an estimate ("no measured budget on this machine
 yet; assuming 80 % (some GPUs/backends allow 100 %)") but is NOT used to prune
 candidates: an estimate may never remove a configuration that measurement could show
