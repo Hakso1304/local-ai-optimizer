@@ -107,9 +107,9 @@ export function BenchmarkPage({ live, preset, onDownload }: { live: LiveState; p
         <label title="For thinking-capable models: also run the quality suite with thinking on (and each reasoning-effort level the template offers), using the model card's sampling when known">
           <input type="checkbox" checked={genSearch} onChange={(e) => setGenSearch(e.target.checked)} disabled={running || !quality} /> Search generation settings (thinking / effort / temperature)
         </label>
-        <label title="Thorough: 3 seeded samples per test for sampled (T > 0) settings; Quick: 1">Quality{' '}
+        <label title="Thorough (default): 60-item v2 suite, 3 seeded samples per test for sampled (T > 0) settings. Quick: 17-item v1 suite, 1 sample">Quality{' '}
           <select value={qualityMode} onChange={(e) => setQualityMode(e.target.value as 'thorough' | 'quick')} disabled={running || !quality}>
-            <option value="thorough">thorough</option><option value="quick">quick</option>
+            <option value="thorough">thorough / qb-2.0.0 (≈3.5× longer than quick)</option><option value="quick">quick = 17-item v1</option>
           </select>
         </label>
         <button onClick={() => void start()} disabled={running || !picked.size}>Start</button>
