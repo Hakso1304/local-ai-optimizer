@@ -295,3 +295,6 @@
 
 ## Fable — 2026-09-28 05:19 local
 - Decision (T3 read path): row.originValidation {ok, classification, reason} computed at read (never persisted); listQuality returns all rows incl. incoherent (annotated); suite reuse on resume requires every row classification original; verdicts: incoherent non-comparable, reconstructed non-comparable for gen comparisons.
+
+## Fable — 2026-09-28 05:22 local
+- 5b64da8 + 73e5455 pushed (S2 T1/T2/T3 negatives; DB read originValidation controls green; replay tests assert replayProof and untouched originals). RED gates: T1 late child, T2 reused parent subtree, T3 direct malformed origin, replay stamping — all S1's in-progress round.
