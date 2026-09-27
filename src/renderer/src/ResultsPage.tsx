@@ -8,6 +8,7 @@ import { genLabel, type GenRow } from '../../core/benchmark/gen'
 import { ExportMenu } from './ExportMenu'
 import { DecisionTrace } from './DecisionTrace'
 import { Evidence } from './Evidence'
+import { downloadFromAction } from './Suggestions'
 import { ENGINE_RULES, InterpretPanel, Reason, RulesVersion, insightsOf, rulesOf, type InsightActions } from './InterpretPanel'
 import type { BenchPreset } from './LargeCodingCard'
 import { LineChart, type Band } from './LineChart'
@@ -100,7 +101,12 @@ function Detail({ d, onRerun, go }: { d: SessionDetail; onRerun: (configId: stri
     enableHeavyMode: () => go('Benchmark', undefined, preset({ heavyMode: true })),
     runThoroughQuality: () => go('Benchmark', undefined, preset({ qualityMode: 'thorough' })),
     tryThinkingConfig: () => go('Benchmark', undefined, preset({ genSearch: true })),
-    download: () => go('Download'),
+    // I-9.2 "download <owner>/<repo>/<path>": confirm and download next to the model it is a sibling of; anything
+    // else (or no such model in this session) opens the Hub page.
+    download: (arg) => {
+      const owners = d.candidates.filter((c) => c.model.siblingQuants?.some((s) => `${s.repoId}/${s.path}` === arg)).map((c) => c.model.id)
+      void downloadFromAction(arg, owners).then((handled) => { if (!handled) go('Download') })
+    },
     useContext: (ctx) => setExportCtx(ctx)
   }
   const rec = d.recommendation

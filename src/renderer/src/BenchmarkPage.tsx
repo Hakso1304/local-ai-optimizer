@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import type { WorkloadId, WorkloadProfile } from '../../shared/bench-types'
+import type { QuantSuggestion, WorkloadId, WorkloadProfile } from '../../shared/bench-types'
 import type { ModelInfo } from '../../shared/types'
 import type { LiveState } from './benchState'
 import { presetFor, type BenchPreset } from './LargeCodingCard'
 import { fmtCtx, gib, num } from './ui'
+import { Suggestions } from './Suggestions'
 
 const v = (x: number | null | undefined, f: (n: number) => string) => (x == null ? '—' : f(x))
 const LADDER = [2048, 4096, 8192, 16384, 32768, 65536, 131072]
@@ -43,6 +44,7 @@ export function BenchmarkPage({ live, preset, onDownload }: { live: LiveState; p
     setWorkload(w)
   }
   const [fit, setFit] = useState<Record<string, string | null>>({})
+  const [suggestions, setSuggestions] = useState<QuantSuggestion[]>([])
   const [vram, setVram] = useState<{ inUse: number | null; total: number | null }>({ inUse: null, total: null })
 
   useEffect(() => {
@@ -71,7 +73,7 @@ export function BenchmarkPage({ live, preset, onDownload }: { live: LiveState; p
   const cancel = async () => { const r = await window.api.cancelBench(); if (!r.ok) setMsg(r.error ?? 'cancel failed') }
   const pause = async () => { const r = await window.api.pauseBench(); if (!r.ok) setMsg(r.error ?? 'pause failed') }
   useEffect(() => {
-    if (workload) window.api.modelFit(workload).then((f) => { setFit(f.reasons); setVram({ inUse: f.vramInUseBytes, total: f.vramTotalBytes }) }, () => setFit({}))
+    if (workload) window.api.modelFit(workload).then((f) => { setFit(f.reasons); setSuggestions(f.suggestions ?? []); setVram({ inUse: f.vramInUseBytes, total: f.vramTotalBytes }) }, () => { setFit({}); setSuggestions([]) })
   }, [workload, models])
   const GiB = 1024 ** 3
   const busyGpu = vram.inUse != null && vram.inUse > 1.5 * GiB
@@ -132,6 +134,11 @@ export function BenchmarkPage({ live, preset, onDownload }: { live: LiveState; p
         <p className="warnline">GPU currently has {((vram.total - vram.inUse!) / GiB).toFixed(1)} GB free of {(vram.total / GiB).toFixed(1)} GB (other apps in use) — results will be affected.</p>
       )}
       <div className="bar actions"><button onClick={onDownload}>Download from Hugging Face</button></div>
+      <Suggestions items={suggestions} disabled={running} onIncluded={(f) => {
+        setSuggestions((xs) => xs.filter((x) => !f.toLowerCase().endsWith((x.sibling.path.split('/').pop() ?? '').toLowerCase())))
+        window.api.listModels().then(setModels, () => {})
+        setPicked((p) => new Set([...p, f]))
+      }} />
 
       <table>
         <thead><tr><th /><th>Model</th><th>Source</th><th>Params</th><th>Quant</th><th>Ctx (train)</th><th>Size</th></tr></thead>

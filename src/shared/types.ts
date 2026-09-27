@@ -1,5 +1,5 @@
 // Types shared between main, preload and renderer. No runtime code here.
-import type { BenchmarkRunResult, CandidateConfig, CliffReport, GenKnobs, GpuBackendKind, GenQuality, ModelMeta, QualityResult, Recommendation, WorkloadId, WorkloadProfile, WorkloadScore } from './bench-types'
+import type { BenchmarkRunResult, CandidateConfig, CliffReport, GenKnobs, GpuBackendKind, QuantSuggestion, GenQuality, ModelMeta, QualityResult, Recommendation, WorkloadId, WorkloadProfile, WorkloadScore } from './bench-types'
 import type { SessionEvent, SessionRequest, TelemetrySample } from './bench-events'
 
 export type Status = 'available' | 'unavailable' | 'unsupported'
@@ -185,6 +185,8 @@ export interface ModelFit {
   /** Dedicated VRAM used by other apps right now (measured); null = reading unavailable. */
   vramInUseBytes: number | null
   vramTotalBytes: number | null
+  /** Smaller sibling quantizations that would fit more layers on the GPU (I-9.2; estimated unless stated). */
+  suggestions?: QuantSuggestion[]
 }
 
 /** userData/settings.json */
