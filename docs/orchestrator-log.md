@@ -292,3 +292,6 @@
 
 ## Fable — 2026-09-28 05:17 local
 - ORIGIN-VALIDATOR contract (6964e5c) pushed and forwarded to S1/S2. Waiting: S1 T1–T3 commit → RECHECK9; S3 session 5 export → audit → harness round → harness re-review (lane gate).
+
+## Fable — 2026-09-28 05:19 local
+- Decision (T3 read path): row.originValidation {ok, classification, reason} computed at read (never persisted); listQuality returns all rows incl. incoherent (annotated); suite reuse on resume requires every row classification original; verdicts: incoherent non-comparable, reconstructed non-comparable for gen comparisons.
