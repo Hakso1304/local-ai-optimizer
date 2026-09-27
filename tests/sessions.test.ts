@@ -74,7 +74,7 @@ describe('session storage', () => {
     const runId = (db.prepare('SELECT id, model_id FROM benchmark_run').get() as { id: number; model_id: string })
     expect(runId.model_id).toBe(model.id)
     expect(telemetryForRun(db, runId.id)).toHaveLength(1)
-    expect(getSessionResume(db, Number(id))).toEqual({ request: req, machine }) // resume re-plans from the stored scan (d)
+    expect(getSessionResume(db, Number(id))).toEqual({ request: req, machine, plan: [config] }) // resume re-uses the stored plan + scan (d)
     expect(latestRecommendation(db, 'fast_assistant')?.sessionId).toBe(Number(id))
     db.close()
   })

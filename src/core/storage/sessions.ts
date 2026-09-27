@@ -30,10 +30,10 @@ const LATEST_RUNS = `SELECT id, payload FROM benchmark_run WHERE id IN (
   SELECT max(id) FROM benchmark_run WHERE session_id = ? GROUP BY json_extract(payload, '$.configId'), ctx_size) ORDER BY id`
 
 /** What resume needs: the original request and the scan the plan was made from (so configIds come out identical). */
-export function getSessionResume(db: DatabaseSync, id: number): { request: SessionRequest; machine: SessionPayload['machine'] } | null {
+export function getSessionResume(db: DatabaseSync, id: number): { request: SessionRequest; machine: SessionPayload['machine']; plan: CandidateConfig[] } | null {
   const row = db.prepare('SELECT payload FROM benchmark_session WHERE id = ?').get(id) as { payload: string } | undefined
   const p = row ? json<SessionPayload>(row.payload) : null
-  return p?.request ? { request: p.request, machine: p.machine } : null
+  return p?.request ? { request: p.request, machine: p.machine, plan: p.candidates.map((c) => c.config) } : null
 }
 
 /** App start: sessions still 'running' belong to a previous app run that quit mid-session. Returns how many. */

@@ -20,7 +20,7 @@ import { startSampler, stopAllSamplers, withNvidia } from '../core/telemetry/sam
 import { probeNvidiaSmi, startNvidiaSampler, type NvidiaProbe } from '../core/telemetry/nvidia'
 import { evaluateAsync } from '../core/quality'
 import type { SessionEvent, SessionRequest } from '../shared/bench-events'
-import type { ModelMeta, WorkloadId } from '../shared/bench-types'
+import type { CandidateConfig, ModelMeta, WorkloadId } from '../shared/bench-types'
 import type { AppSettings, ModelInfo, SmokeResult, StartResult, SystemProfile } from '../shared/types'
 
 // Dev/test runs get their own userData so they never write the installed app's database or settings.
@@ -144,7 +144,7 @@ ipcMain.handle('bench:resume', (_e, id: number, opts?: { retryFailed?: unknown; 
   const stored = getSessionResume(needDb(), Number(id))
   if (!stored) return { ok: false, error: `session ${id} has no stored request` }
   const v = sanitizeRequest({ ...stored.request, retryFailed: opts?.retryFailed, rerunConfigIds: opts?.rerunConfigIds }, modelRoots())
-  return v.ok ? startSession({ ...v.req, resumeSessionId: String(Number(id)) }, stored.machine) : { ok: false, error: v.error }
+  return v.ok ? startSession({ ...v.req, resumeSessionId: String(Number(id)) }, stored.machine, stored.plan) : { ok: false, error: v.error }
 })
 ipcMain.handle('bench:cancel', () => {
   if (!active) return { ok: false, error: 'no benchmark running' }
@@ -180,8 +180,9 @@ ipcMain.handle('bench:smoke', async (_e, modelPath: string): Promise<SmokeResult
 let active: { cancel: AbortController; pause: AbortController } | null = null
 let profileCache: SystemProfile | null = null
 
-/** req is already sanitized. storedMachine: the scan a resumed session was planned from. */
-async function startSession(req: SessionRequest, storedMachine?: SystemProfile): Promise<StartResult> {
+/** req is already sanitized. storedMachine / storedPlan: the scan and the candidate configs a resumed session was
+ *  planned with — the runner re-uses the plan as-is, so config ids survive estimator changes. */
+async function startSession(req: SessionRequest, storedMachine?: SystemProfile, storedPlan?: CandidateConfig[]): Promise<StartResult> {
   if (active || smokeBusy) return { ok: false, error: 'a benchmark or smoke run is already in progress' }
   const me = { cancel: new AbortController(), pause: new AbortController() }
   active = me // claim before the first await so a double click can't start two sessions
@@ -223,7 +224,8 @@ async function startSession(req: SessionRequest, storedMachine?: SystemProfile):
       // PDH (all vendors) + nvidia-smi temp/power when it works (NVIDIA only; AMD has no non-admin source).
       startSampler: (pid) => withNvidia(startSampler({ pid }), nvOk ? startNvidiaSampler() : null),
       models, clock: Date, readRamAvailableBytes: () => freemem(), evaluate: evaluateAsync,
-      signal: me.cancel.signal, pauseSignal: me.pause.signal, runtimeVersion: runtime.version ?? null
+      signal: me.cancel.signal, pauseSignal: me.pause.signal, runtimeVersion: runtime.version ?? null,
+      ...(storedPlan?.length ? { plan: storedPlan } : {})
     }, sendBenchEvent).finally(() => { if (active === me) active = null })
     const id = await Promise.race([idReady, run.then(() => null)])
     return id ? { ok: true, sessionId: id } : { ok: false, error: 'session ended before it started (see event log)' }
