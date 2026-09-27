@@ -75,9 +75,11 @@ export function DashboardPage({ go }: { go: Go }) {
   useEffect(() => {
     if (!workload) return
     setReal(undefined)
-    void window.api.latestRecommendation(workload).then(async (r) => setReal(r ? await window.api.getSession(r.sessionId) : null))
+    let live = true // switching workloads quickly: only the latest workload's answer is applied (W4b F11)
+    void window.api.latestRecommendation(workload).then(async (r) => { const d = r ? await window.api.getSession(r.sessionId) : null; if (live) setReal(d) })
     // Demo is shown only as a separate, flagged preview when there is no real result.
-    void window.api.listSessions().then(async (ss) => { const d = ss.find((s) => s.demo); setDemo(d ? await window.api.getSession(d.id) : null) })
+    void window.api.listSessions().then(async (ss) => { const d = ss.find((s) => s.demo); const dd = d ? await window.api.getSession(d.id) : null; if (live) setDemo(dd) })
+    return () => { live = false }
   }, [workload])
 
   const fastBest = real?.recommendation?.best

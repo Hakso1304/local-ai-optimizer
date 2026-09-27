@@ -9,7 +9,7 @@ import { LlamaCppBackend, killStaleServer } from '../core/runtimes/llamacpp'
 import { pickDiscreteDevice } from '../core/runtimes/llamacpp/parse'
 import { openDb } from '../core/storage/db'
 import { sessionInputs, getSession, getSessionResume, latestRecommendation, listSessions, makeSessionStorage, markInterrupted, seedDemoSession, telemetryForRun, type PlanFor } from '../core/storage/sessions'
-import { REQUIRED_CTX, insideSomeRoot, isWorkloadId, sanitizeRequest } from './validate'
+import { REQUIRED_CTX, insideSomeRoot, isWorkloadId, rowId, sanitizeRequest } from './validate'
 import { registerHubIpc } from './hub'
 import { WORKLOADS } from '../core/scoring/workloads'
 import { val } from '../core/scoring/cliff'
@@ -28,6 +28,14 @@ import type { AppSettings, ComputedRecommendation, ModelInfo, SmokeResult, Start
 // Dev/test runs get their own userData so they never write the installed app's database or settings.
 // Must run before anything calls app.getPath('userData') (the llama pid file below does).
 if (!app.isPackaged) app.setPath('userData', `${app.getPath('userData')}-dev`)
+
+// One instance per userData (portable + installed share it). A second copy would mark the first one's live session
+// 'interrupted' and kill its llama-server via the pid file, so it exits before touching anything (W4b F7).
+if (!app.requestSingleInstanceLock()) app.exit(0)
+app.on('second-instance', () => {
+  const w = BrowserWindow.getAllWindows()[0]
+  if (w) { if (w.isMinimized()) w.restore(); w.focus() }
+})
 
 // Dev: runtime + sample models live in the project. Packaged: app dir is read-only (asar), so the runtime is
 // downloaded on first run into userData and models come from userData/models + settings.modelDirs.
@@ -110,11 +118,14 @@ ipcMain.handle('runtime:install', async () => {
   if (installing) throw new Error('runtime install already running')
   if (active || smokeBusy) throw new Error('a benchmark is running; install the runtime after it finishes')
   const progress = (msg: string) => { for (const w of BrowserWindow.getAllWindows()) w.webContents.send('runtime:progress', msg) }
-  profileCache ??= await scanSystem()
-  const gpu = (profileCache.gpus.value ?? []).filter((g) => !g.isIntegrated).sort((a, b) => (b.dedicatedVramBytes.value ?? 0) - (a.dedicatedVramBytes.value ?? 0))[0]
-  const vendor = gpu?.vendor ?? 'other'
-  const nv = vendor === 'nvidia' ? await nvidia() : null
-  installing = llama.ensureRuntime(progress, { vendor, cudaMajor: nv?.available ? nv.cudaVersion?.major : undefined })
+  // Claimed synchronously, before the first await: a benchmark/smoke started meanwhile sees it (W4b F18).
+  installing = (async () => {
+    profileCache ??= await scanSystem()
+    const gpu = (profileCache.gpus.value ?? []).filter((g) => !g.isIntegrated).sort((a, b) => (b.dedicatedVramBytes.value ?? 0) - (a.dedicatedVramBytes.value ?? 0))[0]
+    const vendor = gpu?.vendor ?? 'other'
+    const nv = vendor === 'nvidia' ? await nvidia() : null
+    return llama.ensureRuntime(progress, { vendor, cudaMajor: nv?.available ? nv.cudaVersion?.major : undefined })
+  })()
   try { return await installing } finally { installing = null }
 })
 registerHubIpc(ipcMain, () => BrowserWindow.getAllWindows()[0] ?? null, { userDataDir: app.getPath('userData'), modelDirs })
@@ -129,7 +140,7 @@ ipcMain.handle('settings:setRequiredContext', (_e, ctx: unknown) => {
 })
 ipcMain.handle('workloads:list', () => Object.values(WORKLOADS))
 ipcMain.handle('sessions:list', () => listSessions(needDb()))
-ipcMain.handle('sessions:get', (_e, id: number) => getSession(needDb(), Number(id)))
+ipcMain.handle('sessions:get', (_e, id: unknown) => getSession(needDb(), rowId(id)))
 /** Save exported text via the OS save dialog. Only the name and content come from the renderer; the user picks the path. */
 ipcMain.handle('file:save', async (e, name: string, content: string) => {
   if (typeof name !== 'string' || typeof content !== 'string' || content.length > 1024 * 1024) throw new Error('bad export')
@@ -140,9 +151,10 @@ ipcMain.handle('file:save', async (e, name: string, content: string) => {
   writeFileSync(r.filePath, content)
   return { saved: r.filePath }
 })
-ipcMain.handle('telemetry:run', (_e, runId: number) => telemetryForRun(needDb(), Number(runId)))
+ipcMain.handle('telemetry:run', (_e, runId: unknown) => telemetryForRun(needDb(), rowId(runId)))
 /** Same measurements, other workload: never written back as the session's own recommendation. */
-ipcMain.handle('recommendation:compute', async (_e, id: number, w: WorkloadId): Promise<ComputedRecommendation | null> => {
+ipcMain.handle('recommendation:compute', async (_e, rawId: unknown, w: WorkloadId): Promise<ComputedRecommendation | null> => {
+  const id = rowId(rawId)
   if (!isWorkloadId(w)) throw new Error(`unknown workload ${String(w)}`)
   const s = sessionInputs(needDb(), Number(id))
   if (!s) return null
@@ -152,13 +164,17 @@ ipcMain.handle('recommendation:compute', async (_e, id: number, w: WorkloadId): 
   const recommendation = recommendForWorkload({ candidates: s.inputs, machine }, w, { requiredContext: s.request?.requiredContext, minDecodeTps: s.request?.minDecodeTps })
   return { sessionId: Number(id), workload: w, recommendation, label: `computed from session #${Number(id)}` }
 })
-ipcMain.handle('recommendation:latest', (_e, w: WorkloadId) => latestRecommendation(needDb(), w))
+ipcMain.handle('recommendation:latest', (_e, w: unknown) => {
+  if (!isWorkloadId(w)) throw new Error(`unknown workload ${String(w)}`)
+  return latestRecommendation(needDb(), w)
+})
 ipcMain.handle('bench:start', (_e, raw: unknown) => {
   const v = sanitizeRequest(raw, modelRoots())
   return v.ok ? startSession(v.req) : { ok: false, error: v.error }
 })
 /** Continue a paused/cancelled/interrupted/failed session. opts: retryFailed / rerunConfigIds (validated). */
-ipcMain.handle('bench:resume', (_e, id: number, opts?: { retryFailed?: unknown; rerunConfigIds?: unknown }) => {
+ipcMain.handle('bench:resume', (_e, rawId: unknown, opts?: { retryFailed?: unknown; rerunConfigIds?: unknown }) => {
+  const id = rowId(rawId)
   const stored = getSessionResume(needDb(), Number(id))
   if (!stored) return { ok: false, error: `session ${id} has no stored request` }
   const v = sanitizeRequest({ ...stored.request, retryFailed: opts?.retryFailed, rerunConfigIds: opts?.rerunConfigIds }, modelRoots())
@@ -177,7 +193,7 @@ ipcMain.handle('bench:pause', () => {
 })
 ipcMain.handle('bench:smoke', async (_e, modelPath: string): Promise<SmokeResult> => {
   if (typeof modelPath !== 'string' || !insideSomeRoot(modelPath, modelRoots())) throw new Error('model path not in a configured model dir')
-  if (smokeBusy || active) throw new Error('a smoke run or benchmark is already in progress')
+  if (smokeBusy || active || installing) throw new Error('a smoke run, benchmark or runtime install is already in progress')
   smokeBusy = true
   try {
     // Deliberately tiny: ctx 2048, 32 tokens, one warmup + one measured request.
@@ -212,7 +228,7 @@ let profileCache: SystemProfile | null = null
 /** req is already sanitized. storedMachine / storedPlan: the scan and the candidate configs a resumed session was
  *  planned with — the runner re-uses the plan as-is, so config ids survive estimator changes. */
 async function startSession(req: SessionRequest, storedMachine?: SystemProfile, storedPlan?: CandidateConfig[]): Promise<StartResult> {
-  if (active || smokeBusy) return { ok: false, error: 'a benchmark or smoke run is already in progress' }
+  if (active || smokeBusy || installing) return { ok: false, error: 'a benchmark, smoke run or runtime install is already in progress' }
   const me = { cancel: new AbortController(), pause: new AbortController() }
   active = me // claim before the first await so a double click can't start two sessions
   try {

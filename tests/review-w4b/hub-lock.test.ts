@@ -3,6 +3,7 @@ vi.mock('electron', () => ({ BrowserWindow: vi.fn(), safeStorage: { isEncryption
 vi.mock('node:fs', () => ({
   existsSync: (p: string) => !p.endsWith('.part') && !p.endsWith('.bin'),
   readFileSync: vi.fn(), writeFileSync: vi.fn(), rmSync: vi.fn(), statSync: () => ({ size: 0 }),
+  realpathSync: Object.assign((p: string) => p, { native: (p: string) => p }), // hub-logic resolves links (F4)
   statfsSync: () => ({ bavail: 100 * 1024 ** 3, bsize: 1 })
 }))
 vi.mock('../../src/core/hub/hf', () => ({
@@ -11,7 +12,7 @@ vi.mock('../../src/core/hub/hf', () => ({
 import { registerHubIpc } from '../../src/main/hub'
 import { downloadFile, listGgufFiles } from '../../src/core/hub/hf'
 
-it.fails('claims the single-download lock before awaiting the Hub listing', async () => {
+it('claims the single-download lock before awaiting the Hub listing', async () => {
   const handlers = new Map<string, (...args: any[]) => any>()
   registerHubIpc({ handle: (name: string, fn: any) => handlers.set(name, fn) } as any, () => null,
     { userDataDir: 'C:\\user', modelDirs: () => ['C:\\models'] })

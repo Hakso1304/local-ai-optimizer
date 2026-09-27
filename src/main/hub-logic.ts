@@ -1,5 +1,5 @@
 // Pure parts of the hub IPC (no Electron): progress/ETA, user-facing error text, disk and destination checks.
-import { existsSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { HubError } from '../core/hub/hf'
 import type { HubFailKind, HubProgress } from '../shared/hub-types'
@@ -30,10 +30,23 @@ export function userMessage(e: unknown): { kind: HubFailKind; error: string } {
   return { kind: e.kind, error: msg[e.kind] ?? e.message }
 }
 
-/** destDir must be one of the configured model dirs (or inside one) — never an arbitrary renderer-chosen path. */
+const within = (root: string, p: string) => { const r = relative(root, p); return r === '' || (!r.startsWith('..') && !isAbsolute(r)) }
+const real = (p: string): string | null => { try { return realpathSync.native(p) } catch { return null } }
+
+/** Real path of the nearest existing directory at or above dir (junctions/symlinks resolved); null if none exists. */
+export function resolvedProbe(dir: string): string | null {
+  const probe = nearestExisting(dir)
+  return probe ? real(probe) : null
+}
+
+/** destDir must be one of the configured model dirs (or inside one), never an arbitrary renderer-chosen path,
+ *  both lexically and after resolving links: a junction inside a model dir pointing elsewhere is rejected (W4b F4). */
 export function isAllowedDest(destDir: string, modelDirs: string[]): boolean {
   const d = resolve(destDir)
-  return modelDirs.some((m) => { const r = relative(resolve(m), d); return r === '' || (!r.startsWith('..') && !isAbsolute(r)) })
+  if (!modelDirs.some((m) => within(resolve(m), d))) return false
+  if (!nearestExisting(d)) return true // nothing exists yet (drive missing): the free-space check reports it
+  const rp = resolvedProbe(d)
+  return rp !== null && modelDirs.some((m) => { const rm = real(m); return rm !== null && within(rm, rp) })
 }
 
 /** Nearest existing directory at or above dir (for the free-space check before destDir is created); null when

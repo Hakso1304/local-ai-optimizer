@@ -26,6 +26,12 @@ export function insideSomeRoot(p: string, roots: string[]): boolean {
   return roots.some((d) => { const rd = real(d); return rd !== null && isInside(rd, rp) })
 }
 
+/** DB row ids from the renderer: positive safe integers only (throws otherwise). */
+export function rowId(v: unknown): number {
+  if (typeof v !== 'number' || !Number.isSafeInteger(v) || v <= 0) throw new Error(`bad id ${String(v)}`)
+  return v
+}
+
 const D = DEFAULT_CANDIDATE_RULES
 export const REQUIRED_CTX = [32768, 65536, 131072]
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)

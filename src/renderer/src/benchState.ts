@@ -47,13 +47,16 @@ const line = (e: SessionEvent): string | null => {
 export function applyEvent(s: LiveState, e: SessionEvent): LiveState {
   const l = line(e)
   const log = l ? [...s.log, `${new Date().toLocaleTimeString()} ${l}`].slice(-LOG_MAX) : s.log
-  // Pre-session warnings (e.g. a skipped model) carry sessionId '' — they must not blank the watched session.
-  const n = { ...s, log, sessionId: e.sessionId || s.sessionId }
+  // The watched id changes only on session:started. A late event from another session (e.g. the old one's
+  // cancelled/done after a new start) is ignored entirely; pre-session warnings ('' id) only add a log line (W4b F13).
+  if (e.type !== 'session:started' && e.sessionId && s.sessionId && e.sessionId !== s.sessionId) return s
+  const n = { ...s, log, sessionId: s.sessionId ?? (e.sessionId || null) }
   switch (e.type) {
     case 'session:started': return { ...initialLive, log, sessionId: e.sessionId, status: 'running', candidatesTotal: e.candidates ?? null }
-    case 'candidate:started': return { ...n, configId: e.configId, model: e.model, ctxSteps: e.ctxSteps, stepsDone: 0, phase: null, ctx: null, candidatesStarted: s.candidatesStarted + 1 }
+    // A new model/step must not show the previous one's rates and telemetry (W4b F14).
+    case 'candidate:started': return { ...n, configId: e.configId, model: e.model, ctxSteps: e.ctxSteps, stepsDone: 0, phase: null, ctx: null, rate: null, telemetry: null, candidatesStarted: s.candidatesStarted + 1 }
     case 'phase': return { ...n, configId: e.configId, ctx: e.ctx, phase: e.phase }
-    case 'step:started': return { ...n, ctx: e.ctx }
+    case 'step:started': return { ...n, ctx: e.ctx, rate: null, telemetry: null }
     case 'step:done': return { ...n, stepsDone: s.stepsDone + 1 }
     case 'telemetry': return { ...n, telemetry: e.sample }
     case 'token-rate': return { ...n, rate: { prefillTps: e.prefillTps, decodeTps: e.decodeTps, ttftMs: e.ttftMs } }
