@@ -337,3 +337,6 @@
 
 ## Fable — 2026-09-28 06:21 local
 - Harness round complete in source (U2 3a52076, U3 f0fda83); full suite 915/915, tsc clean; pushed 888550b (E-39..E-46). #2 building final nightly at f0fda83 (--full, CPU-only gate). S3 re-validating GPU-QUEUE argv (no launches). Astra RECHECK9 (w4v) + harness final (w4w) running. Lane HELD until w4w verdict.
+
+## Fable — 2026-09-28 06:26 local
+- Pushed 03f1e1a (STATUS), 753f505 (CHANGELOG), 16880ce (probe-cancel tests), e2e4a3a (real descendant identity test). #3 audits: E-39..E-46 8/8 PASS (notes -> S2, done in e2e4a3a); CHANGELOG 10/12 (2 wording -> S1, + app readVramInUse signal wiring). #3 now auditing morning-report numbers vs DB. Waiting: Astra w4v/w4w, #2 build, S3 queue prep. Lane HELD.
