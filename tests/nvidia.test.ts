@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events'
 import type { ChildProcess } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { parseCudaVersion, parseQueryLine, probeNvidiaSmi, startNvidiaSampler, type Exec } from '../src/core/telemetry/nvidia'
-import { pickReleaseAsset, type ReleaseAsset } from '../src/core/runtimes/llamacpp/assets'
+import { expectedSha256, pickReleaseAsset, pickRocmAsset, type ReleaseAsset } from '../src/core/runtimes/llamacpp/assets'
 
 const MiB = 1024 ** 2
 // Real output on the AMD dev machine (stale NVIDIA driver), captured 2026-09-27 — exit code 4.
@@ -85,6 +85,15 @@ describe('pickReleaseAsset (real b11208 asset list)', () => {
   const assets = (JSON.parse(readFileSync(join(__dirname, 'fixtures/llamacpp-release-b11208.json'), 'utf8')) as { assets: ReleaseAsset[] }).assets
   const names = (p: ReturnType<typeof pickReleaseAsset>) => [p.main?.name ?? null, p.extra?.name ?? null, p.fallback?.name ?? null]
 
+  it('opt-in ROCm/HIP asset: the win-rocm x64 zip (never the ubuntu one), sha256 from the verified table or the API digest', () => {
+    const r = pickRocmAsset(assets)!
+    expect(r.name).toBe('llama-b11208-bin-win-rocm-10.0-x64.zip')
+    expect(r.size).toBe(257_364_326) // docs/HIP-BACKEND.md §1
+    expect(expectedSha256(r)).toBe('769c6476e709f890ac68b3e3c265fc7ab88d0e866ab3aacb67c182dd81db034a')
+    expect(expectedSha256({ ...r, name: 'x.zip', digest: 'sha256:ABC' })).toBe('abc')
+    expect(expectedSha256({ ...r, name: 'x.zip' })).toBeNull()
+    expect(pickRocmAsset(assets.filter((a) => !a.name.includes('win-rocm')))).toBeNull()
+  })
   it('AMD / Intel / other → Vulkan, with Vulkan fallback', () => {
     for (const vendor of ['amd', 'intel', 'other'] as const) {
       expect(names(pickReleaseAsset(assets, { vendor }))).toEqual(['llama-b11208-bin-win-vulkan-x64.zip', null, 'llama-b11208-bin-win-vulkan-x64.zip'])

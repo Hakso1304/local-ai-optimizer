@@ -84,6 +84,7 @@ export function sanitizeRequest(raw: unknown, modelRoots: string[]): { ok: true;
       ...(reps !== null ? { reps: Math.min(5, Math.max(1, Math.round(reps))) } : {}),
       ...(bool(r.runQuality) !== undefined ? { runQuality: bool(r.runQuality) } : {}),
       ...(bool(r.heavyMode) !== undefined ? { heavyMode: bool(r.heavyMode) } : {}),
+      ...(bool(r.compareBackends) !== undefined ? { compareBackends: bool(r.compareBackends) } : {}),
       ...(bool(r.retryFailed) !== undefined ? { retryFailed: bool(r.retryFailed) } : {}),
       ...(rerun?.length ? { rerunConfigIds: rerun } : {}),
       ...(sanitizeRules(r.candidateRules) ? { candidateRules: sanitizeRules(r.candidateRules) } : {})

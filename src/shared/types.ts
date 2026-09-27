@@ -1,5 +1,5 @@
 // Types shared between main, preload and renderer. No runtime code here.
-import type { BenchmarkRunResult, CandidateConfig, CliffReport, GenKnobs, GenQuality, ModelMeta, QualityResult, Recommendation, WorkloadId, WorkloadProfile, WorkloadScore } from './bench-types'
+import type { BenchmarkRunResult, CandidateConfig, CliffReport, GenKnobs, GpuBackendKind, GenQuality, ModelMeta, QualityResult, Recommendation, WorkloadId, WorkloadProfile, WorkloadScore } from './bench-types'
 import type { SessionEvent, SessionRequest, TelemetrySample } from './bench-events'
 
 export type Status = 'available' | 'unavailable' | 'unsupported'
@@ -29,6 +29,16 @@ export interface DiskInfo {
   mount: string
   totalBytes: number
   freeBytes: number
+}
+
+export interface InstalledRuntime {
+  kind: GpuBackendKind
+  vendorDir: string
+  exePath: string
+  /** release tag from the install marker + llama-server --version; null when not installed / not runnable */
+  build: string | null
+  status: Status
+  error?: string
 }
 
 export interface RuntimeDetection {
@@ -210,6 +220,10 @@ export interface RendererApi {
   resumeBench(sessionId: number, opts?: { retryFailed?: boolean; rerunConfigIds?: string[] }): Promise<StartResult>
   /** Download + install the llama.cpp runtime (first run / packaged app). Progress via onRuntimeProgress. */
   installRuntime(): Promise<RuntimeDetection>
+  /** Opt-in AMD ROCm/HIP build (~245 MiB) into its own dir, same release tag as the installed Vulkan build. */
+  installHipRuntime(): Promise<RuntimeDetection>
+  /** llama.cpp backends installed side by side (each checked with its own llama-server --version). */
+  installedBackends(): Promise<InstalledRuntime[]>
   onRuntimeProgress(cb: (msg: string) => void): () => void
   /** Subscribe to bench:event; returns an unsubscribe function. */
   onBenchEvent(cb: (e: SessionEvent) => void): () => void

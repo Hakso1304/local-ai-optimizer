@@ -18,6 +18,12 @@ export function BenchmarkPage({ live, preset, onDownload }: { live: LiveState; p
   const [quality, setQuality] = useState(true)
   const [heavy, setHeavy] = useState(false)
   const [genSearch, setGenSearch] = useState(true)
+  // Vulkan vs ROCm/HIP: offered (and on by default) only when both builds are installed.
+  const [bothBackends, setBothBackends] = useState(false)
+  const [compareBackends, setCompareBackends] = useState(true)
+  useEffect(() => {
+    window.api.installedBackends().then((bs) => setBothBackends(bs.filter((b) => b.status === 'available').length > 1), () => setBothBackends(false))
+  }, [])
   const [qualityMode, setQualityMode] = useState<'thorough' | 'quick'>('thorough')
   const [reqCtx, setReqCtx] = useState(0) // 0 = Auto (workload default)
   const [minDec, setMinDec] = useState('') // blank = workload default
@@ -58,7 +64,7 @@ export function BenchmarkPage({ live, preset, onDownload }: { live: LiveState; p
     if (!workload) return
     setMsg(null)
     const r = await window.api.startBench({
-      workload, modelIds: [...picked], runQuality: quality, heavyMode: heavy, genSearch, qualityMode, ...(reqCtx ? { requiredContext: reqCtx } : {}), ...(minDec.trim() ? { minDecodeTps: Number(minDec) } : {}), ...(maxCtx ? { ladder: LADDER.filter((c) => c <= maxCtx) } : {})
+      workload, modelIds: [...picked], runQuality: quality, heavyMode: heavy, genSearch, qualityMode, ...(bothBackends ? { compareBackends } : {}), ...(reqCtx ? { requiredContext: reqCtx } : {}), ...(minDec.trim() ? { minDecodeTps: Number(minDec) } : {}), ...(maxCtx ? { ladder: LADDER.filter((c) => c <= maxCtx) } : {})
     })
     if (!r.ok) setMsg(r.error)
   }
@@ -104,6 +110,11 @@ export function BenchmarkPage({ live, preset, onDownload }: { live: LiveState; p
         <label title="Models whose full GPU offload does not fit get a partial-offload ladder (slow, flagged degraded)">
           <input type="checkbox" checked={heavy} onChange={(e) => setHeavy(e.target.checked)} disabled={running} /> Include heavy models (partial GPU offload, degraded speed)
         </label>
+        {bothBackends && (
+          <label title="Plan every config on both llama.cpp builds (same release): the usable VRAM and speed differ per backend on AMD">
+            <input type="checkbox" checked={compareBackends} onChange={(e) => setCompareBackends(e.target.checked)} disabled={running} /> Compare backends (Vulkan / HIP)
+          </label>
+        )}
         <label title="For thinking-capable models: also run the quality suite with thinking on (and each reasoning-effort level the template offers), using the model card's sampling when known">
           <input type="checkbox" checked={genSearch} onChange={(e) => setGenSearch(e.target.checked)} disabled={running || !quality} /> Search generation settings (thinking / effort / temperature)
         </label>
@@ -148,7 +159,7 @@ export function BenchmarkPage({ live, preset, onDownload }: { live: LiveState; p
       <h2>Live {live.sessionId && <span className="muted">session {live.sessionId} — {live.status}</span>}</h2>
       {live.error && <p className="err">{live.error}</p>}
       <div className="tiles">
-        <div className="tile"><span className="muted">Model / config</span>{live.model ?? '—'}<span className="muted">{live.configId ?? ''}</span>{partial && <span className="pill warn-pill">partial offload — degraded</span>}</div>
+        <div className="tile"><span className="muted">Model / config</span>{live.model ?? '—'}<span className="muted">{live.configId ?? ''}</span>{/\|hip$/.test(live.configId ?? '') && <span className="pill">ROCm (HIP)</span>}{partial && <span className="pill warn-pill">partial offload — degraded</span>}</div>
         <div className="tile"><span className="muted">Phase / ctx</span>{live.phase ?? '—'} {live.ctx != null && `@ ${fmtCtx(live.ctx)}`}</div>
         <div className="tile"><span className="muted">Progress</span>step {live.stepsDone}/{live.ctxSteps.length || '—'}{live.ctxSteps.length > 0 && ` (ladder up to ${fmtCtx(Math.max(...live.ctxSteps))})`}, config {live.candidatesDone}/{live.candidatesTotal ?? '—'}</div>
       </div>

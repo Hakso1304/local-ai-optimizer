@@ -2,7 +2,7 @@
 // Runner path: loadConfigFor → LlamaCppBackend.loadModel (spawn captured); export path: exportConfigFrom → toLlamaServerArgs.
 import { describe, expect, it } from 'vitest'
 import { loadConfigFor } from '../src/core/benchmark/session'
-import { exportConfigFrom, toLlamaServerArgs } from '../src/core/export/config'
+import { exportConfigFrom, toLlamaServerArgs, toLlamaServerCommand } from '../src/core/export/config'
 import { LlamaCppBackend } from '../src/core/runtimes/llamacpp'
 import type { CandidateConfig, ModelMeta, Recommendation } from '../src/shared/bench-types'
 
@@ -32,7 +32,8 @@ const variants: [string, CandidateConfig][] = [
   ['full offload f16', base],
   ['partial q8_0 KV, fa off', { ...base, gpuLayersAll: false, gpuLayers: 20, kvType: 'q8_0', flashAttn: false }],
   ['heavy: -nkvo, -lm none', { ...base, gpuLayersAll: false, gpuLayers: 55, kvOffload: false, mmap: false }],
-  ['CPU only', { ...base, device: null, gpuLayersAll: false, gpuLayers: 0, kvType: 'q8_0' }]
+  ['CPU only', { ...base, device: null, gpuLayersAll: false, gpuLayers: 0, kvType: 'q8_0' }],
+  ['ROCm/HIP build: -dev ROCm0', { ...base, id: 'c|hip', backend: 'hip', device: 'ROCm0' }]
 ]
 
 describe('T06 export equivalence', () => {
@@ -45,4 +46,16 @@ describe('T06 export equivalence', () => {
     // the flags that matter are actually present (not both-missing)
     for (const f of ['-m', '-c', '-ngl', '-t', '-b', '-ub', '-fa', '-dev', '--parallel', '-fit', '--cache-ram']) expect(ran).toHaveProperty(f)
   })
+})
+
+it('export carries the measured backend (the app picks that build\'s llama-server) and HIP devices as -dev ROCm0', () => {
+  const cand = variants.at(-1)![1]
+  const rec = { workload: 'coding', best: { configId: cand.id, score: { recommendedCtx: 8192, referenceCtx: 8192 } } } as unknown as Recommendation
+  const c = exportConfigFrom(rec, cand, model, '1')!
+  expect(c.backend).toBe('hip')
+  const exe = String.raw`C:\rt\llama.cpp-hip\llama-server.exe`
+  const cmd = toLlamaServerCommand(c, exe)
+  expect(cmd.startsWith(`${exe} -m `)).toBe(true)
+  expect(cmd).toContain(' -dev ROCm0 ')
+  expect(exportConfigFrom(rec, { ...cand, backend: undefined }, model, '1')!.backend).toBe('vulkan') // pre-HIP sessions
 })

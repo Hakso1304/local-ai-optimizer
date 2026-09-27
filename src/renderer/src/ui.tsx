@@ -45,3 +45,10 @@ export function CtxPick({ recommended, scored }: { recommended: number | null | 
   if (recommended == null) return <span className="muted" title="no passing step fits the workload latency tolerance">—</span>
   return <span>{fmtCtx(recommended)} <Prov kind="measured" />{scored != null && scored !== recommended && <span className="muted"> (scored at {fmtCtx(scored)})</span>}</span>
 }
+
+/** Backend a config runs on, for labels: device null = CPU; absent backend = Vulkan (pre-HIP sessions). */
+export function backendLabel(c: { backend?: string; device: string | null }): string {
+  if (!c.device) return 'llama.cpp CPU'
+  const kind = c.backend === 'hip' ? 'ROCm (HIP)' : c.backend === 'cuda' ? 'CUDA' : 'Vulkan'
+  return `llama.cpp ${kind} (${c.device})`
+}

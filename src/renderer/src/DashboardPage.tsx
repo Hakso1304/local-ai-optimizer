@@ -4,7 +4,7 @@ import type { SessionDetail, SystemProfile } from '../../shared/types'
 import { ENGINE_RULES, Reason, cardInsights, insightsOf, rulesOf } from './InterpretPanel'
 import type { Insight } from '../../shared/interpret-types'
 import { LARGE, LARGE_PRESET, LargeCodingCard, presetFor, type BenchPreset } from './LargeCodingCard'
-import { COMPONENT_LABEL, CtxPick, DemoBanner, M, ScoreBar, fmtCtx, gib } from './ui'
+import { COMPONENT_LABEL, CtxPick, DemoBanner, M, ScoreBar, backendLabel, fmtCtx, gib } from './ui'
 
 type Go = (section: 'Benchmark' | 'Results', sessionId?: number, preset?: BenchPreset) => void
 
@@ -60,7 +60,7 @@ function RecommendedCard({ d, go }: { d: SessionDetail; go: Go }) {
               <tr><td>Context</td><td><CtxPick recommended={rec.best.score.recommendedCtx} scored={rec.best.score.referenceCtx} /></td></tr>
               {d.session.requiredContext != null && <tr><td>Required context</td><td>{fmtCtx(d.session.requiredContext)} {(rec.best.practicalContext.value ?? 0) >= d.session.requiredContext ? <span className="pill">met</span> : <span className="pill warn-pill">not met</span>}</td></tr>}
               <tr><td>Practical ceiling</td><td><M m={rec.best.practicalContext} fmt={fmtCtx} /> <span className="muted">(model declares <M m={rec.best.declaredContext} fmt={fmtCtx} />)</span></td></tr>
-              <tr><td>Backend</td><td>{c.config.device ? `llama.cpp Vulkan (${c.config.device})` : 'llama.cpp CPU'}</td></tr>
+              <tr><td>Backend</td><td>{backendLabel(c.config)}</td></tr>
               <tr><td>GPU layers</td><td>{c.config.gpuLayersAll ? `all (${c.model.layers})` : c.config.gpuLayers}</td></tr>
               <tr><td>Threads</td><td>{c.config.threads}</td></tr>
               <tr><td>Score</td><td>{rec.best.score.total.toFixed(1)} / 100{rec.best.fallback && <span className="pill warn-pill">{rec.best.fallback}</span>}</td></tr>

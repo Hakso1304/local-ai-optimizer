@@ -13,8 +13,8 @@ import { REQUIRED_CTX, insideSomeRoot, isWorkloadId, rowId, sanitizeRequest } fr
 import { registerHubIpc } from './hub'
 import { WORKLOADS } from '../core/scoring/workloads'
 import { val } from '../core/scoring/cliff'
-import { runSession, type SessionStorage } from '../core/benchmark/session'
-import { generateCandidates, machineFromProfile, rulesForRequest, vramBudgetKey } from '../core/benchmark/candidates'
+import { runSession, type InstalledBackend, type SessionStorage } from '../core/benchmark/session'
+import { generateCandidates, machineFromProfile, planCandidates, rulesForRequest, vramBudgetKey, type PlannedBackend } from '../core/benchmark/candidates'
 import { findGgufModels, toModelMeta } from '../core/models/gguf'
 import { fetchGenerationConfig, readSidecar, writeSidecar } from '../core/hub/modelcard'
 import { defaultLmStudioDirs, defaultOllamaRoot, listOllamaModels, toModelInfo as toOllamaModelInfo } from '../core/runtimes/ollama/models'
@@ -22,9 +22,9 @@ import { readVramInUse, startSampler, stopAllSamplers, withNvidia } from '../cor
 import { probeNvidiaSmi, startNvidiaSampler, type NvidiaProbe } from '../core/telemetry/nvidia'
 import { evaluateAsync } from '../core/quality'
 import type { SessionEvent, SessionRequest } from '../shared/bench-events'
-import type { CandidateConfig, ModelMeta, WorkloadId } from '../shared/bench-types'
+import type { CandidateConfig, GpuBackendKind, ModelMeta, WorkloadId } from '../shared/bench-types'
 import { recommendForWorkload } from '../core/scoring/recommend'
-import type { AppSettings, ComputedRecommendation, ModelFit, ModelInfo, SmokeResult, StartResult, SystemProfile } from '../shared/types'
+import type { AppSettings, InstalledRuntime, ComputedRecommendation, ModelFit, ModelInfo, SmokeResult, StartResult, SystemProfile } from '../shared/types'
 
 // Dev/test runs get their own userData so they never write the installed app's database or settings.
 // Must run before anything calls app.getPath('userData') (the llama pid file below does).
@@ -41,6 +41,8 @@ app.on('second-instance', () => {
 // Dev: runtime + sample models live in the project. Packaged: app dir is read-only (asar), so the runtime is
 // downloaded on first run into userData and models come from userData/models + settings.modelDirs.
 const llamaDir = () => (app.isPackaged ? join(app.getPath('userData'), 'runtime', 'llama.cpp') : join(app.getAppPath(), 'vendor', 'llama.cpp'))
+/** Opt-in ROCm/HIP build, side by side with the Vulkan one (docs/HIP-BACKEND.md §2); dev: vendor/llama.cpp-hip. */
+const hipDir = () => (app.isPackaged ? join(app.getPath('userData'), 'runtime', 'llama.cpp-hip') : join(app.getAppPath(), 'vendor', 'llama.cpp-hip'))
 const bundledModelsDir = () => (app.isPackaged ? join(app.getPath('userData'), 'models') : join(app.getAppPath(), 'models'))
 
 const settingsFile = () => join(app.getPath('userData'), 'settings.json')
@@ -95,6 +97,19 @@ function refreshModelCards(ms: ModelInfo[]): void {
 const modelRoots = () => [...modelDirs(), ...defaultLmStudioDirs(), join(defaultOllamaRoot(), 'blobs')]
 
 const llama = new LlamaCppBackend(llamaDir(), { pidFile: join(app.getPath('userData'), 'llama-server.pid') })
+const llamaHip = new LlamaCppBackend(hipDir(), { pidFile: join(app.getPath('userData'), 'llama-server-hip.pid') })
+const markerOf = (dir: string): string | null => { try { return readFileSync(join(dir, 'release-tag.txt'), 'utf8').trim() } catch { return null } }
+
+/** Each installed llama.cpp backend, detected on its own (a HIP build that fails --version never hides Vulkan). */
+async function installedBackends(): Promise<InstalledRuntime[]> {
+  const one = async (b: LlamaCppBackend, dir: string, kind: GpuBackendKind): Promise<InstalledRuntime> => {
+    const d = await b.detect()
+    return { kind, vendorDir: dir, exePath: b.exePath, build: d.status === 'available' ? d.version ?? null : null, status: d.status, ...(d.error ? { error: d.error } : {}) }
+  }
+  // the primary dir holds a CUDA build when the installer chose one (marker "<tag> cuda-X.Y")
+  const primaryKind: GpuBackendKind = /\bcuda-/.test(markerOf(llamaDir()) ?? '') ? 'cuda' : 'vulkan'
+  return Promise.all([one(llama, llamaDir(), primaryKind), one(llamaHip, hipDir(), 'hip')])
+}
 let smokeBusy = false
 let db: DatabaseSync | null = null
 const DEMO = process.env.LAO_SEED_DEMO === '1'
@@ -161,6 +176,20 @@ ipcMain.handle('runtime:install', async () => {
     const vendor = gpu?.vendor ?? 'other'
     const nv = vendor === 'nvidia' ? await nvidia() : null
     return llama.ensureRuntime(progress, { vendor, cudaMajor: nv?.available ? nv.cudaVersion?.major : undefined })
+  })()
+  try { return await installing } finally { installing = null }
+})
+ipcMain.handle('runtime:backends', () => installedBackends())
+ipcMain.handle('runtime:installHip', async () => {
+  if (installing) throw new Error('runtime install already running')
+  if (active || smokeBusy) throw new Error('a benchmark is running; install the runtime after it finishes')
+  const progress = (msg: string) => { for (const w of BrowserWindow.getAllWindows()) w.webContents.send('runtime:progress', msg) }
+  installing = (async () => {
+    profileCache ??= await scanSystem()
+    if (!(profileCache.gpus.value ?? []).some((g) => g.vendor === 'amd' && !g.isIntegrated)) throw new Error('the ROCm/HIP build is for AMD GPUs; no discrete AMD GPU was found')
+    // same llama.cpp build as the installed Vulkan runtime, so a backend A/B isolates the backend
+    const tag = markerOf(llamaDir())?.split(/\s+/)[0]
+    return llamaHip.ensureRuntime(progress, { vendor: 'amd', hip: true, ...(tag ? { tag } : {}) })
   })()
   try { return await installing } finally { installing = null }
 })
@@ -286,17 +315,30 @@ async function startSession(req: SessionRequest, storedMachine?: SystemProfile, 
     }
     if (!models.length) throw new Error('none of the selected models can be benchmarked')
     const backendKind = device ? 'vulkan' as const : 'cpu' as const
+    // Installed backends, each with its OWN device id (Vulkan0 / ROCm0) from its own --list-devices. The opt-in HIP
+    // build joins only when it runs and enumerates the GPU; otherwise the session is Vulkan-only and says why.
+    const backends: InstalledBackend[] = [{ kind: 'vulkan', backend: () => llama, runtimeVersion: runtime.version ?? null, exePath: llama.exePath, device }]
+    const hipRt = await llamaHip.detect()
+    if (hipRt.status === 'available' && req.compareBackends !== false) {
+      const hipDev = pickDiscreteDevice(await llamaHip.listDevices().catch(() => []))?.id ?? null
+      if (hipDev) backends.push({ kind: 'hip', backend: () => llamaHip, runtimeVersion: hipRt.version ?? null, exePath: llamaHip.exePath, device: hipDev })
+      else sendBenchEvent({ sessionId: '', type: 'log', level: 'warn', msg: 'ROCm (HIP) build installed but it lists no discrete GPU (llama-server --list-devices): comparing on Vulkan only' })
+    }
     const nvOk = (await nvidia()).available
-    // Same deterministic candidate generation the runner does (rulesForRequest keeps heavyMode), so stored sessions
-    // carry full configs.
+    // Same deterministic candidate generation the runner does (planCandidates over the same backends, rulesForRequest
+    // keeps heavyMode), so stored sessions carry full configs with identical ids.
     const planFor: PlanFor = (r) => {
-      // Same per-process budget observations the runner reads (key: GPU + driver + backend build).
-      const bk = vramBudgetKey(profile, backendKind, runtime.version)
-      const machine = machineFromProfile(profile, device, undefined, bk ? listVramBudget(needDb(), bk.key) : [])
+      // Per backend: the per-process budget observations the runner reads (key: GPU + driver + backend build).
+      const planned: PlannedBackend[] = backends.map((b) => {
+        const kind = b.device ? b.kind : 'cpu' as const
+        const bk = vramBudgetKey(profile, kind, b.runtimeVersion)
+        return { kind, device: b.device, runtimeVersion: b.runtimeVersion, observations: bk ? listVramBudget(needDb(), bk.key) : [] }
+      })
+      const machine = machineFromProfile(profile, device, undefined, planned[0].observations ?? [])
       return {
         machine: profile,
         vramBytes: val(machine.vramBytes, true),
-        candidates: models.flatMap((model) => generateCandidates(machine, model, { backend: backendKind }, WORKLOADS[r.workload], rulesForRequest(r)).candidates.map((config) => ({ config, model })))
+        candidates: models.flatMap((model) => planCandidates(profile, model, planned, WORKLOADS[r.workload], rulesForRequest(r)).candidates.map((config) => ({ config, model })))
       }
     }
     let gotId: (id: string) => void = () => {}
@@ -305,7 +347,7 @@ async function startSession(req: SessionRequest, storedMachine?: SystemProfile, 
     const storage: SessionStorage = { ...base, createSession: async (s) => { const id = await base.createSession(s); gotId(id); return id } }
     if (req.resumeSessionId) gotId(req.resumeSessionId)
     const run = runSession(req, {
-      backend: () => llama, storage, machine: profile, gpuDevice: device, backendKind,
+      backend: () => llama, backends, storage, machine: profile, gpuDevice: device, backendKind,
       // PDH (all vendors) + nvidia-smi temp/power when it works (NVIDIA only; AMD has no non-admin source).
       startSampler: (pid) => withNvidia(startSampler({ pid }), nvOk ? startNvidiaSampler() : null),
       models, clock: Date, readRamAvailableBytes: () => freemem(), evaluate: evaluateAsync,
@@ -341,8 +383,10 @@ app.whenReady().then(async () => {
   if (n) console.warn(`${n} session(s) marked interrupted`)
   const fixtures = join(app.getAppPath(), 'tests', 'fixtures', 'scoring')
   if (DEMO && existsSync(fixtures)) seedDemoSession(db, fixtures) // dev-only: fixtures are not packaged
-  const stale = await killStaleServer(join(app.getPath('userData'), 'llama-server.pid')).catch((e: Error) => `stale-server check failed: ${e.message}`)
-  if (stale) console.warn(stale)
+  for (const pid of ['llama-server.pid', 'llama-server-hip.pid']) {
+    const stale = await killStaleServer(join(app.getPath('userData'), pid)).catch((e: Error) => `stale-server check failed: ${e.message}`)
+    if (stale) console.warn(stale)
+  }
   createWindow()
 })
 app.on('window-all-closed', () => app.quit())

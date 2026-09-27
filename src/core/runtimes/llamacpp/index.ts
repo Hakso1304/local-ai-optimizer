@@ -11,7 +11,7 @@ import { pipeline } from 'node:stream/promises'
 import type { ReadableStream as WebReadableStream } from 'node:stream/web'
 import { runPowerShell, runProcess } from '../../exec'
 import type { GpuVendor, RuntimeDetection } from '../../../shared/types'
-import { pickReleaseAsset, type ReleaseAsset } from './assets'
+import { expectedSha256, pickReleaseAsset, pickRocmAsset, type ReleaseAsset } from './assets'
 import { getJson, type HealthStatus, type InferenceBackend, type LoadConfig, type LoadResult, type ModelInfo, type PromptRequest, type PromptResult, type RuntimeStats } from '../types'
 import { acceptedSampling, classifyExit, emptyDeclared, parseDevices, parseLogLine, parseSse, toPromptResult, type CompletionChunk, type ExitReason, type LlamaDevice } from './parse'
 
@@ -21,7 +21,7 @@ export const VULKAN_ASSET = /^llama-.+-bin-win-vulkan-x64\.zip$/
 interface GhRelease {
   tag_name: string
   draft: boolean
-  assets: { name: string; browser_download_url: string; size: number }[]
+  assets: ReleaseAsset[]
 }
 
 /** Pick the newest release that actually ships a Windows Vulkan x64 zip.
@@ -198,8 +198,20 @@ export class LlamaCppBackend implements InferenceBackend {
   /** Download + extract the newest official Windows build for this GPU into vendorDir if not installed.
    *  NVIDIA with a CUDA-capable driver → CUDA build + cudart (same dir); anything else, or any CUDA failure → Vulkan.
    *  Installed = release-tag.txt ("<tag> <build>") exists; it is written last, after an atomic rename. */
-  async ensureRuntime(log: (m: string) => void = () => {}, pref: { vendor: GpuVendor; cudaMajor?: number } = { vendor: 'other' }): Promise<RuntimeDetection> {
+  async ensureRuntime(log: (m: string) => void = () => {}, pref: { vendor: GpuVendor; cudaMajor?: number; hip?: boolean; tag?: string } = { vendor: 'other' }): Promise<RuntimeDetection> {
     if (existsSync(join(this.vendorDir, 'release-tag.txt'))) return this.detect()
+    // Opt-in ROCm/HIP build into this (separate) vendorDir, at the installed Vulkan build's tag when given so an A/B
+    // compares backends of the same llama.cpp build. Marker "<tag> hip".
+    if (pref.hip) {
+      const rel = pref.tag
+        ? await getJson<GhRelease>(`${RELEASES_URL.split('?')[0]}/tags/${encodeURIComponent(pref.tag)}`, 15_000)
+        : (await getJson<GhRelease[]>(RELEASES_URL, 15_000)).find((r) => !r.draft && pickRocmAsset(r.assets))
+      const asset = rel ? pickRocmAsset(rel.assets) : null
+      if (!rel || !asset) throw new Error(`no win-rocm-x64 build in ${pref.tag ? `release ${pref.tag}` : 'the latest releases'}`)
+      log(`AMD GPU: opt-in ROCm/HIP build ${asset.name}`)
+      await this.installAssets(rel.tag_name, [asset], 'hip', log)
+      return this.detect()
+    }
     const releases = await getJson<GhRelease[]>(RELEASES_URL, 15_000)
     const rel = releases.find((r) => !r.draft && pickReleaseAsset(r.assets, pref).main)
     if (!rel) throw new Error(`no release among the latest ${releases.length} has a usable Windows build`)
@@ -231,14 +243,19 @@ export class LlamaCppBackend implements InferenceBackend {
         if (!res.ok || !res.body) throw new Error(`download ${asset.browser_download_url} -> HTTP ${res.status}`)
         let received = 0
         let shown = -1
+        const sha = createHash('sha256')
         const body = Readable.fromWeb(res.body as WebReadableStream).on('data', (c: Buffer) => {
           received += c.length
+          sha.update(c)
           const pct = Math.floor((received * 100) / asset.size / 5) * 5
           if (pct !== shown) { shown = pct; log(`downloading ${asset.name} ${pct}%`) }
         })
         await pipeline(body, createWriteStream(zip))
         const got = statSync(zip).size
         if (got !== asset.size) throw new Error(`download truncated: ${got} of ${asset.size} bytes`)
+        const want = expectedSha256(asset), have = sha.digest('hex')
+        if (want && want !== have) throw new Error(`sha256 mismatch for ${asset.name}: got ${have}, expected ${want}`)
+        log(want ? `sha256 verified (${have.slice(0, 12)}…)` : `sha256 ${have} (no published digest to compare)`)
         log(`extracting ${asset.name}`)
         const q = (s: string) => `'${s.replace(/'/g, "''")}'`
         await runPowerShell(`Expand-Archive -LiteralPath ${q(zip)} -DestinationPath ${q(tmp)} -Force`, 5 * 60_000)

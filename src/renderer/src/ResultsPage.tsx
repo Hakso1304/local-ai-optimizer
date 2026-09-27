@@ -13,7 +13,7 @@ import { LineChart, type Band } from './LineChart'
 import { ParetoChart } from './ParetoChart'
 import { SloFilter, type SloCheck } from './SloFilter'
 import { TelemetryChart } from './TelemetryChart'
-import { CtxPick, DemoBanner, M, Prov, fmtCtx, gib, num } from './ui'
+import { CtxPick, DemoBanner, M, Prov, backendLabel, fmtCtx, gib, num } from './ui'
 
 const RESUMABLE = new Set(['cancelled', 'failed', 'paused', 'interrupted'])
 const COLORS = ['#58a6ff', '#f0883e', '#a371f7', '#3fb950', '#db61a2']
@@ -142,7 +142,7 @@ function Detail({ d, onRerun, go }: { d: SessionDetail; onRerun: (configId: stri
                 <td>{c.model.name}{rec?.best?.configId === c.config.id && <span className="pill">best</span>}
                   {!fit.ok && <span className="pill warn-pill">{rec?.best?.configId === c.config.id ? 'outside your constraints' : 'filtered'}: {fit.failed.join(', ')}</span>}</td>
                 <td>{c.model.quant ?? '—'} <Prov kind="declared" /></td>
-                <td className="muted">ngl {c.config.gpuLayersAll ? 'all' : c.config.gpuLayers}, kv {c.config.kvType}, t {c.config.threads}
+                <td className="muted">{c.config.backend === 'hip' && <span className="pill" title={backendLabel(c.config)}>HIP</span>}ngl {c.config.gpuLayersAll ? 'all' : c.config.gpuLayers}, kv {c.config.kvType}, t {c.config.threads}
                   {c.config.expectDegraded && <span className="pill warn-pill" title={c.config.degradedReason ?? ''}>partial offload — degraded</span>}</td>
                 <td><CtxPick recommended={c.score?.recommendedCtx} scored={c.score?.referenceCtx} /></td>
                 {req != null && <td>{meets(c) ? <span className="pill">met</span> : <span className="pill warn-pill" title={`practical ceiling ${c.cliff.practicalContextCeiling.value != null ? fmtCtx(c.cliff.practicalContextCeiling.value) : 'none'}`}>not met</span>}</td>}

@@ -27,6 +27,8 @@ const api: RendererApi & HubApi = {
   pauseBench: () => ipcRenderer.invoke('bench:pause'),
   resumeBench: (id, opts) => ipcRenderer.invoke('bench:resume', id, opts),
   installRuntime: () => ipcRenderer.invoke('runtime:install'),
+  installHipRuntime: () => ipcRenderer.invoke('runtime:installHip'),
+  installedBackends: () => ipcRenderer.invoke('runtime:backends'),
   onRuntimeProgress: (cb) => {
     const h = (_e: IpcRendererEvent, msg: string) => cb(msg)
     ipcRenderer.on('runtime:progress', h)

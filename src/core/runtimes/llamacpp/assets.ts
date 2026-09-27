@@ -9,7 +9,24 @@ export interface ReleaseAsset {
   name: string
   size: number
   browser_download_url: string
+  /** GitHub releases API "sha256:<hex>" (newer releases); checked after download when present. */
+  digest?: string
 }
+
+const ROCM = /^llama-b\d+-bin-win-rocm-[\d.]+-x64\.zip$/
+/** Opt-in AMD ROCm/HIP build (docs/HIP-BACKEND.md §1): one zip carries every supported gfx target (RDNA1–RDNA4);
+ *  null if the release has none. */
+export function pickRocmAsset(assets: ReleaseAsset[]): ReleaseAsset | null {
+  return assets.find((a) => ROCM.test(a.name)) ?? null
+}
+
+/** sha256 of assets verified by hand (docs/HIP-BACKEND.md §1), for releases whose API entry has no digest. */
+export const KNOWN_SHA256: Record<string, string> = {
+  'llama-b11208-bin-win-rocm-10.0-x64.zip': '769c6476e709f890ac68b3e3c265fc7ab88d0e866ab3aacb67c182dd81db034a'
+}
+/** Expected sha256 (hex) of an asset, or null when neither the API nor the table knows it. */
+export const expectedSha256 = (a: ReleaseAsset): string | null =>
+  (a.digest?.startsWith('sha256:') ? a.digest.slice(7).toLowerCase() : null) ?? KNOWN_SHA256[a.name] ?? null
 
 export interface AssetPick {
   /** What to install; null only if the release has neither a usable CUDA nor a Vulkan build. */

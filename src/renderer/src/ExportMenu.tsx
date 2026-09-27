@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { exportConfigFrom, provenanceNote, toJson, toLlamaServerCommand, toLmStudioSettings, toOllamaModelfile } from '../../core/export/config'
 import { templateKwargsFor } from '../../core/benchmark/gen'
 import type { Recommendation } from '../../shared/bench-types'
@@ -8,6 +8,8 @@ import type { SessionCandidate } from '../../shared/types'
  *  LM Studio outputs are translations (LM Studio keys unverified). */
 export function ExportMenu({ rec, cand, sessionId, ctx }: { rec: Recommendation; cand: SessionCandidate | undefined; sessionId: number; ctx?: number | null }) {
   const [done, setDone] = useState<string | null>(null)
+  const [exes, setExes] = useState<Record<string, string | null>>({})
+  useEffect(() => { window.api.installedBackends().then((bs) => setExes(Object.fromEntries(bs.map((b) => [b.kind, b.status === 'available' ? b.exePath : null]))), () => {}) }, [])
   const base = cand ? exportConfigFrom(rec, cand.config, cand.model, String(sessionId)) : null
   // An interpretation "use-context" action can pin -c (e.g. the last clean rung); otherwise recommendedCtx.
   const cfg = base && ctx ? { ...base, ctx } : base
@@ -20,7 +22,13 @@ export function ExportMenu({ rec, cand, sessionId, ctx }: { rec: Recommendation;
     `--temp ${gen.temperature}`, gen.topP !== undefined ? `--top-p ${gen.topP}` : '', gen.topK !== undefined ? `--top-k ${gen.topK}` : '',
     gen.minP !== undefined ? `--min-p ${gen.minP}` : '', kwargs ? `--chat-template-kwargs "${JSON.stringify(kwargs).replace(/"/g, '\\"')}"` : ''
   ].filter(Boolean).join(' ') : ''
-  const command = () => [toLlamaServerCommand(cfg), genArgs].filter(Boolean).join(' ')
+  // The measured backend's own llama-server (a HIP config on the Vulkan exe would not find ROCm0).
+  const exe = exes[cfg.backend] ?? null
+  const missing = cfg.backend !== 'vulkan' && !exe
+  const command = () => [
+    ...(missing ? [`# measured on the llama.cpp ${cfg.backend === 'hip' ? 'ROCm (HIP)' : cfg.backend.toUpperCase()} build, which is not installed: install it on the System page (or use that build's llama-server)`] : []),
+    [toLlamaServerCommand(cfg, exe ?? 'llama-server'), genArgs].filter(Boolean).join(' ')
+  ].join('\n')
   const json = () => gen ? JSON.stringify({ ...JSON.parse(toJson(cfg)), generation: { ...gen, templateKwargs: kwargs ?? null } }, null, 2) : toJson(cfg)
   const copy = async (label: string, text: string) => { await navigator.clipboard.writeText(text); setDone(`${label} copied`) }
   const save = async (label: string, name: string, text: string) => {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { Sourced, Status, SystemProfile } from '../../shared/types'
+import type { InstalledRuntime, Sourced, Status, SystemProfile } from '../../shared/types'
 
 const gb = (b: number) => `${(b / 1024 ** 3).toFixed(1)} GiB`
 
@@ -18,7 +18,7 @@ function Row({ label, s, fmt }: { label: string; s: Sourced<unknown>; fmt: () =>
   )
 }
 
-function InstallRuntime({ onDone }: { onDone: () => void }) {
+function InstallRuntime({ onDone, hip = false }: { onDone: () => void; hip?: boolean }) {
   const [busy, setBusy] = useState(false)
   const [lines, setLines] = useState<string[]>([])
   const [err, setErr] = useState<string | null>(null)
@@ -26,12 +26,14 @@ function InstallRuntime({ onDone }: { onDone: () => void }) {
   const go = () => {
     setBusy(true)
     setErr(null)
-    window.api.installRuntime().then(onDone, (e: Error) => setErr(e.message)).finally(() => setBusy(false))
+    ;(hip ? window.api.installHipRuntime() : window.api.installRuntime()).then(onDone, (e: Error) => setErr(e.message)).finally(() => setBusy(false))
   }
   return (
     <div className="card">
-      <p>llama.cpp is not installed. The app downloads the official Windows Vulkan build from github.com/ggml-org/llama.cpp (~30 MB).</p>
-      <div className="bar"><button onClick={go} disabled={busy}>{busy ? 'Installing…' : 'Install llama.cpp runtime'}</button></div>
+      {hip
+        ? <p>Optional: the official llama.cpp ROCm (HIP) build for AMD GPUs (~245 MB download, ~1.2 GB installed), next to the Vulkan build and at the same release. With both installed, benchmarks can compare the two backends on this GPU. It needs no HIP SDK, but whether your driver exposes this GPU to HIP is only known after the first run.</p>
+        : <p>llama.cpp is not installed. The app downloads the official Windows Vulkan build from github.com/ggml-org/llama.cpp (~30 MB).</p>}
+      <div className="bar"><button onClick={go} disabled={busy}>{busy ? 'Installing…' : hip ? 'Install ROCm (HIP) runtime' : 'Install llama.cpp runtime'}</button></div>
       {err && <p className="err">{err}</p>}
       {lines.length > 0 && <pre className="log">{lines.join('\n')}</pre>}
     </div>
@@ -40,6 +42,7 @@ function InstallRuntime({ onDone }: { onDone: () => void }) {
 
 export function SystemPage() {
   const [p, setP] = useState<SystemProfile | null>(null)
+  const [backends, setBackends] = useState<InstalledRuntime[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -47,7 +50,11 @@ export function SystemPage() {
     setBusy(true)
     setErr(null)
     window.api.scanSystem().then(setP, (e: Error) => setErr(e.message)).finally(() => setBusy(false))
+    window.api.installedBackends().then(setBackends, () => setBackends([]))
   }
+  const amd = !!p?.gpus.value?.some((g) => g.vendor === 'amd' && !g.isIntegrated)
+  const primaryOk = backends.some((b) => b.kind !== 'hip' && b.status === 'available')
+  const hipOk = backends.some((b) => b.kind === 'hip' && b.status === 'available')
   useEffect(scan, [])
 
   return (
@@ -85,6 +92,25 @@ export function SystemPage() {
           </table>
           <h2>Runtimes</h2>
           {p.runtimes.find((r) => r.id === 'llamacpp')?.status !== 'available' && <InstallRuntime onDone={scan} />}
+          {amd && primaryOk && !hipOk && <InstallRuntime onDone={scan} hip />}
+          {backends.length > 0 && (
+            <>
+              <h3>llama.cpp backends</h3>
+              <table>
+                <thead><tr><th>Backend</th><th>Status</th><th>Build</th><th>Directory</th></tr></thead>
+                <tbody>
+                  {backends.map((b) => (
+                    <tr key={b.kind}>
+                      <td>{b.kind === 'hip' ? 'ROCm (HIP)' : b.kind === 'cuda' ? 'CUDA' : 'Vulkan'}</td>
+                      <td><Badge status={b.status} /></td>
+                      <td>{b.build ?? <span className={b.kind === 'hip' ? 'muted' : 'err'}>{b.kind === 'hip' && b.error?.startsWith('llama-server.exe not found') ? 'not installed (optional)' : b.error ?? '—'}</span>}</td>
+                      <td className="muted">{b.vendorDir}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
           <table>
             <thead><tr><th>Runtime</th><th>Status</th><th>Detail</th><th>Source</th></tr></thead>
             <tbody>

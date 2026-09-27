@@ -1,7 +1,7 @@
 // Turn a recommendation into runnable configs. Pure: no I/O. The llama-server args mirror exactly what the session
 // runner measured (src/core/benchmark/session.ts loadCfg + LlamaCppBackend.loadModel), so the export reproduces the
 // benchmarked setup; Ollama / LM Studio outputs are translations and say so.
-import type { CandidateConfig, GenConfig, KvType, ModelMeta, Recommendation } from '../../shared/bench-types'
+import type { CandidateConfig, GenConfig, GpuBackendKind, KvType, ModelMeta, Recommendation } from '../../shared/bench-types'
 import { genLabel, samplingFor, templateKwargsFor } from '../benchmark/gen'
 
 /** Batch sizes the runner benchmarks with (session.ts: batchSize 2048, ubatch = DEFAULT_CANDIDATE_RULES.ubatch). */
@@ -30,6 +30,8 @@ export interface ExportConfig {
   kvOffload: boolean
   /** false = loaded without mmap (-lm none), as the heavy configs were measured. */
   mmap: boolean
+  /** llama.cpp build the config was measured on; its exe is a different llama-server (Vulkan vs ROCm/HIP build). */
+  backend: GpuBackendKind
   workload: Recommendation['workload']
   /** The generation config the recommendation chose (sampling + chat template kwargs), when not the plain baseline. */
   gen?: { config: GenConfig; sampling: ReturnType<typeof samplingFor>; templateKwargs?: Record<string, unknown> }
@@ -45,7 +47,7 @@ export function exportConfigFrom(rec: Recommendation, cand: CandidateConfig, mod
     sessionId, configId: cand.id, modelPath: model.id, modelName: model.name, ctx,
     gpuLayers: cand.gpuLayers, gpuLayersAll: cand.gpuLayersAll, layers: model.layers, threads: cand.threads,
     batch: BENCH_BATCH, ubatch: BENCH_UBATCH, flashAttn: cand.flashAttn, kvType: cand.kvType, device: cand.device, workload: rec.workload,
-    kvOffload: cand.kvOffload !== false, mmap: cand.mmap !== false,
+    kvOffload: cand.kvOffload !== false, mmap: cand.mmap !== false, backend: cand.backend ?? 'vulkan',
     ...(best.score.gen && (best.score.gen.thinking || best.score.gen.temperature > 0)
       ? { gen: { config: best.score.gen, sampling: samplingFor(best.score.gen), ...(templateKwargsFor(model, best.score.gen) ? { templateKwargs: templateKwargsFor(model, best.score.gen) } : {}) } }
       : {})
@@ -79,6 +81,7 @@ export function toLlamaServerArgs(c: ExportConfig): string[] {
 /** Quote for cmd.exe / PowerShell / sh alike: double quotes around anything with spaces or shell metacharacters. */
 const quote = (a: string) => (/^[\w@%+=:,./\\-]+$/.test(a) ? a : `"${a.replace(/"/g, '\\"')}"`)
 
+/** exe: the llama-server of the backend the config was measured on (the app passes the installed path). */
 export function toLlamaServerCommand(c: ExportConfig, exe = 'llama-server'): string {
   return [exe, ...toLlamaServerArgs(c)].map(quote).join(' ')
 }
