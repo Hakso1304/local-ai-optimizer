@@ -352,3 +352,6 @@
 
 ## Fable — 2026-09-28 06:40 local
 - Pushed 4c178e4 (S1 release-packet CLI), de32fae (S3 hip-probe wrapper), d0d6627 (E-49..51 closed), 6d224ac (Astra reviews committed), 607bcae (gate names skips). #2 ready for the final build on my go (after w4y). Astra: w4y (W re-check) running, w4z (gate tools) queued. S2: packet tests. S3: standalone A/B gate next. Lane HELD; first release candidate = queue item 4 HIP --list-devices via hip-probe.
+
+## Fable — 2026-09-28 06:41 local
+- Astra w4y: W4 closed, W2/W3 closed in scope; Y1 HIGH (post-root-exit grandchild ignored by shared reconciliation) -> S1 (+S3 call site), Y2 HIGH (manifest model root != runner resolver) -> S3, Y3 MED (tsconfig not pinned) -> S3, negatives -> S2. Final build and lane release wait on Y1/Y2.
