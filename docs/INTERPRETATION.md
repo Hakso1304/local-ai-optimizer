@@ -351,6 +351,11 @@ row's prompt with its recorded kwargs; a proof copied from another item or templ
 is not proof, and such rows are quarantined from comparisons. The accepted sampling must
 include the seed: the runtime-accepted seed is compared with the requested per-sample seed;
 a missing or different accepted seed makes the row unverified (disclosed), never proved.
+Scope: row-bound proof is required for generation-config comparisons and for rows whose
+configuration requested template kwargs (thinking-capable models); plain quality rows
+with no requested kwargs keep MEASURED status without it. Reconstructed provenance
+(re-rendered after the fact, no original prompt hash) makes a row non-comparable for
+generation comparisons but does not demote a plain measured row.
 Rule I-8.1 (`gen.best-config`, info): per model: "thinking on (effort low, T=1.0):
 Q +17 [lo, hi] vs off; answers <k>× slower (effective <e> vs <d> t/s)".
 Rule I-8.2 (`gen.stochastic`, note): T > 0 → "sampled (seeded), n=<s> per item".
