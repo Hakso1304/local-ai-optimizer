@@ -82,4 +82,58 @@ describe('RECHECK6 R1: replay lineage', () => {
     expect(twice.qualityResults[0].payload.proofProvenance).toMatchObject({ status: 'reconstructed', originalPromptHashPresent: false })
     expect(twice.qualityResults[0].payload.renderProof?.status).toBe('reconstructed')
   })
+
+  it('rejects or quarantines an incoherent partial origin without promoting it to proved', async () => {
+    const suite = suiteFor('quick', 42), item = suite.tests[0]
+    const prompt = buildQualityPrompts(suite, { fillerTokens: Math.floor(2048 * 0.6), thinking: false })[0]
+    const promptSha256 = sha(`${prompt.messages[0].content}\nthink=false`)
+    const base = {
+      sessionId: 5,
+      session: { payload: {
+        request: { qualityMode: 'quick', qualitySeed: 42, genConfigs: [{ id: 'off', thinking: false, temperature: 0, source: 'default' }] },
+        candidates: [{ config: { id: 'fake|ngl=all' }, model: { id: modelPath, fileBytes: 1, supportsThinking: true } }]
+      } },
+      qualityResults: [{ id: 1, model_id: modelPath, payload: {
+        configId: 'fake|ngl=all', genId: 'off', testId: item.id, category: item.category,
+        weight: item.weight, pass: true, score: 1, detail: '', ctx: 2048, sample: 1,
+        checkerVersion: suite.suite, templateHash: sha(template), modelFingerprint: `${modelPath}#1`,
+        requestedTemplateKwargs: { enable_thinking: false }, acceptedSampling: { temperature: 0, seed: 1 }, promptSha256
+      } }]
+    }
+    const script = resolve('scripts/prove-quality-rows.ts'), executable = join(dir, 'partial-origin-replay.mjs')
+    await build({ entryPoints: [script], outfile: executable, bundle: true, platform: 'node', format: 'esm' })
+    const run = async (input: string, output: string) => {
+      try {
+        await runFile(process.execPath, [executable, '--in', input, '--out', output, '--port', String(port), '--session', '5'], { cwd: resolve('.'), timeout: 20_000 })
+        return JSON.parse(readFileSync(output, 'utf8')) as typeof base & { qualityResults: { payload: typeof base.qualityResults[0]['payload'] & {
+          renderProof?: { status: string }; proofProvenance?: { status: string; originalPromptHashPresent: boolean }
+        } }[] }
+      } catch (error) {
+        expect(String(error)).toMatch(/incoherent|origin|provenance/i)
+        return null
+      }
+    }
+    const partial = structuredClone(base) as typeof base & { qualityResults: { payload: typeof base.qualityResults[0]['payload'] & { proofProvenance?: unknown } }[] }
+    partial.qualityResults[0].payload.proofProvenance = {
+      mode: 'runtime', originalPromptHashPresent: false, status: 'original',
+      origin: { generationPromptHashPresent: true, lineage: [] } // missing firstReplayAt and contradictory flag
+    }
+    const partialIn = join(dir, 'partial-origin.json'), partialOut = join(dir, 'partial-origin-out.json')
+    writeFileSync(partialIn, JSON.stringify(partial))
+    const result = await run(partialIn, partialOut)
+    if (result) {
+      expect(result.qualityResults[0].payload.proofProvenance?.status).toBe('reconstructed')
+      expect(result.qualityResults[0].payload.renderProof?.status).not.toBe('proved')
+    }
+    const valid = structuredClone(base) as typeof partial
+    valid.qualityResults[0].payload.proofProvenance = {
+      mode: 'runtime', originalPromptHashPresent: true, status: 'original',
+      origin: { generationPromptHashPresent: true, firstReplayAt: null, lineage: [] }
+    }
+    const validIn = join(dir, 'valid-origin.json'), validOut = join(dir, 'valid-origin-out.json')
+    writeFileSync(validIn, JSON.stringify(valid))
+    const proved = await run(validIn, validOut)
+    expect(proved?.qualityResults[0].payload.proofProvenance).toMatchObject({ status: 'original', originalPromptHashPresent: true })
+    expect(proved?.qualityResults[0].payload.renderProof?.status).toBe('proved')
+  })
 })

@@ -9,7 +9,7 @@ import { runSession, type RunDetail, type SessionBackend, type SessionDeps, type
 import { ladderPrompt } from '../../src/core/benchmark/prompts'
 import { generateCandidates, machineFromProfile, planCandidates } from '../../src/core/benchmark/candidates'
 import { WORKLOADS } from '../../src/core/scoring/workloads'
-import { ConfigDriftError } from '../../src/core/runtimes/llamacpp'
+import { ConfigDriftError, ServerStuckError } from '../../src/core/runtimes/llamacpp'
 import { load } from '../scoring/helpers'
 import { suiteFor } from '../../src/core/quality'
 import { coverage, qualityUncertainty } from '../../src/core/scoring/uncertainty'
@@ -1159,6 +1159,24 @@ describe('runSession', () => {
     expect(r.s.status.at(-1)).toBe('failed')
     expect(ctxOf(ref!)).toEqual([2048, 4096]) // stopped before loading 8K
     expect(unloadsAfterStuck).toBe(0)
+  })
+
+  it('does not switch backend after a fatal ownership-enumeration cleanup failure', async () => {
+    const vk = fakeBackend(() => ({})), hip = fakeBackend(() => ({}))
+    const original = vk.unloadModel.bind(vk)
+    let unloadCalls = 0
+    vk.unloadModel = async () => {
+      if (++unloadCalls > 1) throw new ServerStuckError('owned-tree enumeration failed: CIM failed')
+      await original()
+    }
+    const r = await run(() => ({}), { ladder: [2048] }, { backends: [
+      { kind: 'vulkan', backend: () => vk, runtimeVersion: 'b1', exePath: 'fake-vulkan', device: 'Vulkan0' },
+      { kind: 'hip', backend: () => hip, runtimeVersion: 'b1', exePath: 'fake-hip', device: 'ROCm0' }
+    ] })
+    expect(unloadCalls).toBeGreaterThan(1)
+    expect(r.events.at(-1)).toMatchObject({ type: 'session:failed', error: expect.stringMatching(/ownership-enumeration|CIM failed/) })
+    expect(hip.calls.loads).toHaveLength(0)
+    expect(r.rec).toBeNull()
   })
 
   it('F12 (#2 shape): no timings but stream token counts → estimated TPS from those counts', async () => {

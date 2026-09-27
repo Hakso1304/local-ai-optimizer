@@ -215,6 +215,69 @@ describe('runPrompt', () => {
 })
 
 describe('unloadModel', () => {
+  it('does not kill a foreign process that reuses an exited owned descendant PID', async () => {
+    const pid = 424245, startedAt = new Date().toISOString()
+    let current = { pid, name: 'same-name-helper', startedAt }
+    let alive = true
+    const killed: number[] = []
+    const processTree: ProcessTree = {
+      descendants: async () => [current],
+      isAlive: async (candidate) => {
+        if (candidate !== pid) return false
+        // The owned child exited after discovery; this is a different process with the same PID and name.
+        current = { pid, name: 'same-name-helper', startedAt: new Date(Date.now() + 5_000).toISOString() }
+        return alive
+      },
+      kill: async (candidate) => { killed.push(candidate); if (candidate === pid) alive = false }
+    }
+    b = new LlamaCppBackend('unused', { pidFile, spawnFn: () => child as unknown as ChildProcess, processTree })
+    handler = healthy()
+    await load()
+    await child.exit(0)
+    await b.unloadModel()
+    expect(killed).not.toContain(pid)
+    expect(existsSync(pidFile)).toBe(false)
+  })
+
+  it('does not adopt a foreign child born inside the exited root PID grace window', async () => {
+    const pid = 424245
+    let alive = true
+    const killed: number[] = []
+    let foreignBornAt = ''
+    const processTree: ProcessTree = {
+      descendants: async () => [{ pid, name: 'same-name-helper', startedAt: foreignBornAt }],
+      isAlive: async (candidate) => candidate === pid && alive,
+      kill: async (candidate) => { killed.push(candidate); if (candidate === pid) alive = false }
+    }
+    b = new LlamaCppBackend('unused', { pidFile, spawnFn: () => child as unknown as ChildProcess, processTree })
+    handler = healthy()
+    await load()
+    await child.exit(0)
+    await new Promise((r) => setTimeout(r, 100))
+    foreignBornAt = new Date().toISOString()
+    await b.unloadModel()
+    expect(killed).not.toContain(pid)
+    expect(existsSync(pidFile)).toBe(false)
+  })
+
+  it('treats a failed descendant enumeration as fatal and retains cleanup identity', async () => {
+    let fail = true
+    const processTree: ProcessTree = {
+      descendants: async () => { if (fail) throw new Error('CIM failed'); return [] },
+      isAlive: async () => false,
+      kill: async (pid) => { if (pid === child.pid) child.kill() }
+    }
+    b = new LlamaCppBackend('unused', { pidFile, spawnFn: () => child as unknown as ChildProcess, processTree })
+    handler = healthy()
+    await load()
+    try {
+      await expect(b.unloadModel()).rejects.toBeInstanceOf(ServerStuckError)
+      expect(existsSync(pidFile)).toBe(true)
+    } finally {
+      fail = false // allow the shared test cleanup to complete
+    }
+  })
+
   it('shares one in-flight tree reap across concurrent unload callers', async () => {
     let enter!: () => void, release!: () => void
     const entered = new Promise<void>((r) => { enter = r })
@@ -231,6 +294,7 @@ describe('unloadModel', () => {
     const first = b.unloadModel()
     await entered
     const second = b.unloadModel()
+    expect(second).toBe(first)
     release()
     await Promise.all([first, second])
     expect(rootKills).toBe(1)
