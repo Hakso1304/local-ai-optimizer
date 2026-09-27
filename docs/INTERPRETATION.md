@@ -184,10 +184,18 @@ parameter count is shown only if the file declares it.
 
 ## 4. Memory
 
+Rule I-4.0 (`mem.effective-budget`, info, origin measured-calibration cal-2026-09-27 +
+2026-09-28): on Windows a single process is given a VRAM budget below the card's total
+(WDDM/DXGI per-process budget; observed here 11.6–13.3 GiB of 15.9). The planner uses
+`vramEffectiveBudgetBytes` = min over observed per-PID dedicated ceilings at spill onset
+(MEASURED, per GPU identity + driver), else 0.80 × total (ESTIMATED). Insight text:
+"usable VRAM for one model on this machine ≈ <x> GiB of <total> (per-process budget,
+<kind>)". A 16 GB card behaves like a ~12–13 GB card for a single model.
 Rule I-4.1 (`mem.budget-basis`, info): headroom is always stated with its basis:
-(a) planning budget remaining = planningVramBudgetBytes − planningReserveBytes − peak
-dedicated (from the persisted planning snapshot), (b) adapter free VRAM measured in the
-same window, or (c) per-PID dedicated vs adapter total. Missing inputs ⇒ UNAVAILABLE.
+(a) planning budget remaining = min(planningVramBudgetBytes − planningReserveBytes,
+vramEffectiveBudgetBytes) − peak dedicated (from the persisted planning snapshot),
+(b) adapter free VRAM measured in the same window, or (c) per-PID dedicated vs the
+effective budget. Missing inputs ⇒ UNAVAILABLE.
 Warn (threshold 0.5 GiB, origin policy): "less than <x> GiB of the planning budget
 remains at <ctx>; less room for other apps, spill risk increases".
 Rule I-4.2 (`mem.in-use-at-plan`, note, threshold 1.5 GiB): VRAM in use by other apps
@@ -201,8 +209,9 @@ Rule I-4.4 (`mem.mmap-note`, info, conditional): only when ramAvailBeforeLoad,
 during-load minimum and after-unload values exist: "RAM drop of <x> GiB during load is
 consistent with the file cache (mmap) and was released after unload". Otherwise omit.
 Rule I-4.5 (`mem.saturation-observed`, note): per-PID dedicated plateau observed at
-<p> % of VRAM across ≥ 3 samples before spill → "on this machine spill began at
-≈<p> % (measured <date>)". No generalization to other machines.
+<p> % of VRAM across ≥ 3 samples before spill → "on this machine the per-process
+budget is ≈<x> GiB (<p> %, measured <date>)" and it updates I-4.0's learned budget. No
+generalization to other machines.
 
 ---
 
