@@ -34,7 +34,13 @@ try {
     counts: { benchmarkRuns: benchmarkRuns.length, qualityResults: qualityResults.length, recommendations: recommendations.length },
     benchmarkRuns, qualityResults, recommendations
   }
-  writeFileSync(out, JSON.stringify(artifact, null, 2))
+  // Exclusive creation preserves earlier evidence, even if another writer creates this path after the read.
+  try {
+    writeFileSync(out, JSON.stringify(artifact, null, 2), { flag: 'wx' })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error(`refusing to overwrite existing session evidence: ${out}`, { cause: error })
+    throw error
+  }
   console.log(`${out}: session ${sessionId}, ${benchmarkRuns.length} runs, ${qualityResults.length} quality rows, HEAD ${head}`)
 } finally {
   db.close()

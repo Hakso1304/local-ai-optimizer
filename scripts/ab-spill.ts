@@ -72,7 +72,13 @@ const MODEL = 'D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf'
 const ADAPTER_TOTAL = 17095983104 // RX 9070 XT qwMemorySize (scanner, registry)
 const GiB = 1024 ** 3
 const MiB = 1024 ** 2
-const out = process.argv.slice(2).find((a) => !a.startsWith('--')) ?? (HIP ? 'docs/ab-hip-2026-09-28.json' : IGPU ? 'docs/ab-igpu-2026-09-28.json' : 'docs/ab-spill-repaired-2026-09-28.json')
+export function outputPathFor(args: string[]): string {
+  return args.find((a) => !a.startsWith('--')) ?? (args.includes('--hip') ? 'docs/ab-hip-2026-09-28.json' : args.includes('--igpu') ? 'docs/ab-igpu-2026-09-28.json' : 'docs/ab-spill-repaired-2026-09-28.json')
+}
+export function assertNewArtifact(path: string, exists: (path: string) => boolean = existsSync): void {
+  if (exists(path)) throw new Error(`refusing to overwrite existing A/B artifact: ${path}`)
+}
+const out = outputPathFor(process.argv.slice(2))
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const g = (b: number | null) => (b == null ? null : +(b / GiB).toFixed(2))
 const baseArgv = (ctx: number, extra: string[] = [], dev = 'Vulkan0') => ['-m', MODEL, '-c', String(ctx), '-ngl', '999', '-dev', dev, '-t', '8', '-b', '2048', '-ub', '512', '-fa', 'on', '-fit', 'off', '--parallel', '1', '-lm', 'none', '--cache-ram', '0', ...extra]
@@ -262,6 +268,7 @@ export async function launch(label: string, argv: string[], promptTokens: number
     layersPerDevice: [...log.matchAll(/layer\s+\d+ assigned to device (\S+?),?\s/g)].reduce<Record<string, number>>((a, m) => ((a[m[1]] = (a[m[1]] ?? 0) + 1), a), {}),
     offloadLines: log.split(/\r?\n/).filter((l) => /offload(ing|ed) \d+/.test(l)).map((l) => l.trim()),
     largestBufferMiB: bufferRows.length ? Math.max(...bufferRows.map((b) => b.mib)) : null,
+    // Compatibility fields: both logs are fully retained, so truncation is always false.
     stdoutLog, stderrLog, stdoutTruncated: false, stderrTruncated: false,
     listDevicesBefore: devicesBefore, ramAvailBeforeGiB: g(ramBefore), ramAvailMinGiB: g(ramMin)
   }
@@ -300,7 +307,7 @@ async function hipAb() {
       }
     }
   } finally {
-    writeFileSync(out, JSON.stringify({ when: new Date().toISOString(), model: MODEL, hipDevices, vulkanDevices, unifiedMemoryEnvKeys: unifiedMemoryKeys(), safeEnvStripsUnifiedMemory: true, results }, null, 1))
+    writeFileSync(out, JSON.stringify({ when: new Date().toISOString(), model: MODEL, hipDevices, vulkanDevices, unifiedMemoryEnvKeys: unifiedMemoryKeys(), safeEnvStripsUnifiedMemory: true, results }, null, 1), { flag: 'wx' })
   }
   console.log(`wrote ${out}; leftover llama-server ${servers()}`)
 }
@@ -320,14 +327,14 @@ async function igpuAb() {
       results.push(b); assertCase(b)
     }
   } finally {
-    writeFileSync(out, JSON.stringify({ when: new Date().toISOString(), model: QWEN, devices, results }, null, 1))
+    writeFileSync(out, JSON.stringify({ when: new Date().toISOString(), model: QWEN, devices, results }, null, 1), { flag: 'wx' })
   }
   console.log(`wrote ${out}; leftover llama-server ${servers()}`)
 }
 
 async function main() {
   if (unifiedMemoryKeys().length) throw new Error(`${unifiedMemoryKeys().join(', ')} set in this environment; unset it first`)
-  if (existsSync(out)) throw new Error(`refusing to overwrite existing A/B artifact: ${out}`)
+  assertNewArtifact(out)
   if (HIP) return hipAb()
   if (IGPU) return igpuAb()
   const results = []
@@ -353,7 +360,7 @@ async function main() {
     stopReason = e instanceof Error ? e.message : String(e)
     throw e
   } finally {
-    writeFileSync(out, JSON.stringify({ when: new Date().toISOString(), model: MODEL, vulkaninfoHeaps: heaps, stopReason, results }, null, 1))
+    writeFileSync(out, JSON.stringify({ when: new Date().toISOString(), model: MODEL, vulkaninfoHeaps: heaps, stopReason, results }, null, 1), { flag: 'wx' })
   }
   console.log(`wrote ${out}; leftover llama-server ${servers()}`)
 }
