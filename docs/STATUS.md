@@ -56,5 +56,5 @@ This is the MVP Definition of Done, the later user requirements and the cross-cu
 | Export / apply params | DONE-WITH-CAVEAT | 01e5c9e generators + `tests/export.test.ts`; export menu e31dc64 | Ollama Modelfile / LM Studio keys unverified (neither installed) |
 | Tests | DONE | 355 tests: scanner, GGUF, telemetry, llama.cpp fake-process lifecycle, quality/sandbox, scoring + adversarial (c217b85) + calibration fixtures, runner, storage, hub, export | No real-GPU test in CI; real runs are scripted (`scripts/calibrate.ts`, `run-session.ts`) |
 | Packaging | DONE-WITH-CAVEAT | a3dc31e electron-builder portable + NSIS; 2fa68f4 review fixes (dev `-dev` userData, DB refusal, NSIS cleanup) | Unsigned |
-| Packaged build verification | pending: #2 packaged verification | — | — |
+| Packaged build verification | DONE-WITH-CAVEAT | #2 verification at 5dacad4: portable + NSIS exe (~100 MB, unsigned); real scan, runtime from userData, 7 models incl. heavy badges, HF search, real 0.5B session persisted across restart, Results charts, 0 leftover processes | Unsigned (SmartScreen); re-package after the heavy-mode commits |
 | NVIDIA / CUDA path | BLOCKED(env) | 56c1bbb, acbd169 wired; `tests/nvidia.test.ts` fixtures | No NVIDIA GPU here (nvidia-smi: insufficient permissions) |
