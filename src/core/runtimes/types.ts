@@ -18,6 +18,8 @@ export interface LoadConfig {
 export interface PromptRequest {
   prompt: string
   maxTokens: number
+  /** Persistent session/guard cancellation, including before the request starts. */
+  signal?: AbortSignal
   temperature?: number
   /** Sampling (camelCase here → top_p / top_k / min_p in /completion); absent = llama-server defaults. */
   topP?: number

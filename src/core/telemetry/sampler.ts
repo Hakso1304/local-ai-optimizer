@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import type { NvidiaSample } from './nvidia'
 
@@ -32,6 +32,9 @@ export interface SamplerOpts {
   procName?: string // image name without .exe, for \Process V2(name:pid); default llama-server
   gpuLuid?: string // "0x00000000_0x00016058"; default: see pickLuid
   intervalMs?: number // typeperf granularity is whole seconds (min 1)
+  /** Fake child seam for deterministic lifecycle tests. */
+  spawnFn?: (cmd: string, args: string[], opts: SpawnOptions) => ChildProcess
+  stopChild?: (child: ChildProcess) => Promise<void>
 }
 
 export function counterPaths(o: SamplerOpts): string[] {
@@ -217,7 +220,7 @@ export interface Sampler {
   readonly hasPidColumns: boolean | null
   /** Respawn typeperf with the same counters (new instance set); samples collected so far are kept. */
   restart(): void
-  stop(): TelemetrySample[]
+  stop(): Promise<TelemetrySample[]>
 }
 
 /** Stop hooks of every running sampler child (typeperf, nvidia-smi -lms). */
@@ -235,20 +238,31 @@ export function startSampler(o: SamplerOpts = {}): Sampler {
   const errors: string[] = []
   const si = String(Math.max(1, Math.round((o.intervalMs ?? 1000) / 1000)))
   let stopped = false
+  let stopping: Promise<TelemetrySample[]> | null = null
   let parser = new TypeperfParser(o)
   let realigns = 0
   let misalignedBefore = 0 // misaligned rows of replaced typeperf processes, for the final drop note
   let child: ChildProcess
+  const children = new Set<ChildProcess>()
+  const stopChild = o.stopChild ?? (async (c: ChildProcess) => {
+    if (c.exitCode !== null || c.signalCode !== null) return
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('typeperf did not exit after stop')), 3000)
+      c.once('close', () => { clearTimeout(timer); resolve() })
+      c.kill()
+    })
+  })
 
   const spawnOne = () => {
     const p = new TypeperfParser(o) // fresh header per process: the instance set can differ
     parser = p
     const tail: string[] = []
-    const c: ChildProcess = spawn('typeperf', [...counterPaths(o), '-si', si, '-sc', String(MAX_SAMPLES)], { windowsHide: true })
+    const c: ChildProcess = (o.spawnFn ?? spawn)('typeperf', [...counterPaths(o), '-si', si, '-sc', String(MAX_SAMPLES)], { windowsHide: true })
     child = c
+    children.add(c)
     const kill = () => { c.kill() }
     active.add(kill)
-    c.on('close', () => active.delete(kill))
+    c.on('close', () => { active.delete(kill); children.delete(c) })
     createInterface({ input: c.stdout! }).on('line', (l) => {
       const s = p.line(l)
       if (s) samples.push(s)
@@ -287,12 +301,16 @@ export function startSampler(o: SamplerOpts = {}): Sampler {
       old.kill()
     },
     stop() {
+      if (stopping) return stopping
       stopped = true
-      child.kill()
-      const misaligned = parser.dropped.misaligned + misalignedBefore
-      const { glitch } = parser.dropped
-      if (misaligned + glitch) errors.push(`typeperf rows dropped: ${misaligned} misaligned with the header, ${glitch} with impossible values (${samples.length} kept)`)
-      return samples
+      stopping = (async () => {
+        await Promise.all([...children].map(stopChild))
+        const misaligned = parser.dropped.misaligned + misalignedBefore
+        const { glitch } = parser.dropped
+        if (misaligned + glitch) errors.push(`typeperf rows dropped: ${misaligned} misaligned with the header, ${glitch} with impossible values (${samples.length} kept)`)
+        return samples
+      })()
+      return stopping
     }
   }
 }
@@ -321,10 +339,10 @@ export function withNvidia(pdh: Sampler, nv: { readonly samples: NvidiaSample[];
     get hasPidColumns() { return pdh.hasPidColumns },
     restart: () => pdh.restart(),
     errors: pdh.errors,
-    stop() {
-      stopNv()
+    async stop() {
+      await Promise.resolve(nv.stop())
       active.delete(stopNv)
-      pdh.stop()
+      await pdh.stop()
       stopped = true
       return view()
     }

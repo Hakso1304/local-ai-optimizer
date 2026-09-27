@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createWriteStream, existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, mkdirSync } from 'node:fs'
 import { findGgufModels } from '../../models/gguf'
@@ -85,6 +85,46 @@ export interface ExitInfo {
 
 type SpawnFn = (cmd: string, args: string[], opts: SpawnOptions) => ChildProcess
 
+export interface ProcessTree {
+  descendants(pid: number): Promise<{ pid: number; name: string; startedAt: string }[]>
+  kill(pid: number, opts: { tree: boolean; force: boolean }): Promise<void>
+  isAlive(pid: number): Promise<boolean>
+  alivePids?(pids: number[]): Promise<number[]>
+}
+
+const defaultProcessTree: ProcessTree = {
+  async descendants(pid) {
+    const raw = await runPowerShell("$all = @(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,@{n='CreationDate';e={$_.CreationDate.ToUniversalTime().ToString('o')}}); $all | ConvertTo-Json -Compress", 10_000)
+    const parsed = JSON.parse(raw || '[]') as { ProcessId: number; ParentProcessId: number; Name: string; CreationDate: string } | { ProcessId: number; ParentProcessId: number; Name: string; CreationDate: string }[]
+    const all = Array.isArray(parsed) ? parsed : [parsed]
+    const seen = new Set([pid]), out: { pid: number; name: string; startedAt: string }[] = []
+    for (let i = 0; i < all.length; i++) {
+      let added = false
+      for (const p of all) if (!seen.has(p.ProcessId) && seen.has(p.ParentProcessId)) {
+        seen.add(p.ProcessId)
+        out.push({ pid: p.ProcessId, name: p.Name, startedAt: new Date(p.CreationDate).toISOString() })
+        added = true
+      }
+      if (!added) break
+    }
+    return out
+  },
+  async kill(pid, opts) {
+    await runProcess('taskkill', ['/PID', String(pid), ...(opts.tree ? ['/T'] : []), ...(opts.force ? ['/F'] : [])], 10_000)
+  },
+  async isAlive(pid) {
+    const raw = await runPowerShell(`if (Get-Process -Id ${pid} -ErrorAction SilentlyContinue) { 'true' } else { 'false' }`, 5_000)
+    return raw.trim().toLowerCase() === 'true'
+  },
+  async alivePids(pids) {
+    if (!pids.length) return []
+    const ids = pids.filter((pid) => Number.isSafeInteger(pid) && pid > 0)
+    const raw = await runPowerShell(`@(Get-Process -Id ${ids.join(',')} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id) | ConvertTo-Json -Compress`, 5_000)
+    const parsed = JSON.parse(raw || '[]') as number | number[] | null
+    return Array.isArray(parsed) ? parsed : typeof parsed === 'number' ? [parsed] : []
+  }
+}
+
 /** The child's environment: the parent's minus GGML_CUDA_ENABLE_UNIFIED_MEMORY. Managed memory lets a CUDA/HIP
  *  build oversubscribe VRAM into system RAM, which would make "fits in VRAM" unmeasurable (docs/HIP-BACKEND.md). */
 export function serverEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -161,6 +201,10 @@ export class LlamaCppBackend implements InferenceBackend {
   private exeOverride?: string
   private pidFile?: string
   private spawnFn: SpawnFn
+  private processTree: ProcessTree
+  private ownedRootPid: number | null = null
+  private ownedStartedAt: number | null = null
+  private ownedExitAt: number | null = null
   /** Last 100 output lines, for crash diagnostics. */
   readonly log: string[] = []
   /** Set when the server exits on its own (not via unloadModel). */
@@ -169,10 +213,11 @@ export class LlamaCppBackend implements InferenceBackend {
   templateHash: string | null = null
 
   /** pidFile: where the running server's pid is persisted (see killStaleServer). spawnFn: test seam. */
-  constructor(private vendorDir: string, opts: { exePath?: string; pidFile?: string; spawnFn?: SpawnFn } = {}) {
+  constructor(private vendorDir: string, opts: { exePath?: string; pidFile?: string; spawnFn?: SpawnFn; processTree?: ProcessTree } = {}) {
     this.exeOverride = opts.exePath
     this.pidFile = opts.pidFile
     this.spawnFn = opts.spawnFn ?? spawn
+    this.processTree = opts.processTree ?? defaultProcessTree
   }
 
   get exePath(): string {
@@ -290,7 +335,7 @@ export class LlamaCppBackend implements InferenceBackend {
 
   /** Start llama-server for one model on a free port; resolves once /health is OK and /props shows our model. */
   async loadModel(cfg: LoadConfig): Promise<LoadResult> {
-    if (this.proc) await this.unloadModel()
+    if (this.proc || this.ownedRootPid) await this.unloadModel()
     if (cfg.signal?.aborted) throw new Error('cancelled')
     this.port = cfg.port ?? (await freePort())
     this.log.length = 0
@@ -308,6 +353,9 @@ export class LlamaCppBackend implements InferenceBackend {
     const t0 = performance.now()
     const p = this.spawnFn(this.exePath, args, { windowsHide: true, env: serverEnv() })
     this.proc = p
+    this.ownedRootPid = p.pid ?? null
+    this.ownedStartedAt = Date.now()
+    this.ownedExitAt = null
     if (this.pidFile && p.pid) writeFileSync(this.pidFile, JSON.stringify({ pid: p.pid, exePath: resolve(this.exePath), startedAt: new Date().toISOString() } satisfies PidRecord))
     const onLine = (line: string) => {
       if (!line) return
@@ -322,7 +370,7 @@ export class LlamaCppBackend implements InferenceBackend {
     p.on('close', (code) => {
       if (this.proc !== p || this.unloading === p) return // being unloaded: unloadModel finishes the cleanup
       this.proc = null
-      this.clearPid()
+      this.ownedExitAt = Date.now()
       this.lastExit = { code, reason: classifyExit(this.log), tail: [...this.log] }
       exited = `llama-server exited with code ${code} (${this.lastExit.reason})`
       this.abort?.abort(new Error(exited))
@@ -339,7 +387,7 @@ export class LlamaCppBackend implements InferenceBackend {
         await this.unloadModel()
         throw new Error('cancelled')
       }
-      if (exited) throw new Error(`${exited}; last log: ${this.log.slice(-10).join(' | ')}`)
+      if (exited) { await this.unloadModel(); throw new Error(`${exited}; last log: ${this.log.slice(-10).join(' | ')}`) }
       healthy = (await this.healthCheck()).ok
       if (!healthy) await new Promise((r) => setTimeout(r, 100))
     }
@@ -349,7 +397,7 @@ export class LlamaCppBackend implements InferenceBackend {
     }
     const loadTimeMs = performance.now() - t0
     const props = await getJson<{ model_path?: string; chat_template?: string; default_generation_settings?: { n_ctx?: number } }>(`http://127.0.0.1:${this.port}/props`, 2_000).catch(() => null)
-    if (exited) throw new Error(`${exited}; last log: ${this.log.slice(-10).join(' | ')}`)
+    if (exited) { await this.unloadModel(); throw new Error(`${exited}; last log: ${this.log.slice(-10).join(' | ')}`) }
     const same = (a: string) => resolve(a).toLowerCase() === resolve(cfg.modelPath).toLowerCase()
     if (!props?.model_path || !same(props.model_path)) {
       await this.unloadModel()
@@ -366,27 +414,59 @@ export class LlamaCppBackend implements InferenceBackend {
     return { loadTimeMs, declared, templateHash: this.templateHash }
   }
 
-  /** Kill the server; escalate to taskkill /T /F after 5s. Throws if it is still alive afterwards. */
-  /** Kill the server; escalate to taskkill /T /F after 5s. The handle and pid file are only dropped once the exit
-   *  is confirmed; if the process survives, ServerStuckError is thrown and both are kept (W4 F4), so a later unload
-   *  or the next app start (killStaleServer) can still reach it. The runner must treat it as a session stop. */
+  /** Reap the owned server tree, including children left behind by an exited parent. */
   async unloadModel(): Promise<void> {
     const p = this.proc
-    if (!p || p.pid === undefined || !alive(p)) {
+    const root = this.ownedRootPid ?? p?.pid
+    if (root === undefined || root === null) {
+      if (p && alive(p)) { p.kill(); if (!(await waitExit(p, 3_000))) throw new ServerStuckError('llama-server without a pid did not exit') }
       if (this.proc === p) this.proc = null
-      return this.clearPid()
+      this.clearPid()
+      return
     }
-    this.unloading = p
+    if (p) this.unloading = p
+    const observedAt = Date.now()
+    const ownershipEnd = this.ownedExitAt ?? (p && alive(p) ? null : observedAt)
+    const belongs = (d: { startedAt: string }) => {
+      const at = Date.parse(d.startedAt)
+      return Number.isFinite(at) && (this.ownedStartedAt === null || at >= this.ownedStartedAt - 2_000) &&
+        (ownershipEnd === null || at <= ownershipEnd + 1_000)
+    }
+    const owned = new Map<number, { pid: number; name: string; startedAt: string }>()
+    const liveChildren = async () => {
+      const found = (await this.processTree.descendants(root)).filter(belongs)
+      for (const child of found) owned.set(child.pid, child)
+      const candidates = [...owned.values()].filter(belongs)
+      const ids = this.processTree.alivePids
+        ? await this.processTree.alivePids(candidates.map((child) => child.pid))
+        : (await Promise.all(candidates.map(async (child) => await this.processTree.isAlive(child.pid) ? child.pid : null))).filter((pid): pid is number => pid !== null)
+      const aliveIds = new Set(ids)
+      return candidates.filter((child) => aliveIds.has(child.pid))
+    }
     try {
-      p.kill()
-      if (!(await waitExit(p, 5_000))) {
-        await runProcess('taskkill', ['/PID', String(p.pid), '/T', '/F'], 10_000).catch(() => {})
-        if (!(await waitExit(p, 3_000))) throw new ServerStuckError(`llama-server pid ${p.pid} still alive after taskkill /F`)
+      const descendants = await liveChildren()
+      // Only kill the root while its original ChildProcess is still alive. A
+      // reused root pid must not become a target after the parent exited.
+      if (p && alive(p)) await this.processTree.kill(root, { tree: true, force: true }).catch(() => {})
+      for (const child of descendants) {
+        await this.processTree.kill(child.pid, { tree: true, force: true }).catch(() => {})
+      }
+      if (p && alive(p) && !(await waitExit(p, 3_000))) throw new ServerStuckError(`llama-server pid ${root} still alive after tree kill`)
+      const deadline = Date.now() + 3_000
+      while (true) {
+        const remaining = (await liveChildren()).map((child) => child.pid)
+        if (!remaining.length) break
+        if (Date.now() >= deadline) throw new ServerStuckError(`llama-server pid ${root} left descendants alive: ${remaining.join(', ')}`)
+        for (const child of remaining) await this.processTree.kill(child, { tree: true, force: true }).catch(() => {})
+        await new Promise((r) => setTimeout(r, 100))
       }
     } finally {
       this.unloading = null
     }
     if (this.proc === p) this.proc = null
+    this.ownedRootPid = null
+    this.ownedStartedAt = null
+    this.ownedExitAt = null
     this.clearPid()
   }
 
@@ -397,7 +477,18 @@ export class LlamaCppBackend implements InferenceBackend {
 
   /** Synchronous best-effort kill for app quit / process exit handlers. */
   killSync(): void {
-    if (this.proc?.pid && alive(this.proc)) this.proc.kill()
+    const root = this.ownedRootPid ?? this.proc?.pid
+    if (root && this.proc && alive(this.proc)) {
+      spawnSync('taskkill', ['/PID', String(root), '/T', '/F'], { windowsHide: true, timeout: 10_000 })
+      return
+    }
+    // A closed parent may have left children. Query creation times before
+    // targeting them, since the parent PID itself may already be reused.
+    if (!root || this.ownedStartedAt === null) return
+    const from = new Date(this.ownedStartedAt - 2_000).toISOString()
+    const until = new Date((this.ownedExitAt ?? Date.now()) + 1_000).toISOString()
+    const script = `$r=${root};$a=[datetime]::Parse('${from}');$b=[datetime]::Parse('${until}');Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq $r -and $_.CreationDate -ge $a -and $_.CreationDate -le $b } | ForEach-Object { taskkill /PID $_.ProcessId /T /F *> $null }`
+    spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 10_000 })
   }
 
   private clearPid(): void {
@@ -420,10 +511,12 @@ export class LlamaCppBackend implements InferenceBackend {
   /** Stream one /completion. Request-level failures (HTTP, timeout, cancel, crash) land in `error`, never thrown. */
   async runPrompt(req: PromptRequest, onToken?: (t: string) => void): Promise<PromptResult> {
     const early = (error: string) => toPromptResult(null, { ttftMs: null, totalMs: 0, text: '', timedOut: false, error })
+    if (req.signal?.aborted) return early('request cancelled before generation')
     if (!this.proc) return early(this.lastExit ? `server exited (${this.lastExit.reason}, code ${this.lastExit.code})` : 'no model loaded')
     if (this.abort) return early('another prompt is already in flight') // --parallel 1; cancel() has a single slot
     const timeoutMs = req.timeoutMs ?? 120_000
     const ctl = new AbortController()
+    const requestSignal = req.signal ? AbortSignal.any([ctl.signal, req.signal]) : ctl.signal
     this.abort = ctl
     const t0 = performance.now()
     let ttftMs: number | null = null
@@ -445,7 +538,7 @@ export class LlamaCppBackend implements InferenceBackend {
           ...(req.minP !== undefined ? { min_p: req.minP } : {}),
           stream: true, cache_prompt: false
         }),
-        signal: ctl.signal
+        signal: requestSignal
       })
       if (!res.ok || !res.body) throw new Error(`POST /completion -> HTTP ${res.status}: ${serverError(await res.text())}`)
       const dec = new TextDecoder()
@@ -468,7 +561,7 @@ export class LlamaCppBackend implements InferenceBackend {
       }
       if (!final) error = 'stream ended without a final (stop) chunk'
     } catch (e) {
-      const reason: unknown = ctl.signal.aborted ? ctl.signal.reason : e
+      const reason: unknown = requestSignal.aborted ? requestSignal.reason : e
       error = reason instanceof Error ? reason.message : String(reason)
     } finally {
       clearTimeout(timer)
@@ -477,22 +570,22 @@ export class LlamaCppBackend implements InferenceBackend {
     const totalMs = performance.now() - t0
     const f = final as CompletionChunk | null
     const needPrompt = !error && f !== null && f.timings?.prompt_n == null && f.tokens_evaluated == null
-    const promptTokens = needPrompt ? await this.tokenize(req.prompt).catch(() => null) : null
+    const promptTokens = needPrompt ? await this.tokenize(req.prompt, req.signal).catch(() => null) : null
     const runtimeDecode = (typeof f?.timings?.predicted_n === 'number' && Number.isFinite(f.timings.predicted_n)) || (typeof f?.tokens_predicted === 'number' && Number.isFinite(f.tokens_predicted))
     return { ...toPromptResult(final, { ttftMs, totalMs, text, timedOut, error, streamedTokens: streamed, promptTokens }), streamedTokens: streamed, decodeTokenSource: runtimeDecode ? 'runtime' as const : 'streamed' as const, reasoningTokens: think.seen ? think.tokens : null, reasoningTokenSource: 'streamed' as const, acceptedSampling: acceptedSampling(f) }
   }
 
   /** One short discarded request so the measured run doesn't pay first-dispatch costs. Pass the measured
    *  prompt: a 1-token warmup left prefill at 47 tok/s on the 10-token measured run (b11208, RX 9070 XT). */
-  async warmup(prompt = 'Hello', timeoutMs = 120_000): Promise<void> {
-    const r = await this.runPrompt({ prompt, maxTokens: 8, timeoutMs })
+  async warmup(prompt = 'Hello', timeoutMs = 120_000, signal?: AbortSignal): Promise<void> {
+    const r = await this.runPrompt({ prompt, maxTokens: 8, timeoutMs, signal })
     if (r.error) throw new Error(`warmup failed: ${r.error}`)
   }
 
   /** Token count of `text` with the loaded model's tokenizer (POST /tokenize). */
-  async tokenize(text: string): Promise<number> {
+  async tokenize(text: string, signal?: AbortSignal): Promise<number> {
     const res = await fetch(`http://127.0.0.1:${this.port}/tokenize`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ content: text }), signal: AbortSignal.timeout(30_000)
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ content: text }), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000)
     })
     if (!res.ok) throw new Error(`POST /tokenize -> HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`)
     return ((await res.json()) as { tokens: unknown[] }).tokens.length
@@ -501,10 +594,10 @@ export class LlamaCppBackend implements InferenceBackend {
   /** Apply the model's chat template (POST /apply-template) so chat-format prompts can go through runPrompt. */
   /** Chat template → raw prompt. date_string is always pinned: templates like Llama 3.1's inject today's date via
    *  strftime_now, which would make quality prompts differ by day. templateKwargs (e.g. enable_thinking: false) win. */
-  async applyTemplate(messages: { role: string; content: string }[], opts: { templateKwargs?: Record<string, unknown> } = {}): Promise<string> {
+  async applyTemplate(messages: { role: string; content: string }[], opts: { templateKwargs?: Record<string, unknown>; signal?: AbortSignal } = {}): Promise<string> {
     const chat_template_kwargs = { date_string: TEMPLATE_DATE, ...opts.templateKwargs }
     const res = await fetch(`http://127.0.0.1:${this.port}/apply-template`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages, chat_template_kwargs }), signal: AbortSignal.timeout(10_000)
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages, chat_template_kwargs }), signal: opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000)
     })
     if (!res.ok) throw new Error(`POST /apply-template -> HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`)
     return ((await res.json()) as { prompt: string }).prompt

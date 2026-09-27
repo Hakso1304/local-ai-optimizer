@@ -33,14 +33,14 @@ export interface SessionBackend {
   /** Optional stream of parsed host-buffer declarations while the runtime loads. */
   setLoadDeclarationListener?(listener: ((declared: LoadResult['declared']) => void) | null): void
   unloadModel(): Promise<void>
-  warmup(prompt: string): Promise<void>
+  warmup(prompt: string, timeoutMs?: number, signal?: AbortSignal): Promise<void>
   runPrompt(req: PromptRequest): Promise<PromptResult>
   /** Model chat template → raw prompt (llama-server POST /apply-template). */
-  applyTemplate(messages: { role: string; content: string }[], opts?: { templateKwargs?: Record<string, unknown> }): Promise<string>
+  applyTemplate(messages: { role: string; content: string }[], opts?: { templateKwargs?: Record<string, unknown>; signal?: AbortSignal }): Promise<string>
   cancel(): Promise<void>
   /** Token count of text with the loaded model (llama-server POST /tokenize); optional — without it the ladder prompt
    *  stays character-sized. */
-  tokenize?(text: string): Promise<number>
+  tokenize?(text: string, signal?: AbortSignal): Promise<number>
   /** Hash of the loaded model's chat template (from /props), for the I-8.0 application contract; optional. */
   readonly templateHash?: string | null
 }
@@ -48,7 +48,7 @@ export interface SessionBackend {
 export interface SessionSampler {
   readonly samples: TelemetrySample[]
   readonly unavailable: Partial<Record<Field, string>>
-  stop(): TelemetrySample[]
+  stop(): TelemetrySample[] | Promise<TelemetrySample[]>
   /** null until typeperf printed its header; false = the GPU Process Memory(pid_*) columns are missing because
    *  typeperf fixed its instance set before llama-server created them → restart() once the model is loaded. */
   readonly hasPidColumns?: boolean | null
@@ -196,7 +196,8 @@ const failKind = (exit: ExitInfo | null): FailureKind | null =>
   exit ? (exit.reason === 'oom' ? 'oom' : exit.reason === 'device_lost' ? 'device_lost' : 'crash') : null
 
 export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (e: SessionEvent) => void): Promise<Recommendation | null> {
-  const cfg = { ...DEFAULT_SESSION_CONFIG, ...deps.config }
+  if (req.reps !== undefined && (!Number.isInteger(req.reps) || req.reps < 1 || req.reps > 5)) throw new RangeError('reps must be an integer from 1 to 5')
+  const cfg = { ...DEFAULT_SESSION_CONFIG, ...deps.config, ...(req.reps === undefined ? {} : { reps: req.reps }) }
   const rules = rulesForRequest(req)
   // requiredContext / minDecodeTps (explicit user choices) reshape the profile; the same object drives planning,
   // quality ctx and recommend().
@@ -281,10 +282,17 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   // ServerStuckError (runtimes/llamacpp, `.fatal`): unload couldn't confirm the server exited. That is a hard stop —
   // no more candidates, and no later cleanup that would clear its pid file.
   let stuck: Error | null = null
-  const unload = (onErr?: (e: Error) => void) => backend.unloadModel().catch((e: Error & { fatal?: boolean }) => {
-    if (e?.fatal) stuck ??= e
-    else onErr?.(e)
-  })
+  let unloading: Promise<void> | null = null
+  const unload = (onErr?: (e: Error) => void) => {
+    if (unloading) return unloading
+    const target = backend
+    const pending = target.unloadModel().catch((e: Error & { fatal?: boolean }) => {
+      if (e?.fatal) stuck ??= e
+      else onErr?.(e)
+    }).finally(() => { if (unloading === pending) unloading = null })
+    unloading = pending
+    return pending
+  }
   const checkStuck = () => { if (stuck) throw stuck }
   const onAbort = () => { void backend.cancel() }
   signal?.addEventListener('abort', onAbort)
@@ -659,14 +667,16 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   /** ladder-2: resize the filler with the loaded model's tokenizer until the prompt is LADDER_FILL·ctx tokens. */
   /** ladder-2: resize the filler with the loaded model's tokenizer until the prompt is LADDER_FILL·ctx tokens.
    *  `sized` = the final prompt was verified within tolerance; otherwise the row is stamped ladder-1 (character-sized). */
-  async function sizedLadderPrompt(ctx: number): Promise<{ prompt: string; sized: boolean }> {
+  async function sizedLadderPrompt(ctx: number, requestSignal?: AbortSignal): Promise<{ prompt: string; sized: boolean }> {
     const target = Math.floor(ctx * LADDER_FILL)
     let fill = LADDER_FILL
     let prompt = ladderPrompt(ctx, fill)
     if (!backend.tokenize) return { prompt, sized: false }
     try {
       for (let i = 0; i <= LADDER_SIZE_ROUNDS; i++) {
-        const n = await backend.tokenize(prompt)
+        if (requestSignal?.aborted) throw new Error('prompt sizing cancelled')
+        const n = await backend.tokenize(prompt, requestSignal)
+        if (requestSignal?.aborted) throw new Error('prompt sizing cancelled')
         if (!(n > 0)) break
         if (Math.abs(n - target) / target <= LADDER_FILL_TOLERANCE) return { prompt, sized: true }
         if (i === LADDER_SIZE_ROUNDS) break
@@ -742,6 +752,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     // kills the server (unloadModel); afterwards it cancels the in-flight request.
     let emitted = 0
     let guard: string | null = null
+    const stepCtl = new AbortController()
+    const stepSignal = signal ? AbortSignal.any([signal, stepCtl.signal]) : stepCtl.signal
     let guardSpill: { adjusted: number; raw: number; loadGrowth: boolean } | null = null
     let overSamples = 0
     let lastPressureTs: number | null = null
@@ -757,14 +769,12 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       if (os !== null) { minRam = Math.min(minRam ?? os, os); if (loading) minLoadRam = Math.min(minLoadRam ?? os, os) }
       if (!guard && os !== null && os + mmapCredit < ramFloor) {
         guard = `RAM available ${(os / GiB).toFixed(1)} GiB (OS) fell below the floor`
-        void (loading ? unload() : backend.cancel())
       }
       // Fail safe: if neither the OS reading nor any typeperf RAM row is available, don't continue blind.
       const ramRows = ((sampler as SessionSampler | null)?.samples ?? []).some((x) => x.ramAvailBytes != null)
       blindPolls = deps.readRamAvailableBytes && os === null && !ramRows ? blindPolls + 1 : 0
       if (!guard && blindPolls >= cfg.guardBlindPollsMax) {
         guard = 'RAM guard inputs unreadable (no OS reading and no telemetry rows); stopped rather than continue blind'
-        void (loading ? unload() : backend.cancel())
       }
       const xs = (sampler as SessionSampler | null)?.samples ?? []
       for (; emitted < xs.length; emitted++) {
@@ -792,13 +802,18 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
           ? `RAM available ${(s.ramAvailBytes / GiB).toFixed(1)} GiB fell below the floor`
           : `shared GPU memory spill ${(pressure! / GiB).toFixed(1)} GiB exceeded the abort limit (uncertain residency: residual per-PID shared above ${(cfg.sharedSpillAbortBytes / GiB).toFixed(1)} GiB on ${overSamples} consecutive samples${loading ? ' during load, using growth from first observed load level while host-pinned buffers were being declared' : ''}; ${(() => { const sat = adjustedSpill(s.procVramSharedBytes!, s.procVramDedicatedBytes, pinned, spillBase).saturated; return sat === null ? 'saturation unknown' : sat ? 'dedicated near the effective budget' : 'dedicated below the saturation share — may be placement' })()})`
         if (spillAbort) guardSpill = { adjusted: pressure!, raw: s.procVramSharedBytes!, loadGrowth: loading }
-        void (loading ? unload() : backend.cancel())
+      }
+      if (guard && !stepCtl.signal.aborted) {
+        stepCtl.abort(new Error(guard))
+        void backend.cancel()
+        void unload()
       }
     }
     const timer = setInterval(flush, cand.expectDegraded ? cfg.heavyGuardPollMs : cfg.guardPollMs)
-    const guardAbort = () => {
+    const guardAbort = async () => {
       clearInterval(timer)
-      ;(sampler as SessionSampler | null)?.stop()
+      await (sampler as SessionSampler | null)?.stop()
+      await unload()
       // Record the exact value and definition the guard tripped on (raw kept separately).
       const spill: Partial<BenchmarkRunResult> = guardSpill ? {
         peakSharedGpuBytes: { value: guardSpill.adjusted, kind: 'measured', source: `guard trip sample: per-PID shared − host-pinned ${(pinned / GiB).toFixed(2)} GiB − baseline ${(spillBase / GiB).toFixed(2)} GiB (ungated)${guardSpill.loadGrowth ? '; during-load growth above first observed level while buffer declarations were still arriving' : ''}` },
@@ -810,14 +825,14 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     let load: LoadResult
     try {
       backend.setLoadDeclarationListener?.((declared) => { pinned = hostPinnedBytes(declared, cand.mmap !== false) })
-      load = await backend.loadModel(loadCfg(cand, model, ctx))
+      load = await backend.loadModel({ ...loadCfg(cand, model, ctx), signal: stepSignal })
     } catch (e) {
       backend.setLoadDeclarationListener?.(null)
       clearInterval(pidPoll)
       flush()
       if (guard) return guardAbort()
       clearInterval(timer)
-      ;(sampler as SessionSampler | null)?.stop()
+      await (sampler as SessionSampler | null)?.stop()
       const msg = (e as Error).message
       const drift = (e as { failureKind?: string }).failureKind === 'config_drift' // ConfigDriftError (runtimes/llamacpp)
       const kind = signal?.aborted ? null : drift ? 'config_drift' : failKind(backend.lastExit) ?? (/healthy within/.test(msg) ? 'load_timeout' : 'load_fail')
@@ -839,7 +854,10 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       flush()
       return guard ? { status: 'fail' as const, kind: 'guard_abort' as const, reason: guard } : classify(error, timedOut)
     }
-    const { prompt, sized } = await sizedLadderPrompt(ctx)
+    const { prompt, sized } = await sizedLadderPrompt(ctx, stepSignal)
+    flush()
+    if (guard) return guardAbort()
+    if (stepSignal.aborted) { clearInterval(timer); await (sampler as SessionSampler | null)?.stop(); await unload(); return result('cancelled', null, 'cancelled before warmup') }
     promptVersionOfStep = sized ? PROMPT_VERSION : CHARACTER_PROMPT_VERSION
     const timeoutMs = cfg.promptTimeoutBaseMs + ctx * cfg.promptTimeoutPerCtxMs
     const reps: PromptResult[] = []
@@ -850,12 +868,16 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       send({ type: 'phase', configId: cand.id, ctx, phase: 'warmup' })
       // Size-matched warmup: compiles the pipelines for this batch shape (F7).
       const w0 = Date.now()
-      await backend.warmup(prompt).then(() => { warm = true }, (e: Error) => { failure = fail(e.message, false) })
+      await backend.warmup(prompt, timeoutMs, stepSignal).then(() => { warm = true }, (e: Error) => { failure = fail(e.message, false) })
+      flush()
+      if (guard) failure = { status: 'fail', kind: 'guard_abort', reason: guard }
       windows.push([w0, Date.now()])
       send({ type: 'phase', configId: cand.id, ctx, phase: 'measure' })
-      for (let i = 0; i < cfg.reps && !failure && !signal?.aborted; i++) {
+      for (let i = 0; i < cfg.reps && !failure && !stepSignal.aborted; i++) {
+        flush()
+        if (guard || stepSignal.aborted) break
         const r0 = Date.now()
-        const r = await backend.runPrompt({ prompt, maxTokens: cfg.predictTokens, temperature: 0, seed: 1, timeoutMs })
+        const r = await backend.runPrompt({ prompt, maxTokens: cfg.predictTokens, temperature: 0, seed: 1, timeoutMs, signal: stepSignal })
         windows.push([r0, Date.now()])
         flush()
         if (r.error) { failure = fail(r.error, r.timedOut); break }
@@ -869,7 +891,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     if (smp && !failure && !smp.samples.length) {
       while (!smp.samples.length && Date.now() - samplerAt < cfg.firstSampleWaitMs) await new Promise((r) => setTimeout(r, 100))
     }
-    const samples = smp?.stop() ?? []
+    const samples = await smp?.stop() ?? []
     flush()
     if (!failure && guard) failure = { status: 'fail', kind: 'guard_abort', reason: guard }
     if (!failure && signal?.aborted) failure = { status: 'cancelled', kind: null, reason: 'cancelled by user' }
@@ -958,7 +980,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
    *  kills the load or cancels the request. No spill guard here: quality runs at ≤ the practical ceiling, which had
    *  no spill by definition. Returns tripped() for the caller to stop between requests. */
   async function guardedLoad(cand: CandidateConfig, model: ModelMeta, ctx: number, what: string):
-    Promise<{ ok: true; tripped: () => string | null; stop: () => void } | { ok: false; reason: string }> {
+    Promise<{ ok: true; tripped: () => string | null; signal: AbortSignal; stop: () => Promise<void> } | { ok: false; reason: string }> {
     await unload((e: Error) => log('warn', `unload before ${what}: ${e.message}`))
     checkStuck()
     const ngl = cand.gpuLayersAll ? model.layers : cand.gpuLayers
@@ -972,7 +994,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     const oldPid = backend.pid
     let sampler: SessionSampler | null = null
     let tripped: string | null = null
-    let loading = true
+    const guardCtl = new AbortController()
+    const requestSignal = signal ? AbortSignal.any([signal, guardCtl.signal]) : guardCtl.signal
     let blind = 0
     const poll = () => {
       if (!sampler && backend.pid !== undefined && backend.pid !== oldPid) sampler = deps.startSampler(backend.pid)
@@ -983,21 +1006,24 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       if (tripped) return
       if (ram !== null && ram + mmapCredit < ramFloor) tripped = `RAM available ${(ram / GiB).toFixed(1)} GiB fell below the floor during ${what}`
       else if (blind >= cfg.guardBlindPollsMax) tripped = `RAM guard inputs unreadable during ${what}; stopped rather than continue blind`
-      if (tripped) void (loading ? unload() : backend.cancel())
+      if (tripped && !guardCtl.signal.aborted) {
+        guardCtl.abort(new Error(tripped))
+        void backend.cancel()
+        void unload()
+      }
     }
     const timer = setInterval(poll, cand.expectDegraded ? cfg.heavyGuardPollMs : cfg.guardPollMs)
-    const stop = () => { clearInterval(timer); (sampler as SessionSampler | null)?.stop() }
+    const stop = async () => { clearInterval(timer); await (sampler as SessionSampler | null)?.stop() }
     try {
-      await backend.loadModel(loadCfg(cand, model, ctx))
+      await backend.loadModel({ ...loadCfg(cand, model, ctx), signal: requestSignal })
     } catch (err) {
       poll()
-      stop()
+      await stop()
       return { ok: false, reason: tripped ?? `${what} load at ${ctx} failed: ${(err as Error).message}` }
     }
-    loading = false
     poll()
-    if (tripped) { stop(); await unload(); return { ok: false, reason: tripped } }
-    return { ok: true, tripped: () => { poll(); return tripped }, stop }
+    if (tripped) { await stop(); await unload(); return { ok: false, reason: tripped } }
+    return { ok: true, tripped: () => { poll(); return tripped }, signal: requestSignal, stop }
   }
 
   /** CR-04-long: needle at 50 % depth of a prompt filling ~0.75 × ctx. null when the load itself failed. */
@@ -1017,8 +1043,9 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     if (!g.ok) { log('error', `${cand.id}: ${g.reason}`); return null }
     const templateKwargs = templateKwargsFor(model, BASELINE_GEN)
     try {
-      const prompt = await backend.applyTemplate([{ role: 'user', content: needlePrompt(test.params!, Math.floor(ctx * 0.75)) }], templateKwargs ? { templateKwargs } : undefined)
-      const r = await backend.runPrompt({ prompt, maxTokens: test.maxTokens, temperature: 0, seed: 1, timeoutMs: cfg.promptTimeoutBaseMs + ctx * cfg.promptTimeoutPerCtxMs })
+      const prompt = await backend.applyTemplate([{ role: 'user', content: needlePrompt(test.params!, Math.floor(ctx * 0.75)) }], { ...(templateKwargs ? { templateKwargs } : {}), signal: g.signal })
+      if (g.tripped() || g.signal.aborted) { await unload(); return null }
+      const r = await backend.runPrompt({ prompt, maxTokens: test.maxTokens, temperature: 0, seed: 1, timeoutMs: cfg.promptTimeoutBaseMs + ctx * cfg.promptTimeoutPerCtxMs, signal: g.signal })
       const why = g.tripped()
       if (why) { log('error', `${cand.id}: ${why}`); return null }
       const outputTruncated = r.timedOut || r.stopType === 'limit'
@@ -1032,7 +1059,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         detail: `request failed: ${(e as Error).message}`, evaluationStatus: 'infra_error', outputTruncated: false,
         maxTokens: test.maxTokens, checkerVersion: suite.suite }
     } finally {
-      g.stop()
+      await g.stop()
     }
   }
 
@@ -1069,7 +1096,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
             const requestedSampling = { temperature: s.temperature, topP: s.top_p ?? null, topK: s.top_k ?? null, minP: s.min_p ?? null, seed: sample }
             let proofOnError: Partial<GenRow> = {}
             try {
-              const prompt = await backend.applyTemplate(p.messages, templateKwargs ? { templateKwargs } : undefined)
+              const prompt = await backend.applyTemplate(p.messages, { ...(templateKwargs ? { templateKwargs } : {}), signal: g.signal })
+              if (g.tripped() || g.signal.aborted) { interrupted = true; break }
               const promptSha256 = sha256(prompt)
               const preq: PromptRequest & { topP?: number; topK?: number; minP?: number } = {
                 prompt, seed: sample, temperature: s.temperature, topP: s.top_p, topK: s.top_k, minP: s.min_p,
@@ -1094,7 +1122,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
                     continue
                   }
                   try {
-                    const changed = await backend.applyTemplate(p.messages, { templateKwargs: { ...templateKwargs, [key]: alternate } })
+                    const changed = await backend.applyTemplate(p.messages, { templateKwargs: { ...templateKwargs, [key]: alternate }, signal: g.signal })
                     proof[key] = { requested, counterfactual: alternate, requestedSha256: promptSha256,
                       counterfactualSha256: sha256(changed), status: g.tripped() || signal?.aborted || deps.pauseSignal?.aborted || backend.lastExit ? 'unavailable' : changed === prompt ? 'unchanged' : 'proved' }
                   } catch {
@@ -1103,7 +1131,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
                 }
               }
               if (!cached || cached.promptSha256 !== promptSha256) proofCache.set(cacheKey, { promptSha256, proof })
-              if (g.tripped() || signal?.aborted || deps.pauseSignal?.aborted || backend.lastExit) { interrupted = true; break }
+              if (g.tripped() || g.signal.aborted || deps.pauseSignal?.aborted || backend.lastExit) { interrupted = true; break }
               const requestedKeys = Object.keys(templateKwargs ?? {})
               const provedKeys = requestedKeys.filter((key) => proof[key]?.status === 'proved')
               const renderProof: NonNullable<GenRow['renderProof']> = {
@@ -1116,7 +1144,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
                 proofProvenance: { mode: 'runtime', originalPromptHashPresent: true, status: 'original' },
                 ...(templateKwargs ? { requestedTemplateKwargs: templateKwargs, templateKwargProof: proof } : {}),
                 ...(templateKwargs && renderProof.status === 'proved' ? { appliedTemplateKwargs: templateKwargs } : {}) }
-              const r = await backend.runPrompt(preq)
+              const r = await backend.runPrompt({ ...preq, signal: g.signal })
               const split = splitReasoning(r.text ?? '')
               const toks = r.decodeTokens ?? r.streamedTokens ?? null
               const chars = split.reasoningChars + split.answerChars
@@ -1159,7 +1187,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         done.push(summarizeGen(gen, rows, samples))
       }
     } finally {
-      g.stop()
+      await g.stop()
     }
     return done
   }

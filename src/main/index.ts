@@ -397,5 +397,5 @@ app.whenReady().then(async () => {
   createWindow()
 })
 app.on('window-all-closed', () => app.quit())
-app.on('before-quit', () => { active?.cancel.abort(); stopAllSamplers(); llama.killSync() })
-process.on('exit', () => llama.killSync())
+app.on('before-quit', () => { active?.cancel.abort(); stopAllSamplers(); llama.killSync(); llamaHip.killSync() })
+process.on('exit', () => { llama.killSync(); llamaHip.killSync() })
