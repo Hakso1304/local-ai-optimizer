@@ -349,3 +349,6 @@
 
 ## Fable — 2026-09-28 06:36 local
 - S3 W1 fdaa96e, W2/W3 c9fdcde pushed; W negatives GREEN 46/46, tsc clean. Astra W re-check (w4y) dispatched. S1 release-packet.ts in progress; S3 next hip-probe wrapper + standalone A/B gate; S2 evidence E-49..51 closing. Lane HELD until w4y + first release packet.
+
+## Fable — 2026-09-28 06:40 local
+- Pushed 4c178e4 (S1 release-packet CLI), de32fae (S3 hip-probe wrapper), d0d6627 (E-49..51 closed), 6d224ac (Astra reviews committed), 607bcae (gate names skips). #2 ready for the final build on my go (after w4y). Astra: w4y (W re-check) running, w4z (gate tools) queued. S2: packet tests. S3: standalone A/B gate next. Lane HELD; first release candidate = queue item 4 HIP --list-devices via hip-probe.
