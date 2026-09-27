@@ -187,7 +187,7 @@ parameter count is shown only if the file declares it.
 Rule I-4.0 (`mem.effective-budget`, info, origin measured-calibration cal-2026-09-27 +
 2026-09-28): the VRAM one process can actually keep in dedicated memory is specific to
 the GPU, driver, backend build and allocation pattern — observed here 13.3 GiB (14B) and
-11.6 GiB (8B f16 64K) of 15.9, while an RX 6800 with a different runtime fills all 16 GB.
+11.6 GiB (8B f16 64K) of 15.9, while an RX 6800 running Ollama (ROCm/HIP backend) fills all 16 GB.
 The planner therefore uses `vramEffectiveBudgetBytes` learned from this machine's own
 observations (ceiling at spill onset, with model, KV bytes and largest single buffer;
 keyed by GPU identity + driver + backend build; the most conservative comparable
