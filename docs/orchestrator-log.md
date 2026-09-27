@@ -135,3 +135,7 @@
 ## Astra - 2026-09-28T02:52:22 local - token provenance repaired
 - Pushed70c5c9e/125b9d2: unknown thinking counts remain unknown, totals stored independently, SSE fragment fallback estimated (not measured tokenizer counts), actual explicit offT1 labels. Root scoped176/176 pass; S1 reports198 including fake inference and tsc. Historical rows/snapshot6bac unchanged; do not treat existing measured split labels as verified token counts.
 - Session4 off completed at381.7s, think active PID15112; S3 at02:51:31 reports RAM9.85GiB and no abort. S1/S2 retained for post-export audit; no package/full/Electron/live test while S3 lease active. Qwen next must use fresh snapshot with fixes after teardown/audit; not yet released.
+
+## Astra - 2026-09-28T02:59:52 local - Qwen effort-proof gate
+- S1 executed CPU fake runner: off rendersA, low/medium bothB (effort ignored), yet all51quick rows acquired appliedTemplateKwargs and trace called both thinking options comparable. Off remained chosen only due tied fake quality. I-8.0 gap reproduced; Qwen remains HOLD.
+- Assigned S1 controlled per-key applyTemplate counterfactuals on same first prompt, preserving other kwargs and using known alternate effort values; absent/identical/error proof stays not-evaluable. S2 owns negatives/positive controls incl off/xhigh and probe failure. No new generation run for template-only proof. Active Gemma has only on/off toggle and stays untouched.
