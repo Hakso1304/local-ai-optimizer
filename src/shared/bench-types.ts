@@ -153,7 +153,7 @@ export interface CandidateConfig {
   threads: number
   /** Context steps to run, ascending. */
   ctxSteps: number[]
-  skippedSteps: { ctx: number; reason: string }[]
+  skippedSteps: { ctx: number; reason: string; /** structured (rule I-2.3) */ skip?: PlannedSkip }[]
   /** At the smallest step. kind 'estimated'. Used for pruning only. */
   estVramBytes: Metric
   estRamBytes: Metric
@@ -166,6 +166,30 @@ export interface CandidateConfig {
   /** Heavy-model mode: partial offload chosen on purpose; slow decode is expected, with the reason. */
   expectDegraded?: boolean
   degradedReason?: string
+  /** What the planner assumed (data contract §12; rules I-4.1 / I-4.2). Persisted with the plan. */
+  planning?: PlanningSnapshot
+}
+
+/** Why the planner did not attempt a rung. resource 'declared' = above the model's declared context. */
+export interface PlannedSkip {
+  resource: 'vram' | 'ram' | 'declared'
+  estimateBytes?: number
+  budgetBytes?: number
+  ruleId: string
+}
+
+/** The planner's machine snapshot and budgets for this config. */
+export interface PlanningSnapshot {
+  vramTotalBytes: number | null
+  /** measured, or the assumed default (estimated) when the reading was unavailable */
+  vramInUse: Metric
+  /** VRAM total − in use (before the reserve). */
+  planningVramBudgetBytes: number | null
+  /** Safety margin kept free (candidate rules vramMarginBytes). */
+  planningReserveBytes: number
+  ramAvailableBytes: number | null
+  ramReserveBytes: number
+  candidateRulesVersion: string
 }
 
 export interface RejectedCandidate {
@@ -223,8 +247,17 @@ export interface BenchmarkRunResult {
   repDecodeTps?: number[]
   /** Lowest RAM available the guard saw during the step (load + requests). */
   minRamAvailBytes?: Metric
+  /** RAM available just before this step's load (i.e. after the previous server was unloaded). */
+  ramAvailBeforeLoadBytes?: Metric
+  /** The RAM floor the guard enforced and the mmap credit it granted (rule I-4.3: signed distance, credit separately). */
+  ramFloorBytes?: number
+  mmapCreditBytes?: number
+  /** Telemetry samples within 1 % of the dedicated-VRAM peak (rule I-4.5 needs a plateau of ≥ 3). */
+  peakVramPlateauSamples?: number
+  /** Structured reason when the runner skipped the step before loading (live RAM pre-check). */
+  skip?: PlannedSkip
   /** What produced this row (X17), all declared. runtime null = not reported by detect(). */
-  versions?: { benchmark: string; prompts: string; quality: string; runtime: string | null }
+  versions?: { benchmark: string; prompts: string; quality: string; runtime: string | null; rules?: string }
 }
 
 export type StepVerdict = 'pass' | 'degraded' | 'fail'

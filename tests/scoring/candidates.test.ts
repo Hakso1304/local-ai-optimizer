@@ -46,7 +46,7 @@ describe('generateCandidates (16 GB VRAM / 31 GB RAM)', () => {
   it('8B on 16 GB: 64K fits, 128K is pruned as far over budget (memory-bound, calibration)', () => {
     const [c] = generateCandidates(machine(), llama8b, vulkan, WORKLOADS.document_analysis).candidates
     expect(c.ctxSteps.at(-1)).toBe(65536)
-    expect(c.skippedSteps).toEqual([{ ctx: 131072, reason: expect.stringMatching(/est\. VRAM .* > budget/) }])
+    expect(c.skippedSteps).toMatchObject([{ ctx: 131072, reason: expect.stringMatching(/est\. VRAM .* > budget/) }])
   })
 
   it('small model with full offload fitting gets no ngl=0 candidate (ngl 0 is not CPU-only on Vulkan)', () => {
@@ -108,4 +108,15 @@ describe('machineFromProfile: measured VRAM in use from the profile', () => {
     expect(b(budgetOf(profile(), 0).reason) - b(budgetOf(p).reason)).toBeCloseTo(1.5, 1)
     expect(machineFromProfile(p, 'Vulkan0', 2 * GiB).vramInUseBytes.value).toBe(2 * GiB)
   })
+
+describe('planning snapshot (data contract §12)', () => {
+  it('every candidate carries the budget basis; unknown VRAM-in-use is the estimated default', () => {
+    const f = load('calib-8b-rx9070.json')
+    const m = machine(f.vramBytes)
+    const c = generateCandidates(m, f.models[0], { backend: 'vulkan' }, WORKLOADS.coding).candidates[0]
+    expect(c.planning).toMatchObject({ vramTotalBytes: f.vramBytes, planningVramBudgetBytes: f.vramBytes, planningReserveBytes: 1024 ** 3, candidateRulesVersion: 'cand-1.4', vramInUse: { kind: 'measured' } })
+    const blind = generateCandidates({ ...m, vramInUseBytes: { value: null, kind: 'unavailable', reason: 'no counter' } }, f.models[0], { backend: 'vulkan' }, WORKLOADS.coding).candidates[0]
+    expect(blind.planning!.vramInUse).toMatchObject({ value: 1.5 * 1024 ** 3, kind: 'estimated' })
+  })
+})
 })

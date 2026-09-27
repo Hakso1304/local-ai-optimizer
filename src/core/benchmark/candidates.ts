@@ -1,13 +1,16 @@
 // Candidate configs per model + memory estimates for pruning (DESIGN §2.7, §6). Pure, deterministic.
 // Estimates only prune; they are never shown as facts (kind 'estimated').
 import type {
-  CandidateConfig, CandidateSet, KvType, MachineLimits, Metric, ModelMeta, RejectedCandidate, WorkloadProfile
+  CandidateConfig, CandidateSet, KvType, MachineLimits, Metric, ModelMeta, PlannedSkip, PlanningSnapshot, RejectedCandidate, WorkloadProfile
 } from '../../shared/bench-types'
 import type { SystemProfile } from '../../shared/types'
 import type { SessionRequest } from '../../shared/bench-events'
 
 const MiB = 1024 ** 2
 const GiB = 1024 ** 3
+
+/** Bumped whenever planning (estimates, budgets, ordering) changes behaviour. */
+export const CANDIDATE_RULES_VERSION = 'cand-1.4'
 
 export const DEFAULT_CANDIDATE_RULES = {
   /** 128K only runs where declared ctx and the VRAM estimate allow; otherwise it documents the memory bound. */
@@ -160,7 +163,7 @@ export function generateCandidates(
   const maxCtx = model.ctxTrain ?? rules.unknownCtxMax
   const ladder = rules.ctxLadder.filter((c) => c <= maxCtx)
   const aboveDeclared = rules.ctxLadder.filter((c) => c > maxCtx)
-    .map((ctx) => ({ ctx, reason: model.ctxTrain ? `above declared context ${ctxK(model.ctxTrain)}` : `declared context unknown; capped at ${ctxK(maxCtx)}` }))
+    .map((ctx) => ({ ctx, reason: model.ctxTrain ? `above declared context ${ctxK(model.ctxTrain)}` : `declared context unknown; capped at ${ctxK(maxCtx)}`, skip: { resource: 'declared' as const, ruleId: 'I-2.3' } }))
   const threads = machine.physicalCores
   const hasGpu = machine.gpuDevice !== null && runtime.backend !== 'cpu'
   const vram = num(machine.vramBytes)
@@ -169,6 +172,14 @@ export function generateCandidates(
   const ramBudget = ramBase === null ? null : ramBase - rules.ramReserveBytes
   const heavyRamBudget = ramBase === null ? null : ramBase - Math.max(4 * GiB, rules.heavyRamReserveBytes)
   const lowConf = isLowConfidence(model)
+  const inUse = num(machine.vramInUseBytes)
+  const planning: PlanningSnapshot = {
+    vramTotalBytes: vram,
+    vramInUse: inUse !== null ? machine.vramInUseBytes : { value: rules.vramInUseUnknownBytes, kind: 'estimated', source: `assumed default (${machine.vramInUseBytes.reason ?? 'reading unavailable'})` },
+    planningVramBudgetBytes: vram === null ? null : vram - (inUse ?? rules.vramInUseUnknownBytes),
+    planningReserveBytes: rules.vramMarginBytes,
+    ramAvailableBytes: ramBase, ramReserveBytes: rules.ramReserveBytes, candidateRulesVersion: CANDIDATE_RULES_VERSION
+  }
   const rejected: RejectedCandidate[] = []
   const candidates: CandidateConfig[] = []
 
@@ -180,7 +191,7 @@ export function generateCandidates(
     const id = idOf(ngl, kv, kvOnGpu)
     if (!ladder.length) { rejected.push({ id, modelId: model.id, reason: `declared context ${maxCtx} is below the smallest step ${ctxK(rules.ctxLadder[0])}` }); return null }
     const steps: number[] = []
-    const skipped = [...aboveDeclared]
+    const skipped: { ctx: number; reason: string; skip?: PlannedSkip }[] = [...aboveDeclared]
     const notes: string[] = []
     let overVramKept = false
     for (const ctx of ladder) {
@@ -189,7 +200,7 @@ export function generateCandidates(
       const ramNeed = heavy ? e.ramResidentBytes : e.ramBytes
       const rb = heavy ? heavyRamBudget : ramBudget
       if (rb !== null && ramNeed > rb) {
-        skipped.push({ ctx, reason: `skipped_memory: est. RAM ${gib(ramNeed)} > available − reserve ${gib(rb)}` })
+        skipped.push({ ctx, reason: `skipped_memory: est. RAM ${gib(ramNeed)} > available − reserve ${gib(rb)}`, skip: { resource: 'ram', estimateBytes: ramNeed, budgetBytes: rb, ruleId: 'I-2.3' } })
         continue
       }
       if (ngl > 0 && gpuBudget !== null && vramNeed > gpuBudget) {
@@ -198,7 +209,7 @@ export function generateCandidates(
           overVramKept = true; steps.push(ctx); notes.push(`${ctxK(ctx)} is above the VRAM estimate; kept to observe the cliff`); continue
         }
         overVramKept = true // never skip a step and then run a larger one
-        skipped.push({ ctx, reason: `est. VRAM ${gib(vramNeed)} > budget ${gib(gpuBudget)}` })
+        skipped.push({ ctx, reason: `est. VRAM ${gib(vramNeed)} > budget ${gib(gpuBudget)}`, skip: { resource: 'vram', estimateBytes: vramNeed, budgetBytes: gpuBudget, ruleId: 'I-2.3' } })
         continue
       }
       steps.push(ctx)
@@ -215,7 +226,7 @@ export function generateCandidates(
       id, modelId: model.id, device: ngl > 0 ? machine.gpuDevice : null, gpuLayers: Math.min(ngl, model.layers), gpuLayersAll: ngl >= model.layers,
       kvType: kv, flashAttn: true, threads, ctxSteps: steps, skippedSteps: skipped.sort((a, b) => a.ctx - b.ctx),
       estVramBytes: est(e0.vramBytes, src), estRamBytes: est(heavy ? e0.ramResidentBytes : e0.ramBytes, src), notes,
-      ...(kvOnGpu ? {} : { kvOffload: false })
+      ...(kvOnGpu ? {} : { kvOffload: false }), planning
     }
   }
 

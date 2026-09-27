@@ -74,7 +74,22 @@ export function splitReasoning(text: string): { reasoningChars: number; answerCh
 }
 
 /** A graded quality row as stored: which gen config and sample produced it, plus that request's token/time counts. */
-export type GenRow = QualityResult & { genId?: string; sample?: number; answerTokens?: number | null; reasoningTokens?: number | null; totalMs?: number | null }
+export type GenRow = QualityResult & {
+  genId?: string; sample?: number; answerTokens?: number | null; reasoningTokens?: number | null; totalMs?: number | null
+  /** Data contract §12 (rules I-5.7 / I-5.8 / I-8.0). Absent in older rows (then: valid, not evaluable for I-8.0). */
+  evaluationStatus?: 'valid' | 'infra_error' | 'unrun' | 'truncated'
+  outputTruncated?: boolean
+  maxTokens?: number
+  checkerVersion?: string
+  tokenSource?: 'runtime' | 'estimated'
+  promptTokens?: number | null
+  ctx?: number
+  requestedTemplateKwargs?: Record<string, unknown>
+  /** Set only when the kwargs demonstrably changed the rendered prompt. */
+  appliedTemplateKwargs?: Record<string, unknown>
+  skillId?: string
+  generatorSeed?: number | string
+}
 
 const median = (xs: (number | null | undefined)[]): number | null => {
   const v = xs.filter((x): x is number => typeof x === 'number' && Number.isFinite(x)).sort((a, b) => a - b)

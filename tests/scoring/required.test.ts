@@ -54,7 +54,7 @@ describe('required context', () => {
     expect(ids[2]).toMatchObject({ kvOffload: false })
     expect(ids[1].ctxSteps.at(-1)).toBe(131072) // q8_0 KV (≈8.5 GiB) + weights fit the 13.7 GiB budget at 128K
     // KV in RAM: 16 GiB of f16 KV at 128K exceeds available − reserve (20 − 4 GiB) → skipped with the RAM reason.
-    expect(ids[2].skippedSteps).toEqual([{ ctx: 131072, reason: 'skipped_memory: est. RAM 16.5 GiB > available − reserve 16.0 GiB' }])
+    expect(ids[2].skippedSteps).toMatchObject([{ ctx: 131072, reason: 'skipped_memory: est. RAM 16.5 GiB > available − reserve 16.0 GiB', skip: { resource: 'ram', ruleId: 'I-2.3' } }])
   })
 })
 

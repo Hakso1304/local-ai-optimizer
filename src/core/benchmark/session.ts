@@ -15,6 +15,7 @@ import { recommend } from '../scoring/recommend'
 import { DEFAULT_SCORING_CONFIG, effectiveProfile, withProfile } from '../scoring/workloads'
 import { estimateMemory, generateCandidates, machineFromProfile, rulesForRequest } from './candidates'
 import { LADDER_FILL, LADDER_PREDICT, PROMPT_VERSION, ladderPrompt } from './prompts'
+import { RULES_VERSION } from '../interpret'
 import { BASELINE_GEN, genConfigsFor, genLabel, samplingFor, splitReasoning, summarizeGen, templateKwargsFor, type GenRow } from './gen'
 
 /** Bump when the runner's measurement procedure changes (warmup, reps, reduction, timeouts). */
@@ -416,7 +417,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         loadTimeMs: na('not loaded'), ttftMs: na('no request'), prefillTps: na('no request'), decodeTps: na('no request'), totalMs: na('no request'),
         peakVramBytes: na('no telemetry'), peakSharedGpuBytes: na('no telemetry'), peakRamBytes: na('no telemetry'),
         avgGpuUtil: na('no telemetry'), avgCpuUtil: na('no telemetry'), warm: false,
-        versions: { benchmark: BENCHMARK_VERSION, prompts: PROMPT_VERSION, quality: defaultTestSet.suite, runtime: deps.runtimeVersion ?? null }, ...extra
+        versions: { benchmark: BENCHMARK_VERSION, prompts: PROMPT_VERSION, quality: defaultTestSet.suite, runtime: deps.runtimeVersion ?? null, rules: RULES_VERSION },
+        ramFloorBytes: ramFloor, ...extra
       },
       detail: {
         samples: [], reason, stderrTail: backend.lastExit?.tail.slice(-50) ?? [], load: null, startedAt, endedAt: clock.now(),
@@ -436,8 +438,11 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     // (calibration: ≈ file size) without being memory pressure. Credit them in the in-step floor check.
     // Without mmap (heavy configs) there are no reclaimable file pages to credit.
     const mmapCredit = cand.mmap === false ? 0 : (model.fileBytes * Math.min(cand.gpuLayersAll ? model.layers : cand.gpuLayers, model.layers)) / model.layers
+    const beforeLoad: Metric = avail === null ? { value: null, kind: 'unavailable', reason: 'no RAM reading before load' }
+      : { value: avail, kind: osRam() !== null ? 'measured' : 'declared', source: 'RAM available before load (after the previous unload)' }
     if (avail !== null && need > avail - ramFloor) {
-      return result('fail', 'skipped_memory', `est. RAM ${(need / GiB).toFixed(1)} GiB > available ${(avail / GiB).toFixed(1)} GiB − floor ${(ramFloor / GiB).toFixed(1)} GiB`)
+      return result('fail', 'skipped_memory', `est. RAM ${(need / GiB).toFixed(1)} GiB > available ${(avail / GiB).toFixed(1)} GiB − floor ${(ramFloor / GiB).toFixed(1)} GiB`,
+        { ramAvailBeforeLoadBytes: beforeLoad, skip: { resource: 'ram', estimateBytes: need, budgetBytes: avail - ramFloor, ruleId: 'I-4.3' } })
     }
 
     send({ type: 'phase', configId: cand.id, ctx, phase: 'load' })
@@ -600,6 +605,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
 
     return result(f?.status ?? 'pass', f?.kind ?? null, f?.reason ?? null, {
       warm,
+      ramAvailBeforeLoadBytes: beforeLoad, mmapCreditBytes: mmapCredit,
+      peakVramPlateauSamples: pk.max.procVramDedicatedBytes == null ? 0 : samples.filter((x) => x.procVramDedicatedBytes != null && x.procVramDedicatedBytes >= pk.max.procVramDedicatedBytes! * 0.99).length,
       repDecodeTps: reps.map((r) => r.decodeTps).filter((x): x is number => typeof x === 'number'),
       minRamAvailBytes: minRam === null ? { value: null, kind: 'unavailable', reason: 'no RAM reading during the step' } : { value: minRam, kind: 'measured', source: 'RAM guard: OS free RAM / typeperf' },
       promptTokens: median(reps.map((r) => r.promptTokens)),
@@ -705,9 +712,11 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     if (!g.ok) { log('error', `${cand.id}: ${g.reason}`); return [] }
     const prompts = buildQualityPrompts(defaultTestSet, { fillerTokens: Math.min(cfg.qualityFillerMax, Math.floor(ctx * 0.6)), thinking: false })
     const done: GenQuality[] = []
+    const renders: (string | null)[] = []
     try {
       for (const { gen, samples } of gens) {
         const templateKwargs = templateKwargsFor(model, gen)
+        let firstRender: string | null = null
         if (templateKwargs) log('info', `${model.name}: quality suite with ${genLabel(gen)}${samples > 1 ? `, ${samples} samples` : ''}`)
         const rows: GenRow[] = []
         let interrupted = false
@@ -720,6 +729,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
             const tag = { genId: gen.id, sample }
             try {
               const prompt = await backend.applyTemplate(p.messages, templateKwargs ? { templateKwargs } : undefined)
+              firstRender ??= prompt
               const s = samplingFor(gen)
               const preq: PromptRequest & { topP?: number; topK?: number; minP?: number } = {
                 prompt, seed: sample, temperature: s.temperature, topP: s.top_p, topK: s.top_k, minP: s.min_p,
@@ -732,12 +742,20 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
               const chars = split.reasoningChars + split.answerChars
               // Prefer the runtime's own reasoning count (reasoning_content / thought channel); else split by text length.
               const reasoningTokens = r.reasoningTokens !== undefined ? r.reasoningTokens ?? 0 : toks === null ? null : chars > 0 ? Math.round((toks * split.reasoningChars) / chars) : 0
-              const counts = { answerTokens: toks === null || reasoningTokens === null ? null : toks - reasoningTokens, reasoningTokens, totalMs: r.totalMs ?? null }
+              const truncated = r.timedOut || r.stopType === 'limit'
+              const counts = {
+                answerTokens: toks === null || reasoningTokens === null ? null : toks - reasoningTokens, reasoningTokens, totalMs: r.totalMs ?? null,
+                tokenSource: (r.reasoningTokens !== undefined ? 'runtime' : 'estimated') as GenRow['tokenSource'], promptTokens: r.promptTokens, ctx,
+                maxTokens: preq.maxTokens, checkerVersion: defaultTestSet.suite, outputTruncated: truncated,
+                // A failed request is an infrastructure failure, never a wrong answer (rule I-5.7); a budget stop is truncation (I-5.8).
+                evaluationStatus: (r.error && !r.timedOut ? 'infra_error' : truncated ? 'truncated' : 'valid') as GenRow['evaluationStatus'],
+                ...(templateKwargs ? { requestedTemplateKwargs: templateKwargs } : {})
+              }
               rows.push(r.error
                 ? { testId: test.id, category: test.category, weight: test.weight, pass: false, score: 0, detail: `request failed: ${r.error}`, ...tag, ...counts }
                 : { ...(await evaluate(test, r.text)), ...tag, ...counts })
             } catch (e) {
-              rows.push({ testId: test.id, category: test.category, weight: test.weight, pass: false, score: 0, detail: `request failed: ${(e as Error).message}`, ...tag })
+              rows.push({ testId: test.id, category: test.category, weight: test.weight, pass: false, score: 0, detail: `request failed: ${(e as Error).message}`, ...tag, evaluationStatus: 'infra_error', checkerVersion: defaultTestSet.suite, ctx })
             }
           }
         }
@@ -746,7 +764,15 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
           log('warn', `${cand.id}: quality suite (${gen.id}) incomplete (${rows.length}/${prompts.length * samples}); discarded`)
           break
         }
+        renders.push(firstRender)
         done.push(summarizeGen(gen, rows, samples))
+      }
+      // I-8.0: kwargs count as applied only when they changed the rendered prompt vs another gen config (a template
+      // that ignores enable_thinking renders identically — then the comparison is not evaluable).
+      for (let k = 0; k < done.length; k++) {
+        const kw = templateKwargsFor(model, done[k].gen)
+        if (!kw || renders[k] === null) continue
+        if (renders.some((x, j) => j !== k && x !== null && x !== renders[k])) for (const r of done[k].results as GenRow[]) r.appliedTemplateKwargs = kw
       }
     } finally {
       g.stop()

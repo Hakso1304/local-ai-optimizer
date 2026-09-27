@@ -62,7 +62,7 @@ function fakeBackend(script: (ctx: number, cfg: LoadConfig) => Step) {
     },
     async runPrompt(req): Promise<PromptResult> {
       const s = script(ctx, cfg!)
-      const base = { promptTokens: 100, prefillMs: 10, decodeTokens: req.maxTokens, decodeMs: 1000, text: 'BANANA', stopType: 'limit' }
+      const base = { promptTokens: 100, prefillMs: 10, decodeTokens: req.maxTokens, decodeMs: 1000, text: 'BANANA', stopType: 'eos' }
       const isMeasured = req.prompt === ladderPrompt(ctx)
       if (isMeasured) s.hook?.()
       if (isMeasured && s.prompt === 'device_lost') {
@@ -307,12 +307,32 @@ describe('runSession', () => {
     const stoch = seen.filter((q) => q.temperature === 0.6) as (PromptRequest & { topP?: number })[]
     expect(stoch.every((q) => q.topP === 0.95 && q.maxTokens >= 1024)).toBe(true)
     expect([...new Set(stoch.map((q) => q.seed))].sort()).toEqual([1, 2, 3])
-    const rows = r.s.quality[0].results as (QualityResult & { genId: string })[]
+    const rows = r.s.quality[0].results as (QualityResult & { genId: string; evaluationStatus: string; checkerVersion: string; maxTokens: number; appliedTemplateKwargs?: unknown })[]
     expect([...new Set(rows.map((x) => x.genId))]).toEqual(['off', 'think-low-t0.6', 'think-medium-t0.6'])
+    expect(rows.every((x) => x.evaluationStatus === 'valid' && x.checkerVersion === 'qb-1.1.0' && x.maxTokens > 0)).toBe(true)
+    // The fake template ignores kwargs (identical renders) → nothing counts as applied (I-8.0)
+    expect(rows.some((x) => x.appliedTemplateKwargs)).toBe(false)
     const quick = await run(() => ({}), { workload: 'coding', runQuality: true, ladder: [2048], qualityMode: 'quick' }, { models: [m] })
     expect(quick.backend.calls.templates).toBe(17 * 3)
     const off = await run(() => ({}), { workload: 'coding', runQuality: true, ladder: [2048], genSearch: false }, { models: [m] })
     expect(off.backend.calls.templates).toBe(17)
+  })
+
+  it('data contract: template kwargs count as applied only when they change the render; failed requests are infra_error', async () => {
+    const m = { ...model, supportsThinking: true, genKnobs: { supportsThinking: true } }
+    let n = 0
+    const backend = () => {
+      const b = fakeBackend(() => ({}))
+      b.applyTemplate = async (msgs, opts) => `${msgs.map((x) => x.content).join('\n')}${JSON.stringify(opts?.templateKwargs ?? {})}`
+      const rp = b.runPrompt.bind(b)
+      b.runPrompt = async (q) => (q.temperature === 0 && q.prompt.includes('enable_thinking') && n++ === 0 ? { ...(await rp(q)), error: 'HTTP 500' } : rp(q))
+      return b
+    }
+    const r = await run(() => ({}), { runQuality: true, ladder: [2048], qualityMode: 'quick' }, { models: [m], backend })
+    const rows = r.s.quality[0].results as (QualityResult & { genId: string; evaluationStatus: string; appliedTemplateKwargs?: unknown })[]
+    expect(rows.filter((x) => x.genId === 'think-t1').every((x) => JSON.stringify(x.appliedTemplateKwargs) === '{"enable_thinking":true}')).toBe(true)
+    expect(rows.filter((x) => x.evaluationStatus === 'infra_error')).toHaveLength(1)
+    expect(r.s.runs[0]).toMatchObject({ ramFloorBytes: expect.any(Number), versions: { rules: expect.stringMatching(/^interp-/) } })
   })
 
   it('thinking models: quality templates use enable_thinking=false; others get no kwargs', async () => {
