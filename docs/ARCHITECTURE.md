@@ -146,7 +146,7 @@ Flow:
    - The load goes through `guardedLoad` (unload, RAM pre-check, abortable load, RAM guard), checked between prompts; a trip discards the suite.
    - Thinking models (`supportsThinking`) run with `enable_thinking=false`.
    - Skipped when `runQuality === false`; reused on resume via `listQuality` only when it is the complete current-version suite.
-5. `recommend(inputs, machine, workload)` → `saveRecommendation` → status `done` → `session:done`. A pause at any point → status `paused` → `session:paused`.
+5. `recommend(inputs, machine, workload, cfg, unplanned, req, interpretData)` → `saveRecommendation` → status `done` → `session:done`. The runner passes the same `InterpretData` as the read-time path: every attempt incl. superseded retries (`SessionStorage.listRunHistory`), the planning floor, the stop reason and the session's own versions. A pause at any point → status `paused` → `session:paused`.
    - Resume rules: cancelled and `skipped_memory` steps always re-run; `retryFailed` re-runs fail/timeout steps (not `config_drift`); `rerunConfigIds` re-runs every step of those configs. Reads keep the last row per (configId, ctx).
 6. Cancel: `signal` abort calls `backend.cancel()`; loops check `signal.aborted`; status `cancelled` → `session:cancelled`, with partial runs already persisted. Any thrown error is caught and becomes `session:failed` + status `failed`, and `finally` unloads — except after a `ServerStuckError`, which stops the session at the next boundary and skips the final unload so the pid file survives for the stale-server kill.
 

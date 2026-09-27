@@ -302,6 +302,11 @@ limiting resource) · `enable-heavy-mode` · `lower-required-context` ·
 sampler errors) · `download <model>` (labelled unmeasured).
 Rule I-9.1: warn/critical insights carry ≥ 1 action whose precondition holds; never
 suggest `raise-min-decode` as a remedy for slow hardware.
+Catalog defaults as implemented (rules.v2.json, 054a216): I-2.7, I-3.1 and I-3.5 →
+`inspect-diagnostics` (no verified remedy file/identity is known); I-4.3 → `rerun-idle`
+(heavy mode can need more RAM). Planned-skip actions are chosen by precondition:
+`enable-kv-q8` only for an f16 config, else `enable-heavy-mode` for a full offload, else
+`lower-required-context` / `inspect-diagnostics`; a RAM skip → `rerun-idle`.
 
 ---
 
@@ -347,7 +352,9 @@ ineligible; action `rerun-idle`.
 
 Per run row: status, failureKind, structured `skip {resource, estimateBytes,
 budgetBytes, ruleId}`, `warm`, versions {benchmark, prompts, quality, runtime, rules},
-promptTokens (actual), repDecodeTps[], minRamAvailBytes (signed vs floor), peak per-PID
+promptTokens (actual), repDecodeTps[], minRamAvailBytes (signed vs floor),
+minRamAvailDuringLoadBytes (load phase only; I-4.3/I-4.4 lifecycle), ramFloorBytes,
+mmapCreditBytes, ramAvailBeforeLoadBytes, pre-spill plateau sample count, peak per-PID
 dedicated/shared raw/adjusted + hostPinnedBytes + spill algorithm version, sampler
 errors, timestamps.
 Per session: planning snapshot {vramTotal, vramInUse (kind), planningVramBudgetBytes,
