@@ -343,3 +343,6 @@
 
 ## Fable — 2026-09-28 06:27 local
 - Astra w4v RECHECK9 PASS (127d96f/340f3ee). Astra w4w harness final: NO blanket release, W1-W4 -> S3 (W1 reuse runtime reconciliation exported by S1; W2 tracked-source manifest; W3 bind backend/model; W4 anchored marker), RED negatives -> S2, per-stage gate checklist (w4x) -> Astra. Pushed 08284f8, 8a0d99a. #2 build running. Lane HELD.
+
+## Fable — 2026-09-28 06:30 local
+- Astra w4x per-stage gate checklist landed (docs/review-w4x-gate-2026-09-28.md). S3: W1-W3 in progress (W4 ce76694 done; S2 negatives c6874fa: 4 RED targets). S1: 859f9d6 reconciliation export; now scripts/release-packet.ts (gate RELEASE RECORD as read-only CLI). #2: gate skip policy + packaged --list-devices check. #3: audits done (E-rows 8/8, CHANGELOG 10/12 fixed 8a0d99a, morning report 3 mismatches fixed a28dad1). Pushed through 859f9d6. Lane HELD.
