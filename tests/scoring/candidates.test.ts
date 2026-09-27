@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MachineLimits, ModelMeta, VramBudgetObservation } from '../../src/shared/bench-types'
-import { budgetFor, estimateMemory, generateCandidates, machineFromProfile, planCandidates, vramBudgetKey } from '../../src/core/benchmark/candidates'
+import { applicableObservations, budgetFor, estimateMemory, generateCandidates, machineFromProfile, planCandidates, vramBudgetKey } from '../../src/core/benchmark/candidates'
 import type { SystemProfile } from '../../src/shared/types'
 import { WORKLOADS } from '../../src/core/scoring/workloads'
 import { load, machine } from './helpers'
@@ -153,7 +153,9 @@ describe('effective per-process VRAM budget — advisory until qualified (w4m)',
     const tight = generateCandidates(mach([tightObs]), f.models[0], { backend: 'vulkan' }, WORKLOADS.long_context_coding).candidates
     expect(Math.max(...tight[0].ctxSteps)).toBeLessThan(top)
     expect(tight[0].skippedSteps.find((x) => x.skip?.resource === 'vram')!.reason).toMatch(/\(per-process budget 6\.0 GiB, measured\)$/)
-    const clean: VramBudgetObservation = { ...tightObs, kind: 'clean', ceilingBytes: 7 * G, modelId: f.models[0].id, ctx: top, gpuLayers: f.models[0].layers }
+    const clean: VramBudgetObservation = { ...tightObs, kind: 'clean', ceilingBytes: 7 * G, modelId: f.models[0].id, ctx: top, gpuLayers: f.models[0].layers, residentSharedBytes: 0.02 * G }
+    // w4n-N3: a clean record without a valid shared reading never protects
+    expect(generateCandidates(mach([tightObs, { ...clean, residentSharedBytes: null }]), f.models[0], { backend: 'vulkan' }, WORKLOADS.long_context_coding).candidates[0].ctxSteps).not.toContain(top)
     expect(generateCandidates(mach([tightObs, clean]), f.models[0], { backend: 'vulkan' }, WORKLOADS.long_context_coding).candidates[0].ctxSteps).toContain(top)
   })
   it('w4m-7: the key is the adapter PNP id + driver + backend build; ambiguous or unknown → unverified', () => {
@@ -180,5 +182,13 @@ describe('planCandidates: backend axis', () => {
     expect(hip.map((c) => c.id)).toEqual(gpu.map((c) => `${c.id}|hip`))
     expect(hip.every((c) => c.device === 'ROCm0' && c.gpuLayers > 0)).toBe(true)
     expect(hip.map((c) => c.ctxSteps)).toEqual(gpu.map((c) => c.ctxSteps))
+  })
+})
+
+describe('w4n-N5: identity verified at apply time', () => {
+  it('an unverified current key turns previously qualified records advisory', () => {
+    const o = { kind: 'capacity', qualified: true, ceilingBytes: 6 * 1024 ** 3 } as VramBudgetObservation
+    expect(applicableObservations({ verified: false }, [o])[0].qualified).toBe(false)
+    expect(applicableObservations({ verified: true }, [o])[0].qualified).toBe(true)
   })
 })

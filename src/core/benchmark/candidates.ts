@@ -155,6 +155,12 @@ export function vramBudgetKey(p: SystemProfile, backend: string, runtimeVersion:
   return { key: `pnp:${g.pnpDeviceId || '?'}|drv:${g.driverVersion ?? '?'}|${backend}:${runtimeVersion ?? '?'}`, verified }
 }
 
+/** Identity is verified again when observations are APPLIED (review-w4n N5): with an ambiguous or unverified current
+ *  identity, even previously qualified records are advisory. */
+export function applicableObservations(key: { verified: boolean }, rows: VramBudgetObservation[]): VramBudgetObservation[] {
+  return key.verified ? [...rows] : rows.map((o) => ({ ...o, qualified: false }))
+}
+
 /** Fallback share of the adapter total while nothing was measured (cal-2026-09-27: spill began at 83 % / 73 %). */
 export const VRAM_BUDGET_FALLBACK_SHARE = 0.8
 /** Observations whose largest single buffer is within this ratio of the planned one are "comparable". */
@@ -235,7 +241,7 @@ export function generateCandidates(
    *  dedicated, above 0.8 × 15.92 GiB — the fallback would have pruned a measured-clean config). */
   const vramBudgetAt = (e: ReturnType<typeof estimateMemory>, ngl: number, ctx: number, kv: KvType): number | null => {
     // An allocation that ran clean here is never pruned by a per-process ceiling (it demonstrably fits).
-    const ranClean = (machine.vramBudgetObservations ?? []).some((o) => o.kind === 'clean' && o.qualified && o.modelId === model.id && o.kvType === kv && o.gpuLayers === Math.min(ngl, model.layers) && o.ctx === ctx)
+    const ranClean = (machine.vramBudgetObservations ?? []).some((o) => o.kind === 'clean' && o.qualified && typeof o.residentSharedBytes === 'number' && o.modelId === model.id && o.kvType === kv && o.gpuLayers === Math.min(ngl, model.layers) && o.ctx === ctx)
     const b = budgetFor(machine, largestOf(e)), eb = b.kind === 'measured' && !ranClean ? num(b) : null
     return gpuBudget === null ? null : eb === null ? gpuBudget : Math.min(gpuBudget, eb)
   }

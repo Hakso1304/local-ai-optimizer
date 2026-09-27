@@ -7,7 +7,7 @@ This is the single consolidated list, and every item is checked against the code
 - **BLOCKED (env)**: cannot be verified on this machine (AMD RX 9070 XT, Windows 11, no NVIDIA/Ollama/LM Studio).
 
 ## Telemetry
-- **DONE-WITH-CAVEAT: spill under other-process VRAM use (L1).** Adjusted spill is gated against the effective budget (VRAM total − measured other-process use) and raw shared growth ≥ 1 GiB vs the previous rung is a spill regardless of the dedicated share (cal-longctx-2026-09-27). The other-process reading is the planning-time scan, not a per-rung measurement.
+- **DONE-WITH-CAVEAT: spill under other-process VRAM use (L1).** Adjusted spill is ungated: raw per-PID shared − host-pinned − benign baseline. Other-process use (the planning-time scan, not a per-rung reading) changes only the disclosed saturation evidence. Raw shared growth ≥ 1 GiB vs the previous rung is a spill (cal-longctx-2026-09-27). Consequence: transient placement or unlisted pinned host memory now counts as spill until the I-2.8 retry clears it.
 - **DONE-WITH-CAVEAT: AMD temperature, power and clocks are UNAVAILABLE.** They need the ADLX/ADL native SDK. The app shows "—", never 0 (DESIGN §1.3).
 - **DONE-WITH-CAVEAT: English PDH counter names only.** On localized Windows the typeperf fields report unavailable. The WMI class fallback (DESIGN §1.2) is not implemented (`telemetry/sampler.ts`).
 - **DONE-WITH-CAVEAT: 1 s granularity.** typeperf's minimum is 1 s and its first row takes ~2 s. The sampler starts during load and waits up to 3 s (`firstSampleWaitMs`). Steps with no row at all report telemetry as unavailable, never as a made-up value.

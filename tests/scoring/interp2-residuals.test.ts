@@ -318,3 +318,15 @@ describe('I-3.9 backend comparison', () => {
     expect(text(interpret(V([vk])), 'I-3.9')).toBe('')
   })
 })
+
+describe('w4n-N3 insight: unknown re-measurement is unknown', () => {
+  it('a retry without a shared reading is never "cleared" / "not a capacity limit"', () => {
+    const c = candidate('a', [2048, 4096])
+    const shape = { peakVramBytes: m(8 * GiB), peakSharedGpuBytes: m(0), peakSharedGpuRawBytes: m(1.4 * GiB) }
+    c.runs[1] = { ...c.runs[1], peakSharedGpuBytes: na('counter lost'), peakSharedGpuRawBytes: na('counter lost'), placementRetry: true, placementFirst: { ...shape, adapterFreeAtSharedPeakBytes: m(6.92 * GiB), decodeTps: m(37) } }
+    const i = interpret(V([c])).find((x) => x.ruleId === 'I-2.8')!
+    expect(i).toMatchObject({ severity: 'warn', action: 'restart-runtime' })
+    expect(i.text).toMatch(/that attempt had no shared-memory reading: cause unknown/)
+    expect(i.text).not.toMatch(/cleared|not a capacity limit/)
+  })
+})

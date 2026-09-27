@@ -149,12 +149,16 @@ export function interpret(v: Verdicts): Insight[] {
       const shN = resident(r, pin)
       if (first && (over(shN) || !isUsable(r))) continue // persisted / unmeasured retry: not placement
       const dec = (m: Metric) => (val(m, true) === null ? '?' : t1(val(m, true)!))
-      const outcome = first
-        ? `; it cleared after a fresh restart (${shN === null ? 'no shared reading' : `${gib(shN)} shared`}, decode ${dec(r.decodeTps)} vs ${dec(first.decodeTps)} t/s before) — driver placement after a previous large load, not a capacity limit`
-        : ' — not re-measured: cause unconfirmed (driver placement or capacity); restart the runtime and re-measure this rung'
+      // N3: an unknown re-measurement is unknown — never "cleared".
+      const unknown = !!first && shN === null
+      const outcome = unknown
+        ? ' — re-measured after a fresh restart, but that attempt had no shared-memory reading: cause unknown (placement or capacity); re-measure this rung'
+        : first
+          ? `; it cleared after a fresh restart (${gib(shN!)} shared, decode ${dec(r.decodeTps)} vs ${dec(first.decodeTps)} t/s before) — driver placement after a previous large load, not a capacity limit`
+          : ' — not re-measured: cause unconfirmed (driver placement or capacity); restart the runtime and re-measure this rung'
       add('ctx.placement-spill', { config: id(c), ctx: fmtCtx(r.ctx), shared: gib(sh0!), free: gib(fr), outcome },
         [ev('peakSharedGpuRawBytes', ev0.peakSharedGpuRawBytes ?? ev0.peakSharedGpuBytes, r.ctx, id(c)), ev('adapterFreeAtSharedPeakBytes', ev0.adapterFreeAtSharedPeakBytes!, r.ctx, id(c))],
-        { configId: id(c), action: first ? null : action('restart-runtime'), severity: first ? 'note' : 'warn' })
+        { configId: id(c), action: first && !unknown ? null : action('restart-runtime'), severity: first && !unknown ? 'note' : 'warn' })
     }
     // I-2.6 recovered dip; disclose skipped rungs between
     const u = [...c.scored.runs].filter(isUsable).sort((a, b) => a.ctx - b.ctx)

@@ -435,13 +435,15 @@ describe('runSession', () => {
     expect(s.runs.every((r) => r.status === 'pass')).toBe(true)
   })
 
-  it('spill: growth of shared memory while dedicated VRAM is saturated IS spill; with free VRAM it is not', async () => {
+  it('w4n: spill is never gated by saturation — the same residual is stored with free or saturated VRAM, saturation only disclosed', async () => {
     const at = (ctx: number, ded: number) => [{ ...sample(ctx), procVramDedicatedBytes: ded, procVramSharedBytes: ctx >= 4096 ? Math.round(1.5 * GiB) : Math.round(0.02 * GiB) }]
     const sat = await run(() => ({}), { ladder: [2048, 4096] }, { startSampler: (pid) => { const v = at(pid - 1000, 14 * GiB); return { samples: v, unavailable: {}, stop: () => v } } })
-    expect(sat.s.runs[1].peakSharedGpuBytes.value).toBe(Math.round(1.5 * GiB)) // step 1 was saturated → no baseline is subtracted
     const free = await run(() => ({}), { ladder: [2048, 4096] }, { startSampler: (pid) => { const v = at(pid - 1000, 8 * GiB); return { samples: v, unavailable: {}, stop: () => v } } })
-    expect(free.s.runs[1].peakSharedGpuBytes.value).toBe(0)
-    expect(free.s.runs[1].peakSharedGpuBytes.source).toMatch(/dedicated below 80 % of the effective budget [\d.]+ GiB: not spill/)
+    const last = (x: typeof sat) => x.s.runs.filter((r) => r.ctx === 4096).at(-1)!
+    expect(last(free).peakSharedGpuBytes.value).toBe(last(sat).peakSharedGpuBytes.value)
+    expect(last(free).peakSharedGpuBytes.value).toBeGreaterThan(1.4 * GiB)
+    expect(last(free).peakSharedGpuBytes.source).toMatch(/\(ungated; supporting evidence: dedicated below 80 % of the effective budget/)
+    expect(last(sat).peakSharedGpuBytes.source).toMatch(/\(ungated; supporting evidence: dedicated ≥ 80 %/)
   })
 
   it('required context: the ladder runs every rung up to it (UI ladder cap ignored), nothing above; CR-04-long added', async () => {
@@ -563,16 +565,16 @@ describe('runSession', () => {
     for (const l of loads.slice(1)) expect(l).toEqual(loads[0])
   })
 
-  it('L1: spill saturation is taken against the effective budget (total − VRAM in use by other processes)', async () => {
-    // 9 GiB dedicated: 71 % of the 12.74 GiB per-process budget (not saturated), but 82 % of the 10.9 GiB left by
-    // other processes holding 5 GiB (effective = min(total − in use, per-process budget)).
-    const at = (ctx: number) => [{ ...sample(ctx), procVramDedicatedBytes: 9 * GiB, procVramSharedBytes: ctx >= 4096 ? Math.round(2 * GiB) : Math.round(0.02 * GiB) }]
+  it('L1 (w4n): other-process VRAM use changes only the disclosed saturation, never the stored spill', async () => {
+    const at = (ctx: number) => [{ ...sample(ctx), procVramDedicatedBytes: 9 * GiB, procVramSharedBytes: ctx >= 4096 ? Math.round(1.5 * GiB) : Math.round(0.02 * GiB) }]
     const sampler = (pid: number) => { const v = at(pid - 1000); return { samples: v, unavailable: {}, stop: () => v } }
     const busy = { ...machine, vramInUse: { status: 'available' as const, value: 5 * GiB, source: 'test' } } as SystemProfile
     const idle = await run(() => ({}), { ladder: [2048, 4096] }, { startSampler: sampler })
-    expect(idle.s.runs[1].peakSharedGpuBytes.value).toBe(0) // idle GPU: 71 % of the budget is below saturation
     const contended = await run(() => ({}), { ladder: [2048, 4096] }, { startSampler: sampler, machine: busy })
-    expect(contended.s.runs[1].peakSharedGpuBytes.value).toBeGreaterThan(1.9 * GiB)
+    const v = (x: typeof idle) => x.s.runs.filter((r) => r.ctx === 4096).at(-1)!.peakSharedGpuBytes
+    expect(v(idle).value).toBe(v(contended).value)
+    expect(v(idle).source).toMatch(/dedicated below 80 %/)
+    expect(v(contended).source).toMatch(/dedicated ≥ 80 %/)
   })
 
   it('L2: an explicit ladder that reaches the required rung is honoured (no 2K–16K extras)', async () => {
@@ -719,20 +721,89 @@ describe('runSession', () => {
     expect(rec?.excluded[0].reasons[0]).toMatch(/^\[I-6\.3\] 2K: run fail \(skipped_memory\): est\. RAM/)
   })
   it('guard reason wins over the "cancelled" error its own cancel() causes (guard_abort, not request_error)', async () => {
-    // 14B @32K shape: 11.24 GiB dedicated (≥ 80 % of the 12.74 GiB estimated per-process budget), 3 GiB shared
     const spill = { ...sample(2048), procVramDedicatedBytes: 11.24 * GiB, procVramSharedBytes: 3 * GiB }
     const { s } = await run(() => ({ warmupBlocks: true }), { ladder: [2048] }, {
-      startSampler: () => ({ samples: [spill], unavailable: {}, stop: () => [spill] }), config: { guardPollMs: 5 }
+      startSampler: () => ({ samples: [spill, spill], unavailable: {}, stop: () => [spill, spill] }), config: { guardPollMs: 5 }
     })
     expect(s.runs[0]).toMatchObject({ status: 'fail', failureKind: 'guard_abort' })
-    expect(s.details[0].reason).toBe('shared GPU memory spill 3.0 GiB exceeded the abort limit')
-    // the persisted metric is the value the guard tripped on (same definition), raw kept separately — never 0.00
-    expect(s.runs[0].peakSharedGpuBytes).toMatchObject({ value: 3 * GiB, kind: 'measured', source: expect.stringMatching(/^guard trip sample/) })
+    expect(s.details[0].reason).toMatch(/^shared GPU memory spill 3\.0 GiB exceeded the abort limit \(uncertain residency: residual per-PID shared above 2\.0 GiB on 2 consecutive samples/)
+    expect(s.runs[0].peakSharedGpuBytes).toMatchObject({ value: 3 * GiB, kind: 'measured', source: expect.stringMatching(/^guard trip sample.*\(ungated\)/) })
     expect(s.runs[0].peakSharedGpuRawBytes).toMatchObject({ value: 3 * GiB })
-    // below saturation of the budget (the -lm none pinned-buffer shape) the same 3 GiB is not spill → no abort
-    const pinnedShape = { ...spill, procVramDedicatedBytes: 5 * GiB }
-    const quiet = await run(() => ({}), { ladder: [2048] }, { startSampler: () => ({ samples: [pinnedShape], unavailable: {}, stop: () => [pinnedShape] }), config: { guardPollMs: 5 } })
-    expect(quiet.s.runs[0]).toMatchObject({ status: 'pass', peakSharedGpuBytes: { value: 0 } })
+    // duration: one sample above the limit is not enough
+    const once = await run(() => ({ warmupBlocks: true }), { ladder: [2048] }, { startSampler: () => ({ samples: [spill], unavailable: {}, stop: () => [spill] }), config: { guardPollMs: 5 } })
+    expect(once.s.runs[0].failureKind).not.toBe('guard_abort')
+  })
+
+  it('w4n-N1: advisory / non-comparable ceilings never change the abort decision', async () => {
+    const x = { ...sample(2048), procVramDedicatedBytes: 5 * GiB, procVramSharedBytes: 3 * GiB }
+    const deps = { startSampler: () => ({ samples: [x, x], unavailable: {}, stop: () => [x, x] }), config: { guardPollMs: 5 } }
+    const plain = await run(() => ({ warmupBlocks: true }), { ladder: [2048] }, deps)
+    const odd = { kind: 'capacity', qualified: false, ceilingBytes: GiB, modelId: 'x', ctx: 2048, kvType: 'f16', gpuLayers: 1, kvBytes: null, largestBufferBytes: 100 * GiB, observedAt: 0,
+      origin: { sessionId: 's', configId: 'c', status: 'pass', attempts: 2, firstPeakVramBytes: null, firstResidentSharedBytes: null } } as VramBudgetObservation
+    const b = fakeBackend(() => ({ warmupBlocks: true }))
+    const { s, storage } = memStorage()
+    s.budget.push({ key: 'pnp:x|drv:?|vulkan:?', o: odd })
+    const ev: SessionEvent[] = []
+    let t = 0
+    await runSession({ workload: 'general_chat', modelIds: [model.id], runQuality: false, ladder: [2048] }, { backend: () => b, ...deps, storage: { ...storage, listVramBudget: () => [odd] }, machine, gpuDevice: 'Vulkan0', models: [model], clock: { now: () => t++ }, evaluate: passAll }, (e) => ev.push(e))
+    expect(b.calls.loads.length).toBe(plain.backend.calls.loads.length)
+    expect(s.runs[0].failureKind).toBe(plain.s.runs[0].failureKind)
+    expect(s.runs[0].peakSharedGpuBytes.value).toBe(plain.s.runs[0].peakSharedGpuBytes.value)
+  })
+
+  it('w4n-N2: pressure below the saturation estimate is not masked — observed residual trips the guard and is stored', async () => {
+    const x = { ...sample(2048), procVramDedicatedBytes: 8 * GiB, procVramSharedBytes: 3 * GiB }
+    const { s } = await run(() => ({ warmupBlocks: true, prompt: 'timeout' }), { ladder: [2048] }, { startSampler: () => ({ samples: [x, x], unavailable: {}, stop: () => [x, x] }), config: { guardPollMs: 5 } })
+    expect(s.runs[0]).toMatchObject({ failureKind: 'guard_abort', peakSharedGpuBytes: { value: 3 * GiB } })
+    expect(s.details[0].reason).toMatch(/dedicated below the saturation share — may be placement/)
+  })
+
+  it('w4n-N3: an unavailable shared reading on the retry is unknown — no clean observation, no cleared claim', async () => {
+    let n = 0
+    const sampler = (pid: number) => {
+      const ctx = pid - 1000, k = ctx === 4096 ? ++n : 0
+      const v = [{ ...sample(ctx), procVramDedicatedBytes: 8 * GiB, vramDedicatedBytes: 9 * GiB, procVramSharedBytes: k === 1 ? 1.4 * GiB : k === 2 ? null : 0.02 * GiB }] as TelemetrySample[]
+      return { samples: v, unavailable: {}, stop: () => v }
+    }
+    const { s } = await run(() => ({}), { ladder: [2048, 4096] }, { startSampler: sampler })
+    const r = s.runs.filter((x) => x.ctx === 4096).at(-1)!
+    expect(r.placementRetry).toBe(true)
+    expect(r.reason).toMatch(/shared-memory reading unavailable on the re-measurement — residency unknown/)
+    expect(s.budget.some((b) => b.o.ctx === 4096)).toBe(false) // neither clean nor capacity
+    // no shared reading at all → never 'clean'
+    const blind = (pid: number) => { const v = [{ ...sample(pid - 1000), procVramSharedBytes: null }] as TelemetrySample[]; return { samples: v, unavailable: {}, stop: () => v } }
+    expect((await run(() => ({}), { ladder: [2048] }, { startSampler: blind })).s.budget).toEqual([])
+  })
+
+  it('w4n-N4: estimated request timings never qualify an observation, even with a verified identity and a logged buffer', async () => {
+    const verified = { ...machine, gpus: { ...machine.gpus, value: machine.gpus.value!.map((g) => ({ ...g, driverVersion: '32.0.1' })) } } as SystemProfile
+    const sampler = (pid: number) => { const v = [{ ...sample(pid - 1000), procVramDedicatedBytes: 8 * GiB, vramDedicatedBytes: 9 * GiB, procVramSharedBytes: pid - 1000 === 4096 ? 1.4 * GiB : 0.02 * GiB }]; return { samples: v, unavailable: {}, stop: () => v } }
+    const est = await run(() => ({ noTimings: true, hostMiB: 1 }), { ladder: [2048, 4096] }, { startSampler: sampler, machine: verified, runtimeVersion: 'b11208' })
+    const cap = (x: typeof est) => x.s.budget.filter((b) => b.o.kind === 'capacity').map((b) => b.o)
+    expect(cap(est)).toEqual([expect.objectContaining({ qualified: false })])
+    const meas = await run(() => ({ hostMiB: 1 }), { ladder: [2048, 4096] }, { startSampler: sampler, machine: verified, runtimeVersion: 'b11208' })
+    expect(cap(meas)).toEqual([expect.objectContaining({ qualified: true })]) // positive control
+  })
+
+  it('w4n-N5: an ambiguous CURRENT identity makes cached qualified records advisory at apply time', async () => {
+    const two = { ...machine, gpus: { ...machine.gpus, value: [...machine.gpus.value!.map((g) => ({ ...g, driverVersion: '32.0.1' })), { ...machine.gpus.value![0], pnpDeviceId: 'y', driverVersion: '32.0.1' }] } } as SystemProfile
+    const q = { kind: 'capacity', qualified: true, ceilingBytes: 3 * GiB, modelId: 'x', ctx: 2048, kvType: 'f16', gpuLayers: 33, kvBytes: null, largestBufferBytes: 4.6 * GiB, observedAt: 0,
+      origin: { sessionId: 's', configId: 'c', status: 'pass', attempts: 2, firstPeakVramBytes: null, firstResidentSharedBytes: null } } as VramBudgetObservation
+    const plain = await run(() => ({}), { ladder: [2048, 4096, 8192] }, { machine: two, runtimeVersion: 'b11208' })
+    const b = fakeBackend(() => ({}))
+    const { s, storage } = memStorage()
+    let t = 0
+    await runSession({ workload: 'general_chat', modelIds: [model.id], runQuality: false, ladder: [2048, 4096, 8192] },
+      { backend: () => b, startSampler: (pid) => { const xs = [sample(pid - 1000)]; return { samples: xs, unavailable: {}, stop: () => xs } }, storage: { ...storage, listVramBudget: () => [q] },
+        machine: two, gpuDevice: 'Vulkan0', models: [model], clock: { now: () => t++ }, evaluate: passAll, runtimeVersion: 'b11208' }, () => {})
+    expect(s.runs.map((r) => r.ctx)).toEqual(plain.s.runs.map((r) => r.ctx)) // the cached 3 GiB ceiling did not prune
+    // positive control: the same record under a verified (single-adapter) identity does prune
+    const one = { ...two, gpus: { ...two.gpus, value: [two.gpus.value![0]] } } as SystemProfile
+    const b2 = fakeBackend(() => ({})), m2 = memStorage()
+    await runSession({ workload: 'general_chat', modelIds: [model.id], runQuality: false, ladder: [2048, 4096, 8192] },
+      { backend: () => b2, startSampler: (pid) => { const xs = [sample(pid - 1000)]; return { samples: xs, unavailable: {}, stop: () => xs } }, storage: { ...m2.storage, listVramBudget: () => [q] },
+        machine: one, gpuDevice: 'Vulkan0', models: [model], clock: { now: () => t++ }, evaluate: passAll, runtimeVersion: 'b11208' }, () => {})
+    expect(m2.s.runs.length).toBeLessThan(plain.s.runs.length)
   })
 
   it('RAM floor credits mmap pages of GPU-offloaded weights (not pressure); trips when no credit applies', async () => {

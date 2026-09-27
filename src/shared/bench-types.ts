@@ -82,6 +82,8 @@ export interface VramBudgetObservation {
   kvBytes: number | null
   /** Largest individual device buffer from the load log (model / KV / compute); null when not logged. */
   largestBufferBytes: number | null
+  /** The final attempt's measured residual shared bytes; null = no valid reading (then never 'clean'). */
+  residentSharedBytes?: number | null
   /** Where the observation came from: session, config, the attempts behind it and the first attempt's peak. */
   origin: { sessionId: string; configId: string; status: RunStatus; attempts: number; firstPeakVramBytes: number | null; firstResidentSharedBytes: number | null }
   observedAt: number

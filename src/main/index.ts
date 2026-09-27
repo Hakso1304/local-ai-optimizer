@@ -14,7 +14,7 @@ import { registerHubIpc } from './hub'
 import { WORKLOADS } from '../core/scoring/workloads'
 import { val } from '../core/scoring/cliff'
 import { runSession, type InstalledBackend, type SessionStorage } from '../core/benchmark/session'
-import { generateCandidates, machineFromProfile, planCandidates, rulesForRequest, vramBudgetKey, type PlannedBackend } from '../core/benchmark/candidates'
+import { applicableObservations, generateCandidates, machineFromProfile, planCandidates, rulesForRequest, vramBudgetKey, type PlannedBackend } from '../core/benchmark/candidates'
 import { findGgufModels, toModelMeta } from '../core/models/gguf'
 import { fetchGenerationConfig, readSidecar, writeSidecar } from '../core/hub/modelcard'
 import { defaultLmStudioDirs, defaultOllamaRoot, listOllamaModels, toModelInfo as toOllamaModelInfo } from '../core/runtimes/ollama/models'
@@ -153,7 +153,7 @@ ipcMain.handle('models:fit', async (_e, w: WorkloadId): Promise<ModelFit> => {
   if (!devices) return { reasons: Object.fromEntries(infos.map((m) => [m.id, 'llama.cpp runtime not installed (System page)'])), vramInUseBytes: null, vramTotalBytes: null }
   const device = pickDiscreteDevice(devices)?.id ?? null
   const bk = vramBudgetKey(profileCache, device ? 'vulkan' : 'cpu', (await llama.detect()).version)
-  const machine = machineFromProfile(await withVramInUse(profileCache), device, undefined, bk ? listVramBudget(needDb(), bk.key) : [])
+  const machine = machineFromProfile(await withVramInUse(profileCache), device, undefined, bk ? applicableObservations(bk, listVramBudget(needDb(), bk.key)) : [])
   const vramInUseBytes = machine.vramInUseBytes.kind === 'measured' ? machine.vramInUseBytes.value : null
   const out: Record<string, string | null> = {}
   for (const info of infos) {
@@ -332,7 +332,7 @@ async function startSession(req: SessionRequest, storedMachine?: SystemProfile, 
       const planned: PlannedBackend[] = backends.map((b) => {
         const kind = b.device ? b.kind : 'cpu' as const
         const bk = vramBudgetKey(profile, kind, b.runtimeVersion)
-        return { kind, device: b.device, runtimeVersion: b.runtimeVersion, observations: bk ? listVramBudget(needDb(), bk.key) : [] }
+        return { kind, device: b.device, runtimeVersion: b.runtimeVersion, observations: bk ? applicableObservations(bk, listVramBudget(needDb(), bk.key)) : [] }
       })
       const machine = machineFromProfile(profile, device, undefined, planned[0].observations ?? [])
       return {
