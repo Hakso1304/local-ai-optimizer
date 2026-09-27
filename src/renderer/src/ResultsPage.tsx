@@ -25,6 +25,12 @@ function peak(c: SessionCandidate, k: 'peakVramBytes' | 'peakRamBytes'): Metric 
   return ms.length ? ms.reduce((a, b) => (b.value! > a.value! ? b : a)) : NA('no completed step reported it')
 }
 
+/** Lowest RAM free while a model was loading, across all steps (the load-time RAM guard's reading). */
+function minLoadRam(c: SessionCandidate): Metric | null {
+  const ms = c.runs.map((r) => r.minRamAvailDuringLoadBytes).filter((m): m is Metric => m?.value != null)
+  return ms.length ? ms.reduce((a, b) => (b.value! < a.value! ? b : a)) : null
+}
+
 const refRun = (c: SessionCandidate) => c.runs.find((r) => r.ctx === c.score?.referenceCtx)
 const comp = (c: SessionCandidate, id: string) => c.score?.breakdown.find((b) => b.component === id)
 
@@ -145,7 +151,7 @@ function Detail({ d, onRerun, go }: { d: SessionDetail; onRerun: (configId: stri
                 <td><M m={r?.decodeTps} /> {r && <span className="muted">@{fmtCtx(r.ctx)}</span>}</td>
                 <td><M m={r?.prefillTps} fmt={(v) => num(v, 0)} /></td>
                 <td><M m={peak(c, 'peakVramBytes')} fmt={gib} /></td>
-                <td><M m={peak(c, 'peakRamBytes')} fmt={gib} /></td>
+                <td><M m={peak(c, 'peakRamBytes')} fmt={gib} />{minLoadRam(c) && <div className="muted" title="lowest RAM available during a model load (RAM guard)">min free in load <M m={minLoadRam(c)!} fmt={gib} /></div>}</td>
                 <td>{st ? <>{st.score.toFixed(0)} <Prov kind={st.input.kind} /></> : '—'}</td>
                 <td className="bar">
                   {!d.session.demo && <button onClick={() => onRerun(c.config.id)} title="Re-run every step of this configuration">Rerun</button>}

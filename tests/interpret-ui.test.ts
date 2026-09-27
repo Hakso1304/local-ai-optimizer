@@ -3,6 +3,7 @@ import { sectionOf, type Insight } from '../src/shared/interpret-types'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ENGINE_RULES, InterpretPanel, Reason, RulesVersion, cardInsights } from '../src/renderer/src/InterpretPanel'
+import { DecisionTrace } from '../src/renderer/src/DecisionTrace'
 import v1 from '../src/core/interpret/rules.v1.json'
 import v2 from '../src/core/interpret/rules.v2.json'
 
@@ -48,5 +49,28 @@ describe('interpretation UI rendering (G02 versioned citations, G14 critical-fir
     expect(out).toContain('not-evaluable')
     expect(out).toContain('not evaluable from stored data')
     expect(out).not.toContain('Use 16K') // no action button on a not-evaluable rule
+  })
+})
+
+describe('"How this was decided" (decision trace)', () => {
+  it('renders comparisons with the compared totals, cycle, exclusions, quality-vs-speed and per-candidate safety/basis', () => {
+    const d = { diff: 3, lower: -2, upper: 8, sharedItems: 40 }
+    const cand = (configId: string) => ({
+      configId, confirmed: true, undecided: [], total: 70, qualityContribution: 30, gen: null, referenceCtx: 8192, referenceWhy: 'target', recommendedCtx: 16384,
+      recommendedWhy: 'largest clean rung within tolerance', failures: [], basis: [{ component: 'quality', rung: 8192, kind: 'measured' }],
+      safety: { ramFloor: 'violated' as const, spill: 'not verified' as const }, qualityVsWinner: configId === 'A' ? null : { difference: d }
+    })
+    const t = {
+      rulesVersion: 'interp-2', scoringVersion: 's', workload: 'coding', scoringRung: 8192, scoringRungWhy: 'target',
+      hardConstraints: { requiredContext: null, minDecodeTps: null, latencyToleranceMs: 15000, latencyAdvisory: false },
+      eligibleSet: [], candidates: [cand('A'), cand('B')], steps: [], neutralizations: [], tieBreakChain: [],
+      alternatives: {}, winner: 'A', provisionalWinner: null, unmetAlternatives: [], genChoices: [], thresholdsUsed: {},
+      comparisons: [{ a: 'A', b: 'B', basis: 'without-quality', aValue: 61.5, bValue: 58.25, difference: d, winner: 'A', ruleId: 'I-7.1' }],
+      cycle: ['A', 'B', 'A'], excluded: [{ configId: 'C', reasons: ['[I-4.3] RAM floor violated'] }],
+      qualityVsSpeed: { winner: 'A', fastest: 'B', difference: d, decodeWinner: 20, decodeFastest: 45 }
+    }
+    const out = renderToStaticMarkup(createElement(DecisionTrace, { trace: t as never }))
+    for (const x of ['Comparisons', 'without-quality', '61.5', '58.25', 'Δ 3 [-2, 8] over 40 shared items', 'not a proven total order', 'A → B → A',
+      'Excluded before ranking', 'RAM floor violated', 'fastest B (45 t/s)', 'largest clean rung within tolerance', 'quality@8K (measured)', 'violated', 'not verified']) expect(out).toContain(x)
   })
 })

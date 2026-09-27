@@ -54,6 +54,9 @@ function actionButton(i: Insight, a: InsightActions): ReactNode {
     case 'try-thinking-config': return <button className="mini" onClick={a.tryThinkingConfig}>Search generation settings</button>
     case 'download': return <button className="mini" onClick={() => a.download(arg)}>Download{arg ? ` ${arg}` : ''}</button>
     case 'use-context': return ctx ? <button className="mini" onClick={() => a.useContext(ctx)}>Use {fmtCtx(ctx)} in export</button> : null
+    // hints the app can't execute for you
+    case 'inspect-diagnostics': return <span className="pill" title="suggested next step: open the step's server log / telemetry (Diagnostics) and look for the cause">Inspect diagnostics</span>
+    case 'rerun-idle': return <span className="pill" title="suggested next step: re-run this step with other GPU work closed">Re-run on an idle GPU</span>
     default: return <span className="pill" title="suggested next step">{i.action}</span>
   }
 }
