@@ -347,6 +347,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     const genQ = new Map<string, GenQuality[]>() // modelId → every gen config that completed
     const qualityBackend = new Map<string, string>() // modelId → backend that actually ran the quality suite
     const qualityRuntime = new Map<string, string | null>() // modelId → source build (never borrowed across builds)
+    const qualityConfig = new Map<string, string>() // modelId → exact measured candidate
     const longNotes: string[] = []
     let gpuLost = false
     const paused = () => !signal?.aborted && !!deps.pauseSignal?.aborted
@@ -371,17 +372,28 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       // Reuse stored quality only when it is the COMPLETE current suite (every test id × sample for every gen config,
       // same suite version). Rows without genId are the baseline (stored before the gen-config search).
       const stored = (req.resumeSessionId ? await storage.listQuality(sessionId, modelId) : []) as GenRow[]
-      const suiteSource = stored.find((r) => r.testId !== 'CR-04-long') as GenRow & { backend?: string; configId?: string } | undefined
-      const storedBackend = suiteSource?.backend ?? (suiteSource?.configId?.endsWith('|hip') ? 'hip' : 'vulkan')
-      const rowsOf = (g: GenConfig) => stored.filter((r) => (r.genId ?? BASELINE_GEN.id) === g.id && ((r as GenRow & { backend?: string }).backend ?? storedBackend) === storedBackend)
-      const complete = stored.length > 0 && stored.every((r) => (r as { suite?: string }).suite === suite.suite && ((r as { suiteSeed?: number | null }).suiteSeed ?? null) === suite.suiteSeed) &&
-        gens.every((g) => suite.tests.every((t) => rowsOf(g).filter((r) => r.testId === t.id).length >= samplesOf(g)))
+      const suiteRows = stored.filter((r) => r.testId !== 'CR-04-long') as (GenRow & { backend?: string; configId?: string; suite?: string; suiteSeed?: number | null })[]
+      const expectedBackend = best.config.backend ?? 'vulkan'
+      const expectedRuntime = stateOf(best.config)?.runtime ?? null
+      const normalizeRuntime = (x: string | null | undefined) => !x ? null : /^(vulkan|cuda|hip|cpu):/.test(x) ? x : `vulkan:${x}`
+      const rowBackend = (r: typeof suiteRows[number]) => r.backend ?? (r.configId?.endsWith('|hip') ? 'hip' : 'vulkan')
+      const expectedKeys = new Set(gens.flatMap((g) => suite.tests.flatMap((t) => Array.from({ length: samplesOf(g) }, (_, i) => `${g.id}|${t.id}|${i + 1}`))))
+      const actualKeys = suiteRows.map((r) => `${r.genId ?? BASELINE_GEN.id}|${r.testId}|${r.sample ?? 1}`)
+      const exactSuite = suiteRows.length === expectedKeys.size && new Set(actualKeys).size === expectedKeys.size && actualKeys.every((k) => expectedKeys.has(k))
+      const scopedSuite = suiteRows.every((r) => r.suite === suite.suite && (r.suiteSeed ?? null) === suite.suiteSeed &&
+        r.configId === best.config.id && rowBackend(r) === expectedBackend && normalizeRuntime(r.runtimeVersion) === normalizeRuntime(expectedRuntime))
+      const complete = suiteRows.length > 0 && exactSuite && scopedSuite
+      const rowsOf = (g: GenConfig) => stored.filter((r) => {
+        const row = r as typeof suiteRows[number]
+        return (r.genId ?? BASELINE_GEN.id) === g.id && row.configId === best.config.id && rowBackend(row) === expectedBackend && normalizeRuntime(r.runtimeVersion) === normalizeRuntime(expectedRuntime)
+      })
       if (complete) {
         const list = gens.map((g) => summarizeGen(g, rowsOf(g), samplesOf(g)))
         quality.set(modelId, list[0].results)
         if (gens.length > 1) genQ.set(modelId, list)
-        qualityBackend.set(modelId, storedBackend)
-        qualityRuntime.set(modelId, suiteSource?.runtimeVersion ?? null)
+        qualityBackend.set(modelId, expectedBackend)
+        qualityRuntime.set(modelId, expectedRuntime)
+        qualityConfig.set(modelId, best.config.id)
         return
       }
       if (stored.length) log('warn', `${modelId}: stored quality results are incomplete or from another suite version; re-running the suite`)
@@ -402,7 +414,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
           await unload()
           if (r) {
             const baseline = perGen.find((g) => g.gen.id === BASELINE_GEN.id)
-            baseline?.results.push({ ...r, genId: BASELINE_GEN.id, sample: 1, configId: reach.config.id, backend: reach.config.backend ?? 'vulkan', ctx: required } as GenRow)
+            baseline?.results.push({ ...r, genId: BASELINE_GEN.id, sample: 1, configId: reach.config.id, backend: reach.config.backend ?? 'vulkan', runtimeVersion: cur.runtime, ctx: required } as GenRow)
           }
         } else {
           longNotes.push(`[I-2.5] Long-context needle CR-04-long at ${fmtCtx(required)} skipped for ${best.model.name}: practical context ${fmtCtx(val(cliff.practicalContextCeiling) ?? 0)} < ${fmtCtx(required)}`)
@@ -410,12 +422,17 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       }
       if (results.length) {
         const sourceBackend = best.config.backend ?? 'vulkan'
-        quality.set(modelId, results.filter((r) => ((r as GenRow & { backend?: string }).backend ?? sourceBackend) === sourceBackend))
+        const inScope = (r: QualityResult) => {
+          const row = r as GenRow & { backend?: string; configId?: string }
+          return (row.backend ?? sourceBackend) === sourceBackend && (row.configId ?? best.config.id) === best.config.id && normalizeRuntime(row.runtimeVersion ?? sourceRuntime) === normalizeRuntime(sourceRuntime)
+        }
+        quality.set(modelId, results.filter(inScope))
         qualityBackend.set(modelId, best.config.backend ?? 'vulkan')
         qualityRuntime.set(modelId, sourceRuntime)
-        if (gens.length > 1) genQ.set(modelId, perGen.map((g) => ({ ...g, results: g.results.filter((r) => ((r as GenRow & { backend?: string }).backend ?? sourceBackend) === sourceBackend) })))
+        qualityConfig.set(modelId, best.config.id)
+        if (gens.length > 1) genQ.set(modelId, perGen.map((g) => ({ ...g, results: g.results.filter(inScope) })))
         // One transaction for every gen config of the model (resume needs all of them or re-runs).
-        await storage.saveQuality(sessionId, modelId, best.config.id, qctx, perGen.flatMap((g) => g.results).map((r) => ({ backend: best.config.backend ?? 'vulkan', ...r, suite: suite.suite })))
+        await storage.saveQuality(sessionId, modelId, best.config.id, qctx, perGen.flatMap((g) => g.results).map((r) => ({ configId: best.config.id, backend: best.config.backend ?? 'vulkan', ctx: qctx, ...r, suite: suite.suite })))
       }
     }
     const withQuality = () => {
@@ -425,10 +442,16 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         const sourceRuntime = qualityRuntime.get(i.model.id)
         const normalizeRuntime = (x: string) => /^(vulkan|cuda|hip|cpu):/.test(x) ? x : `vulkan:${x}`
         const sameRuntime = !sourceRuntime || i.runs.some((r) => !!r.versions?.runtime && normalizeRuntime(r.versions.runtime) === normalizeRuntime(sourceRuntime))
-        const sameBackend = qualityBackend.get(i.model.id) === (i.config.backend ?? 'vulkan') && sameRuntime
-        i.quality = sameBackend ? (quality.get(i.model.id) ?? []).filter((r) => ((r as GenRow & { backend?: string }).backend ?? qualityBackend.get(i.model.id)) === (i.config.backend ?? 'vulkan')) : []
+        const sameBackend = qualityBackend.get(i.model.id) === (i.config.backend ?? 'vulkan') && sameRuntime && qualityConfig.get(i.model.id) === i.config.id
+        const rowInScope = (r: QualityResult) => {
+          const row = r as GenRow & { backend?: string; configId?: string }
+          return (row.backend ?? qualityBackend.get(i.model.id)) === (i.config.backend ?? 'vulkan') &&
+            (row.configId ?? qualityConfig.get(i.model.id)) === i.config.id &&
+            (!sourceRuntime || (!!row.runtimeVersion && normalizeRuntime(row.runtimeVersion) === normalizeRuntime(sourceRuntime)))
+        }
+        i.quality = sameBackend ? (quality.get(i.model.id) ?? []).filter(rowInScope) : []
         const g = sameBackend ? genQ.get(i.model.id) : undefined
-        if (g) i.genQuality = g.map((x) => ({ ...x, results: x.results.filter((r) => ((r as GenRow & { backend?: string }).backend ?? qualityBackend.get(i.model.id)) === (i.config.backend ?? 'vulkan')) }))
+        if (g) i.genQuality = g.map((x) => ({ ...x, results: x.results.filter(rowInScope) }))
       }
     }
 
@@ -1013,7 +1036,11 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
             if (signal?.aborted || backend.lastExit) { interrupted = true; break }
             const test = suite.tests.find((t) => t.id === p.testId)!
             // v2: record which seeds produced this item (replay / audit); v1 rows carry no seed.
-            const tag = { genId: gen.id, sample, ...(suite.suiteSeed !== null ? { suiteSeed: suite.suiteSeed, instanceSeed: (test as { instanceSeed?: number }).instanceSeed ?? null, generatorVersion: suite.generatorVersion } : {}) }
+            const meta = test as typeof test & { skill?: string; instanceSeed?: number }
+            const tag = { configId: cand.id, backend: cand.backend ?? 'vulkan', genId: gen.id, sample,
+              ...(meta.skill ? { skillId: meta.skill } : {}),
+              ...(suite.suiteSeed !== null ? { suiteSeed: suite.suiteSeed, generatorVersion: suite.generatorVersion } : {}),
+              ...(meta.instanceSeed !== undefined ? { generatorSeed: meta.instanceSeed, instanceSeed: meta.instanceSeed } : {}) }
             try {
               const prompt = await backend.applyTemplate(p.messages, templateKwargs ? { templateKwargs } : undefined)
               firstRender ??= prompt

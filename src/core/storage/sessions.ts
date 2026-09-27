@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import type {
@@ -89,6 +90,32 @@ export function saveQualityResults(db: DatabaseSync, sessionId: number, modelId:
   }
 }
 
+/** A persisted suite has one source build/config. CR-04-long is a separate probe
+ * and may legitimately use another backend, so it does not define suite scope. */
+function suiteScope(rows: (GenRow & { backend?: string; configId?: string; expected?: number })[]): { backend: string; runtime: string | null; configId: string | null } | null {
+  const suite = rows.filter((r) => r.testId !== 'CR-04-long')
+  if (!suite.length) return null
+  const backendOf = (r: typeof suite[number]) => r.backend ?? (r.configId?.endsWith('|hip') ? 'hip' : 'vulkan')
+  const normalize = (x: string | null | undefined) => !x ? null : /^(vulkan|cuda|hip|cpu):/.test(x) ? x : `vulkan:${x}`
+  const backends = new Set(suite.map(backendOf))
+  const runtimes = new Set(suite.map((r) => normalize(r.runtimeVersion)))
+  const configs = new Set(suite.map((r) => r.configId ?? null))
+  const keys = suite.map((r) => `${r.genId ?? BASELINE_GEN.id}|${r.testId}|${r.sample ?? 1}`)
+  if (backends.size !== 1 || runtimes.size !== 1 || configs.size !== 1 || new Set(keys).size !== keys.length) return null
+  if (rows.some((r) => r.expected !== undefined && r.expected !== rows.length)) return null
+  return { backend: backendOf(suite[0]), runtime: normalize(suite[0].runtimeVersion), configId: suite[0].configId ?? null }
+}
+
+/** Latest persisted transaction only. Older quality rows remain in the database
+ * for audit, including a mixed-build batch that caused a later re-measurement. */
+function latestQualityBatch<T extends { expected?: number; qualityBatchId?: string }>(rows: T[]): T[] {
+  const last = rows.at(-1)
+  if (!last) return []
+  if (last.qualityBatchId) return rows.filter((r) => r.qualityBatchId === last.qualityBatchId)
+  const n = last.expected
+  return Number.isInteger(n) && n! > 0 && n! <= rows.length ? rows.slice(-n!) : rows
+}
+
 export function saveRecommendation(db: DatabaseSync, sessionId: number, rec: Recommendation, modelId: string | null): number {
   return Number(db.prepare('INSERT INTO recommendation (session_id, model_id, payload) VALUES (?, ?, ?)')
     .run(sessionId, modelId, JSON.stringify(rec)).lastInsertRowid)
@@ -148,9 +175,13 @@ export function getSession(db: DatabaseSync, id: number): SessionDetail | null {
       const mine = rows.filter((r) => r.run.configId === config.id)
       const normalizeRuntime = (x: string) => /^(vulkan|cuda|hip|cpu):/.test(x) ? x : `vulkan:${x}`
       const runtimes = new Set(mine.map((r) => r.run.versions?.runtime).filter((x): x is string => !!x).map(normalizeRuntime))
-      const qualityRows = quality.filter((q) => q.model_id === model.id).map((q) => json<GenRow & { backend?: string; configId?: string }>(q.payload))
-        .filter((q) => (q.backend ?? (q.configId?.endsWith('|hip') ? 'hip' : 'vulkan')) === (config.backend ?? 'vulkan')
-          && (!q.runtimeVersion || runtimes.has(normalizeRuntime(q.runtimeVersion))))
+      const allQualityRows = latestQualityBatch(quality.filter((q) => q.model_id === model.id).map((q) => json<GenRow & { backend?: string; configId?: string; expected?: number; qualityBatchId?: string }>(q.payload)))
+      const scope = suiteScope(allQualityRows)
+      const sourceMatches = scope?.configId === config.id && scope.backend === (config.backend ?? 'vulkan') &&
+        (scope.runtime === null ? runtimes.size === 0 : runtimes.has(scope.runtime))
+      const qualityRows = sourceMatches ? allQualityRows.filter((q) => q.testId !== 'CR-04-long' ||
+        (q.configId === config.id && (q.backend ?? (q.configId?.endsWith('|hip') ? 'hip' : 'vulkan')) === scope.backend &&
+          (q.runtimeVersion ? normalizeRuntime(q.runtimeVersion) === scope.runtime : scope.runtime === null))) : []
       return {
         config, model, runs: mine.map((r) => r.run), runIds: mine.map((r) => r.rowId),
         history: all.filter((r) => r.configId === config.id),
@@ -263,15 +294,17 @@ export function makeSessionStorage(db: DatabaseSync, planFor: PlanFor): SessionS
     // Resume re-uses stored quality only if it is the session's selected suite (qualityMode) with the session's seed, and
     // complete; otherwise it re-runs. A v2 session without a recorded seed can't be matched → re-run.
     listQuality: (id, modelId) => {
-      const rows = (db.prepare('SELECT payload FROM quality_result WHERE session_id = ? AND model_id = ? ORDER BY id').all(sid(id), modelId) as { payload: string }[])
-        .map((r) => json<QualityResult & { suite?: string; expected?: number; suiteSeed?: number | null }>(r.payload))
+      const rows = latestQualityBatch((db.prepare('SELECT payload FROM quality_result WHERE session_id = ? AND model_id = ? ORDER BY id').all(sid(id), modelId) as { payload: string }[])
+        .map((r) => json<GenRow & { suite?: string; expected?: number; suiteSeed?: number | null; backend?: string; configId?: string; qualityBatchId?: string }>(r.payload)))
       const want = selectedSuite(db, sid(id))
-      const ok = want !== null && rows.length > 0 && rows.every((r) => r.suite === want.suite && (r.suiteSeed ?? null) === want.suiteSeed && r.expected === rows.length)
+      const ok = want !== null && rows.length > 0 && !!suiteScope(rows) && rows.every((r) => r.suite === want.suite && (r.testId === 'CR-04-long' || (r.suiteSeed ?? null) === want.suiteSeed) && r.expected === rows.length)
       return ok ? rows : []
     },
     // The runner sets `suite` (v1 or v2); only rows from callers that don't are labelled with the v1 default.
-    saveQuality: (id, modelId, configId, ctx, results) =>
-      saveQualityResults(db, sid(id), modelId, results.map((r) => ({ configId, ctx, ...r, suite: (r as { suite?: string }).suite ?? defaultTestSet.suite, expected: results.length }))),
+    saveQuality: (id, modelId, configId, ctx, results) => {
+      const qualityBatchId = randomUUID()
+      saveQualityResults(db, sid(id), modelId, results.map((r) => ({ configId, ctx, ...r, suite: (r as { suite?: string }).suite ?? defaultTestSet.suite, expected: results.length, qualityBatchId })))
+    },
     saveRecommendation: (id, rec) => { saveRecommendation(db, sid(id), rec, rec.best ? modelOf(id, rec.best.configId) : null) },
     listVramBudget: (key) => listVramBudget(db, key),
     saveVramBudgetObservation: (key, o) => saveVramBudgetObservation(db, key, o)

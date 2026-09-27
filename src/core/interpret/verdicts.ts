@@ -343,16 +343,20 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
       else gsteps.push(`${g.gq.gen.id} not over ${gen.gq.gen.id}: ${d ? `${fmtDiff(d)} ${includesZero(d) ? 'includes 0' : 'excludes 0 (lower)'}; the lower effort is kept` : reason}`)
     }
     if (thinkingModel && genOptions.length) genChoices.push({ configId: input.config.id, chosen: gen?.gq.gen.id ?? null, steps: gsteps })
-    const chosen = gen ? { cs: gen.cs, breakdown: scoreOf(scored, machine, profile, cfg, gen.gq, scoringRung).breakdown, total: gen.total } : base
-    const ref = scored.runs.find((r) => r.ctx === chosen.cs.referenceCtx)
-    const q = chosen.cs.components.quality
+    const selected = gen ? { cs: gen.cs, breakdown: scoreOf(scored, machine, profile, cfg, gen.gq, scoringRung).breakdown, total: gen.total } : base
     // A (w4l): the rows the quality term comes from must not contradict the config they claim (sampling / kwargs).
     const qConfig = gen?.gq.gen ?? BASELINE_GEN
     const qRows = (gen ? gen.gq.results : input.quality) as ContractRow[]
     const qErrors = contractCheck(qRows, [], qConfig, templateKwargsFor(input.model, qConfig)).errors
+    // A contradictory baseline cannot remain a measured quality contribution merely
+    // because no alternative generation config was selected. Preserve the rows for
+    // audit, but score this candidate with quality unavailable.
+    const chosen = qErrors.length ? scoreOf({ ...scored, quality: [], genQuality: [] }, machine, profile, cfg, undefined, scoringRung) : selected
+    const ref = scored.runs.find((r) => r.ctx === chosen.cs.referenceCtx)
+    const q = chosen.cs.components.quality
     // G01: a decisive term confirms only when MEASURED (declared / estimated / unavailable / quarantined never do).
     const undecided = (Object.keys(profile.weights) as ComponentId[])
-      .filter((k) => profile.weights[k] > 0 && chosen.cs.components[k].input.kind !== 'measured')
+      .filter((k) => profile.weights[k] > 0 && chosen.cs.components[k].input.kind !== 'measured' && !(k === 'quality' && qErrors.length))
       .map((k) => ({ component: k, kind: chosen.cs.components[k].quarantined ? 'quarantined' : chosen.cs.components[k].input.kind, reason: chosen.cs.components[k].input.reason ?? chosen.cs.components[k].input.source }))
     if (qErrors.length && profile.weights.quality > 0) undecided.push({ component: 'quality', kind: 'contract-error', reason: qErrors.join('; ') })
     // G03: read at another rung than the common one (its ladder skipped it) → the speed comparison is not matched.
@@ -364,7 +368,7 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
       input, scored, dropped, cs: chosen.cs, gen, genOptions, breakdown: chosen.breakdown, total: chosen.total, eligible: true, failures: [],
       undecided, confirmed: undecided.length === 0,
       decode: val(ref?.decodeTps, true), vram: input.config.gpuLayers === 0 ? 0 : val(ref?.peakVramBytes), ram: val(ref?.peakRamBytes),
-      qualityMeasured: q.input.kind === 'measured', qualityRows: q.input.kind === 'measured' ? ((gen ? gen.gq.results : input.quality) as UncertaintyRow[]) : [],
+      qualityMeasured: !qErrors.length && q.input.kind === 'measured', qualityRows: !qErrors.length && q.input.kind === 'measured' ? ((gen ? gen.gq.results : input.quality) as UncertaintyRow[]) : [],
       coverage: coverageOf(scored, chosen.cs, data.stopReason)
     }
   })
