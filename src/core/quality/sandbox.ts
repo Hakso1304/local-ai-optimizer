@@ -48,17 +48,20 @@ function childRss(pid: number): Promise<number | null> {
   })
 }
 
+/** Launch policy of the sandbox child (exported so tests can probe the OS-level backstop under the exact same flags):
+ *  --permission with no --allow-* grants denies fs, child_process and worker_threads. */
+export const sandboxArgv = (memoryMb: number): string[] => ['--permission', `--max-old-space-size=${memoryMb}`, '--max-semi-space-size=16']
+/** Minimal env: no NODE_OPTIONS (it could add --allow-* grants), only what Node needs on Windows. */
+export const sandboxEnv = (): Record<string, string> => ({ ELECTRON_RUN_AS_NODE: '1', SYSTEMROOT: process.env.SYSTEMROOT ?? '' })
+
 export function runSandboxed(script: string, opts: SandboxOptions): Promise<SandboxOutcome> {
   const memoryMb = opts.memoryMb ?? 256
   return new Promise((resolve) => {
     let settled = false
     const done = (o: SandboxOutcome) => { if (!settled) { settled = true; clearTimeout(hard); clearInterval(rssPoll); resolve(o) } }
     const capBytes = memoryMb * 1024 * 1024
-    const child = spawn(
-      process.execPath,
-      ['--permission', `--max-old-space-size=${memoryMb}`, '--max-semi-space-size=16', '-e', CHILD],
-      { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: { ELECTRON_RUN_AS_NODE: '1', SYSTEMROOT: process.env.SYSTEMROOT ?? '' } }
-    )
+    const child = spawn(process.execPath, [...sandboxArgv(memoryMb), '-e', CHILD],
+      { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: sandboxEnv() })
     let out = ''
     let err = ''
     let killedFor: string | null = null

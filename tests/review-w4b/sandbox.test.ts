@@ -68,6 +68,12 @@ it('enforces the advertised memory cap on ArrayBuffer backing stores', async () 
   // Bounded reproduction: touches only 64 MiB in a child configured for 16 MiB old space.
   const r = await runSandboxed('const b = new Uint8Array(64 * 1024 * 1024); b.fill(1); "allocated"', { timeoutMs: 500, memoryMb: 16 })
   expect(r.ok).toBe(false)
+  if (!r.ok) {
+    expect(r.error).toMatch(/memory limit exceeded/) // not a timeout/startup error (review-w4c T11)
+    expect(r.error).not.toMatch(/timed out|failed to start/)
+  }
+  // control: the same 64 MiB under a 256 MiB cap is allowed, so the failure above is the cap, not the payload
+  expect(await runSandboxed('const b = new Uint8Array(64 * 1024 * 1024); b.fill(1); "allocated"', { timeoutMs: 2000, memoryMb: 256 })).toEqual({ ok: true, raw: 'allocated' })
 })
 
 it('interrupts Atomics.wait inside the VM', async () => {

@@ -15,13 +15,19 @@ describe('child-process sandbox (jsCodeAsync)', () => {
     ['array fill bomb', 'new Array(1e9).fill(0)'],
     ['string doubling bomb', 'let s="ab"; while(true){ s = (s + s).split("").join("") }'],
     ['push bomb', 'const a=[]; while(true) a.push(new Array(1e6).fill(1))']
-  ])('%s → memory limit, host survives', async (_n, code) => {
-    const before = process.memoryUsage().rss
-    const r = await jsCodeAsync(code, add, 10_000)
-    expect(r).toMatchObject({ pass: false, score: 0 })
-    expect(r.detail).toMatch(/memory limit/)
-    expect(process.memoryUsage().rss - before).toBeLessThan(200 * 1024 ** 2) // bomb never touched our heap
-  }, 20_000)
+  ])('%s → memory limit in the child, not a timeout or startup error', async (_n, code) => {
+    // Isolation is proven by the child dying on its own cap while this test process keeps running; runner-wide RSS
+    // deltas are not used (GC and other workers move them independently — review-w4c T11).
+    const r = await runSandboxed(code, { timeoutMs: 10_000, memoryMb: 256 })
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.error).toMatch(/memory limit/)
+      expect(r.error).not.toMatch(/timed out|failed to start|unreadable/)
+    }
+    const graded = await jsCodeAsync(code, add, 10_000)
+    expect(graded).toMatchObject({ pass: false, score: 0 })
+    expect(graded.detail).toMatch(/memory limit/)
+  }, 40_000)
 
   it('infinite loop → vm timeout', async () => {
     const r = await jsCodeAsync('while(true){}', add, 300)
