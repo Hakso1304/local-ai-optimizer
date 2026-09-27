@@ -38,7 +38,7 @@ This is the MVP Definition of Done, the later user requirements and the cross-cu
 | Item | Status | Evidence | Caveat |
 |---|---|---|---|
 | Heavy-model mode | PARTIAL | e38ce73, 4ad9884 (UI toggle), 1027926, 5dacad4 (RAM safety, ordering); `tests/scoring/heavy.test.ts`, `kv.test.ts`; `calibration-heavy-2026-09-27.md` (Qwen3.8-27B 55/65 layers: 12–13 t/s, no spill) | One real dense model; MoE, -nkvo and CPU-baseline paths not yet measured |
-| Heavy-model live re-run | pending: #3 heavy re-run | — | — |
+| Heavy-model live re-run | DONE-WITH-CAVEAT | d24730e (docs/calibration-heavy-2026-09-27.md "Re-run with fixes"): Qwen3.8-27B ngl48/44 2K–16K 9.4→7.3 t/s, Gemma-4-26B-A4B ngl22 36–40 t/s to 16K, ngl18 cliff at 16K (−44%, no spill), shared 0.00 after the spill fix; quality (thinking off) Qwen 16/17, Gemma 16/17, 8B 15/17; Max Quality → Gemma-4 ngl18 93.6 over 8B 91.3; Coding → 8B (Qwen below the 10 t/s gate) | 17-item suite gives ±15 bands (I-5.2 will call it indistinguishable until suite v2); telemetry H7 recurrence on one rung |
 | Pareto chart + SLO filter | DONE-WITH-CAVEAT | 184eb33 `ParetoChart.tsx`, `SloFilter.tsx`, `tests/results/pareto-slo.test.ts` | Hidden configs don't show why (review finding 1) |
 | Required context 32K / 64K / 128K | DONE-WITH-CAVEAT | Core 0a99f35 (effective profile, ladder to the required ctx, gate "practical < required (limited by …)", advisory TTFT, user min-decode, fallback, KV q8_0 / -nkvo variants, CR-04-long); UI 91ec981; `tests/scoring/required.test.ts` + session tests | Long-context behaviour is not yet calibrated on real 64K–128K runs |
 | Long-context calibration (64K–128K) | pending: #3 | — | — |
