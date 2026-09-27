@@ -1,0 +1,77 @@
+{
+    "kind":  "local-ai-optimizer/stage3-launch-v1",
+    "sessionId":  5,
+    "snapshotHead":  "842d3964d57ba6a106ee24e3725f0c7b28e116ec",
+    "sourceZipSha256":  "9B97DFA31CB9657C8EDF36446C51C8BC22F530D7EF207D48CAB7784E3407344F",
+    "runnerSha256":  "80F0EA179254449B6F60DCF7EE098482CF4A2E5BF713A11F0B34776A66654DB1",
+    "launcherPath":  "C:\\Users\\hyuns\\AppData\\Local\\Temp\\s3-stage3-qwen-main-gate-6a5e5c972d6349f79632f222af270037\\launch-qwen-main.cjs",
+    "launcherSha256":  "5AD8A93D99905A08BB65E183C336E9695B5D9E43C31A031F285C3B6070A86E42",
+    "runtimeReleaseTag":  "b11208",
+    "vendorExeSha256":  "352D52FBCCDF88CEB094421B9A4A0B8C56B9354CF9D10F9B82AB21828F0876FA",
+    "model":  {
+                  "path":  "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf",
+                  "bytes":  16464440224,
+                  "sha256":  "322E194FF79741C7BAA497C240F677F54B201B0EFAB44CA8E50F122B39123482"
+              },
+    "spawn":  {
+                  "executable":  "E:\\nodejs\\node.exe",
+                  "cwd":  "C:\\Users\\hyuns\\AppData\\Local\\Temp\\s3-stage3-qwen-main-gate-6a5e5c972d6349f79632f222af270037\\run",
+                  "shell":  false,
+                  "windowsHide":  true,
+                  "tsxCli":  "C:\\Users\\hyuns\\AppData\\Local\\Temp\\s3-stage3-qwen-main-gate-6a5e5c972d6349f79632f222af270037\\run\\node_modules\\tsx\\dist\\cli.mjs",
+                  "runner":  "C:\\Users\\hyuns\\AppData\\Local\\Temp\\s3-stage3-qwen-main-gate-6a5e5c972d6349f79632f222af270037\\run\\scripts\\run-session.ts",
+                  "args":  [
+                               "H",
+                               "--workload",
+                               "coding",
+                               "--heavy",
+                               "--ladder",
+                               "8192",
+                               "--models",
+                               "Qwen3.8-27B-UD-Q4_K_M",
+                               "--pin",
+                               "[{\"model\":\"Qwen3.8\",\"ngl\":49}]",
+                               "--request-cap-ms",
+                               "300000",
+                               "--ram-abort-gib",
+                               "4",
+                               "--quality-mode",
+                               "thorough",
+                               "--quality-seed",
+                               "424242",
+                               "--db",
+                               "C:\\Users\\hyuns\\AppData\\Roaming\\local-ai-optimizer-dev\\optimizer.db",
+                               "--gen-configs",
+                               "[{\"id\":\"off\",\"thinking\":false,\"temperature\":1,\"topP\":0.95,\"topK\":20,\"minP\":0,\"source\":\"model-card\"},{\"id\":\"low\",\"thinking\":true,\"effort\":\"low\",\"temperature\":1,\"topP\":0.95,\"topK\":20,\"minP\":0,\"source\":\"model-card\"},{\"id\":\"medium\",\"thinking\":true,\"effort\":\"medium\",\"temperature\":1,\"topP\":0.95,\"topK\":20,\"minP\":0,\"source\":\"model-card\"}]"
+                           ]
+              },
+    "preflight":  {
+                      "at":  "2026-09-28T03:28:36+09:00",
+                      "competingProcesses":  0,
+                      "unifiedMemoryKeys":  0,
+                      "ramAvailableGiB":  17.17,
+                      "rx9070DedicatedGiB":  1.12,
+                      "secondsIdleSincePrior":  350
+                  },
+    "observedPids":  {
+                         "launcher":  34256,
+                         "tsx":  37640,
+                         "runner":  3288,
+                         "ladderServer":  4972,
+                         "qualityServer":  34276,
+                         "qualitySampler":  2388
+                     },
+    "teardown":  {
+                     "at":  "2026-09-28T05:36:20.6140240+09:00",
+                     "competingProcesses":  0,
+                     "ramAvailableGiB":  16.54,
+                     "runnerExitCode":  0,
+                     "runnerRamAbort":  false
+                 },
+    "artifacts":  {
+                      "dump":  "docs/session-run-stage3-qwen-main-2026-09-28.json",
+                      "dumpSha256":  "3CDF89232783AC86619D45A95A3CE0FB7C7009B10AEEF1AB783AE6A173062E2D",
+                      "export":  "docs/session-evidence-stage3-qwen-main-2026-09-28.json",
+                      "exportSha256":  "2F2686F2E66100999BF49EE75E466F479A2393A4FB95C73FBC089C2E04DD4D7D"
+                  }
+}
