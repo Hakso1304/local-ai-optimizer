@@ -1,0 +1,100 @@
+    1.9s runtime b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c); device Vulkan0 AMD Radeon RX 9070 XT; models Qwen3.8-27B (65L, ctx 262144), Gemma-4-26B-A4B-It (30L, ctx 262144), Meta Llama 3.1 8B Instruct (32L, ctx 131072)
+    1.9s {"sessionId":"s1","type":"log","level":"info","msg":"rejected Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=all|kv=f16|t=8: est. VRAM 16.0 GiB > budget 14.9 GiB at 2K"}
+    1.9s {"sessionId":"s1","type":"log","level":"info","msg":"rejected gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=all|kv=f16|t=8: est. VRAM 16.8 GiB > budget 14.9 GiB at 2K"}
+    1.9s {"sessionId":"s1","type":"session:started","workload":"max_quality","modelIds":["Qwen3.8-27B-UD-Q4_K_M.gguf","gemma-4-26B-A4B-it-UD-Q4_K_M.gguf","Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"],"resumed":false,"candidates":9}
+    1.9s {"sessionId":"s1","type":"candidate:started","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","model":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf","gpuLayers":32,"ctxSteps":[2048,4096,8192,16384,32768,65536]}
+    1.9s {"sessionId":"s1","type":"log","level":"info","msg":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8 @131072: skipped (est. VRAM 20.8 GiB > budget 14.9 GiB)"}
+    1.9s {"sessionId":"s1","type":"phase","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":2048,"phase":"ladder"}
+    1.9s {"sessionId":"s1","type":"step:started","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":2048}
+    1.9s {"sessionId":"s1","type":"phase","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":2048,"phase":"load"}
+    5.2s {"sessionId":"s1","type":"phase","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":2048,"phase":"warmup"}
+    5.7s {"sessionId":"s1","type":"phase","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":2048,"phase":"measure"}
+    7.2s {"sessionId":"s1","type":"token-rate","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":2048,"prefillTps":2937.0421872917605,"decodeTps":110.51858452670199,"ttftMs":399.84889999999996}
+    8.8s {"sessionId":"s1","type":"token-rate","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":2048,"prefillTps":2926.929505604519,"decodeTps":110.50800617452607,"ttftMs":401.16889999999967}
+    8.8s step:done Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8 @2048 pass pass pp=2932 tg=110.5 ttft=401 vram=4.78 shr=0.02
+    8.8s {"sessionId":"s1","type":"step:started","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":4096}
+    9.4s {"sessionId":"s1","type":"phase","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":4096,"phase":"load"}
+   12.0s {"sessionId":"s1","type":"phase","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":4096,"phase":"warmup"}
+   12.9s {"sessionId":"s1","type":"phase","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":4096,"phase":"measure"}
+   14.8s {"sessionId":"s1","type":"token-rate","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":4096,"prefillTps":2986.483464476839,"decodeTps":107.66589661530635,"ttftMs":782.1304}
+   16.8s {"sessionId":"s1","type":"token-rate","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":4096,"prefillTps":2960.879524299965,"decodeTps":107.78303868392668,"ttftMs":778.2988000000005}
+   16.8s step:done Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8 @4096 pass pass pp=2974 tg=107.7 ttft=780 vram=5.03 shr=0.02
+   16.8s {"sessionId":"s1","type":"step:started","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":8192}
+   17.5s {"sessionId":"s1","type":"phase","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":8192,"phase":"load"}
+   20.0s {"sessionId":"s1","type":"phase","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":8192,"phase":"warmup"}
+   21.8s {"sessionId":"s1","type":"phase","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":8192,"phase":"measure"}
+   24.8s {"sessionId":"s1","type":"token-rate","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":8192,"prefillTps":2839.914870568391,"decodeTps":90.68876330518411,"ttftMs":1631.9465999999993}
+   27.6s {"sessionId":"s1","type":"token-rate","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":8192,"prefillTps":2873.6387286166373,"decodeTps":102.40531540030801,"ttftMs":1602.1775000000016}
+   27.6s step:done Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8 @8192 pass pass pp=2857 tg=96.5 ttft=1617 vram=5.54 shr=0.02
+   27.6s {"sessionId":"s1","type":"step:started","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":16384}
+   28.3s {"sessionId":"s1","type":"phase","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":16384,"phase":"load"}
+   30.9s {"sessionId":"s1","type":"phase","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":16384,"phase":"warmup"}
+   34.5s {"sessionId":"s1","type":"phase","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":16384,"phase":"measure"}
+   39.4s {"sessionId":"s1","type":"token-rate","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":16384,"prefillTps":2594.9004097464835,"decodeTps":93.18160140286001,"ttftMs":3532.1598999999987}
+   44.3s {"sessionId":"s1","type":"token-rate","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":16384,"prefillTps":2592.042573725813,"decodeTps":93.14292084465228,"ttftMs":3535.3675000000003}
+   44.3s step:done Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8 @16384 pass pass pp=2593 tg=93.2 ttft=3534 vram=6.55 shr=0.03
+   44.3s {"sessionId":"s1","type":"step:started","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":32768}
+   45.0s {"sessionId":"s1","type":"phase","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":32768,"phase":"load"}
+   47.9s {"sessionId":"s1","type":"phase","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":32768,"phase":"warmup"}
+   56.1s {"sessionId":"s1","type":"phase","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":32768,"phase":"measure"}
+   65.9s {"sessionId":"s1","type":"token-rate","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":32768,"prefillTps":2227.2497810342993,"decodeTps":78.58935207101507,"ttftMs":8199.948499999999}
+   75.7s {"sessionId":"s1","type":"token-rate","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":32768,"prefillTps":2233.375227477369,"decodeTps":79.15652798276757,"ttftMs":8178.192599999995}
+   75.7s step:done Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8 @32768 pass pass pp=2230 tg=78.9 ttft=8189 vram=8.56 shr=0.05
+   75.7s {"sessionId":"s1","type":"phase","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","ctx":8192,"phase":"quality"}
+   94.5s {"sessionId":"s1","type":"candidate:done","configId":"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8","status":"done","reason":null}
+   94.5s {"sessionId":"s1","type":"candidate:started","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=0|kv=f16|t=8","model":"Qwen3.8-27B-UD-Q4_K_M.gguf","gpuLayers":0,"ctxSteps":[2048,4096]}
+   94.5s {"sessionId":"s1","type":"log","level":"info","msg":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=0|kv=f16|t=8 @8192: skipped (skipped_memory: est. RAM 17.9 GiB > available − reserve 17.5 GiB)"}
+   94.5s {"sessionId":"s1","type":"log","level":"info","msg":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=0|kv=f16|t=8 @16384: skipped (skipped_memory: est. RAM 19.9 GiB > available − reserve 17.5 GiB)"}
+   94.5s {"sessionId":"s1","type":"log","level":"info","msg":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=0|kv=f16|t=8 @32768: skipped (skipped_memory: est. RAM 24.0 GiB > available − reserve 17.5 GiB)"}
+   94.5s {"sessionId":"s1","type":"log","level":"info","msg":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=0|kv=f16|t=8 @65536: skipped (skipped_memory: est. RAM 32.1 GiB > available − reserve 17.5 GiB)"}
+   94.5s {"sessionId":"s1","type":"log","level":"info","msg":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=0|kv=f16|t=8 @131072: skipped (skipped_memory: est. RAM 48.3 GiB > available − reserve 17.5 GiB)"}
+   94.5s {"sessionId":"s1","type":"phase","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=0|kv=f16|t=8","ctx":2048,"phase":"ladder"}
+   94.5s {"sessionId":"s1","type":"step:started","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=0|kv=f16|t=8","ctx":2048}
+   94.5s {"sessionId":"s1","type":"phase","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=0|kv=f16|t=8","ctx":2048,"phase":"load"}
+  102.9s {"sessionId":"s1","type":"phase","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=0|kv=f16|t=8","ctx":2048,"phase":"warmup"}
+  103.9s {"sessionId":"s1","type":"phase","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=0|kv=f16|t=8","ctx":2048,"phase":"measure"}
+  103.9s {"sessionId":"s1","type":"log","level":"error","msg":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=0|kv=f16|t=8 @2048: RAM available 1.0 GiB fell below the floor"}
+  103.9s step:done Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=0|kv=f16|t=8 @2048 fail fail/guard_abort pp=n/a tg=n/a ttft=n/a vram=0.01 shr=0.00
+  106.3s {"sessionId":"s1","type":"candidate:done","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=0|kv=f16|t=8","status":"failed","reason":"stopped after fail (guard_abort) at 2048"}
+  106.3s {"sessionId":"s1","type":"candidate:started","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8","model":"Qwen3.8-27B-UD-Q4_K_M.gguf","gpuLayers":55,"ctxSteps":[2048,4096,8192]}
+  106.3s {"sessionId":"s1","type":"log","level":"info","msg":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8 @16384: skipped (est. VRAM 16.5 GiB > budget 14.9 GiB)"}
+  106.3s {"sessionId":"s1","type":"log","level":"info","msg":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8 @32768: skipped (est. VRAM 20.0 GiB > budget 14.9 GiB)"}
+  106.3s {"sessionId":"s1","type":"log","level":"info","msg":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8 @65536: skipped (est. VRAM 26.9 GiB > budget 14.9 GiB)"}
+  106.3s {"sessionId":"s1","type":"log","level":"info","msg":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8 @131072: skipped (est. VRAM 40.7 GiB > budget 14.9 GiB)"}
+  106.3s {"sessionId":"s1","type":"phase","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8","ctx":2048,"phase":"ladder"}
+  106.3s {"sessionId":"s1","type":"step:started","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8","ctx":2048}
+  106.3s {"sessionId":"s1","type":"phase","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8","ctx":2048,"phase":"load"}
+  115.5s {"sessionId":"s1","type":"phase","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8","ctx":2048,"phase":"warmup"}
+  121.7s {"sessionId":"s1","type":"phase","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8","ctx":2048,"phase":"measure"}
+  133.4s {"sessionId":"s1","type":"token-rate","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8","ctx":2048,"prefillTps":613.0905585627354,"decodeTps":13.027696061183805,"ttftMs":1909.7994999999937}
+  146.0s {"sessionId":"s1","type":"token-rate","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8","ctx":2048,"prefillTps":609.1679516167443,"decodeTps":11.828119724786664,"ttftMs":1922.5501999999979}
+  146.0s step:done Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8 @2048 pass pass pp=611 tg=12.4 ttft=1916 vram=12.67 shr=0.04
+  146.0s {"sessionId":"s1","type":"step:started","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8","ctx":4096}
+  148.3s {"sessionId":"s1","type":"phase","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8","ctx":4096,"phase":"load"}
+  155.1s {"sessionId":"s1","type":"phase","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8","ctx":4096,"phase":"warmup"}
+  159.2s {"sessionId":"s1","type":"phase","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8","ctx":4096,"phase":"measure"}
+  172.4s {"sessionId":"s1","type":"token-rate","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8","ctx":4096,"prefillTps":657.0927847609375,"decodeTps":13.120258950521851,"ttftMs":3502.7452999999805}
+  185.6s {"sessionId":"s1","type":"token-rate","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8","ctx":4096,"prefillTps":665.8922071776689,"decodeTps":12.933023334534644,"ttftMs":3455.1092000000062}
+  185.6s step:done Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8 @4096 pass pass pp=661 tg=13.0 ttft=3479 vram=12.81 shr=0.04
+  185.6s {"sessionId":"s1","type":"step:started","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8","ctx":8192}
+  188.3s {"sessionId":"s1","type":"phase","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8","ctx":8192,"phase":"load"}
+  195.5s {"sessionId":"s1","type":"phase","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8","ctx":8192,"phase":"warmup"}
+  202.7s {"sessionId":"s1","type":"phase","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8","ctx":8192,"phase":"measure"}
+  219.5s {"sessionId":"s1","type":"token-rate","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8","ctx":8192,"prefillTps":667.7132449221309,"decodeTps":12.811015132734223,"ttftMs":6887.11069999999}
+  235.5s {"sessionId":"s1","type":"token-rate","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8","ctx":8192,"prefillTps":710.7547057716872,"decodeTps":13.256023923469948,"ttftMs":6469.806100000016}
+  235.5s step:done Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8 @8192 pass pass pp=689 tg=13.0 ttft=6678 vram=13.03 shr=0.04
+  235.5s {"sessionId":"s1","type":"phase","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8","ctx":8192,"phase":"quality"}
+  422.4s {"sessionId":"s1","type":"candidate:done","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=55|kv=f16|t=8","status":"done","reason":null}
+  422.4s {"sessionId":"s1","type":"candidate:started","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=60|kv=f16|t=8","model":"Qwen3.8-27B-UD-Q4_K_M.gguf","gpuLayers":60,"ctxSteps":[2048]}
+  422.4s {"sessionId":"s1","type":"log","level":"info","msg":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=60|kv=f16|t=8 @4096: skipped (est. VRAM 15.2 GiB > budget 14.9 GiB)"}
+  422.4s {"sessionId":"s1","type":"log","level":"info","msg":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=60|kv=f16|t=8 @8192: skipped (est. VRAM 16.1 GiB > budget 14.9 GiB)"}
+  422.4s {"sessionId":"s1","type":"log","level":"info","msg":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=60|kv=f16|t=8 @16384: skipped (est. VRAM 18.0 GiB > budget 14.9 GiB)"}
+  422.4s {"sessionId":"s1","type":"log","level":"info","msg":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=60|kv=f16|t=8 @32768: skipped (est. VRAM 21.8 GiB > budget 14.9 GiB)"}
+  422.4s {"sessionId":"s1","type":"log","level":"info","msg":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=60|kv=f16|t=8 @65536: skipped (est. VRAM 29.3 GiB > budget 14.9 GiB)"}
+  422.4s {"sessionId":"s1","type":"log","level":"info","msg":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=60|kv=f16|t=8 @131072: skipped (est. VRAM 44.4 GiB > budget 14.9 GiB)"}
+  422.4s {"sessionId":"s1","type":"phase","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=60|kv=f16|t=8","ctx":2048,"phase":"ladder"}
+  422.4s {"sessionId":"s1","type":"step:started","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=60|kv=f16|t=8","ctx":2048}
+  422.4s {"sessionId":"s1","type":"phase","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=60|kv=f16|t=8","ctx":2048,"phase":"load"}
+  430.9s {"sessionId":"s1","type":"phase","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=60|kv=f16|t=8","ctx":2048,"phase":"warmup"}
+  433.1s {"sessionId":"s1","type":"phase","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=60|kv=f16|t=8","ctx":2048,"phase":"measure"}
+  442.1s {"sessionId":"s1","type":"token-rate","configId":"Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=60|kv=f16|t=8","ctx":2048,"prefillTps":665.8199153628406,"decodeTps":17.72993209017192,"ttftMs":1768.987599999993}

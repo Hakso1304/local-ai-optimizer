@@ -1,0 +1,164 @@
+{
+ "scenario": "H",
+ "startedAt": "2026-09-27T09:19:21.254Z",
+ "wallMs": 2059,
+ "abortToCancelledMs": null,
+ "leftoverLlamaServers": 0,
+ "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)",
+ "device": {
+  "id": "Vulkan0",
+  "name": "AMD Radeon RX 9070 XT",
+  "totalMiB": 16304,
+  "freeMiB": 15416
+ },
+ "models": [
+  {
+   "id": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf",
+   "name": "Qwen3.8-27B",
+   "fileBytes": 16464440224,
+   "paramCount": 27320697856,
+   "quant": "Q4_K_M",
+   "arch": "qwen35",
+   "ctxTrain": 262144,
+   "layers": 65,
+   "nEmbd": 5120,
+   "heads": 24,
+   "headsKv": 4,
+   "keyLength": 256,
+   "valueLength": 256,
+   "nVocab": 248320,
+   "slidingWindow": null
+  },
+  {
+   "id": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+   "name": "Gemma-4-26B-A4B-It",
+   "fileBytes": 16947541728,
+   "paramCount": 25233142046,
+   "quant": "Q4_K_M",
+   "arch": "gemma4",
+   "ctxTrain": 262144,
+   "layers": 30,
+   "nEmbd": 2816,
+   "heads": 16,
+   "headsKv": 8,
+   "keyLength": 512,
+   "valueLength": 512,
+   "nVocab": 262144,
+   "slidingWindow": 1024
+  }
+ ],
+ "request": {
+  "workload": "max_quality",
+  "modelIds": [
+   "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf",
+   "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"
+  ],
+  "runQuality": false,
+  "heavyMode": false
+ },
+ "recommendation": {
+  "workload": "max_quality",
+  "scoringVersion": "scoring-1.0.0",
+  "best": null,
+  "alternatives": {
+   "fastest": null,
+   "bestQuality": null,
+   "bestLongContext": null,
+   "lowestMemory": null
+  },
+  "ranked": [],
+  "excluded": [],
+  "reasons": [
+   "No recommendation: no candidates were benchmarked"
+  ]
+ },
+ "db": {
+  "sessions": [
+   {
+    "id": "s1",
+    "workload": "max_quality",
+    "request": {
+     "workload": "max_quality",
+     "modelIds": [
+      "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf",
+      "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"
+     ],
+     "runQuality": false,
+     "heavyMode": false
+    },
+    "startedAt": 1790500763237,
+    "status": "done"
+   }
+  ],
+  "runs": [],
+  "quality": [],
+  "recommendations": [
+   {
+    "sessionId": "s1",
+    "rec": {
+     "workload": "max_quality",
+     "scoringVersion": "scoring-1.0.0",
+     "best": null,
+     "alternatives": {
+      "fastest": null,
+      "bestQuality": null,
+      "bestLongContext": null,
+      "lowestMemory": null
+     },
+     "ranked": [],
+     "excluded": [],
+     "reasons": [
+      "No recommendation: no candidates were benchmarked"
+     ]
+    }
+   }
+  ]
+ },
+ "transcripts": [],
+ "events": [
+  {
+   "sessionId": "s1",
+   "type": "log",
+   "level": "info",
+   "msg": "rejected D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=all|kv=f16|t=8: est. VRAM 16.0 GiB > budget 14.9 GiB at 2K; full GPU offload does not fit — enable heavy-model mode to benchmark partial offload"
+  },
+  {
+   "sessionId": "s1",
+   "type": "log",
+   "level": "info",
+   "msg": "rejected D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=all|kv=f16|t=8: est. VRAM 16.8 GiB > budget 14.9 GiB at 2K; full GPU offload does not fit — enable heavy-model mode to benchmark partial offload"
+  },
+  {
+   "sessionId": "s1",
+   "type": "session:started",
+   "workload": "max_quality",
+   "modelIds": [
+    "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf",
+    "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"
+   ],
+   "resumed": false,
+   "candidates": 0
+  },
+  {
+   "sessionId": "s1",
+   "type": "session:done",
+   "recommendation": {
+    "workload": "max_quality",
+    "scoringVersion": "scoring-1.0.0",
+    "best": null,
+    "alternatives": {
+     "fastest": null,
+     "bestQuality": null,
+     "bestLongContext": null,
+     "lowestMemory": null
+    },
+    "ranked": [],
+    "excluded": [],
+    "reasons": [
+     "No recommendation: no candidates were benchmarked"
+    ]
+   }
+  }
+ ],
+ "telemetryEvents": 0
+}

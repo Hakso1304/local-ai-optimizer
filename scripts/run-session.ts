@@ -1,8 +1,9 @@
 // Core session runner E2E on real hardware, independent of the Electron/IPC wiring.
-// Usage: npx tsx scripts/run-session.ts <A|B|C>
+// Usage: npx tsx scripts/run-session.ts <A|B|C|H> [--heavy] [--workload coding] [--models a,b] [--ladder 2048,8192] [--no-quality]
 //   A  coding workload, qwen2.5-1.5b + llama-3.1-8b, quality on, default ladder/reps
 //   B  same session, abort ~20 s into the 8B ladder (cancel path)
 //   C  RAM floor 64 GiB (guard path: every step skipped_memory, no load)
+//   H  custom: flags choose workload/models/ladder/heavy mode (quality on unless --no-quality)
 // Dumps everything (events, runs, quality, recommendation, raw quality prompts/replies) to docs/session-run-<scenario>-<ts>.json.
 import { execFileSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
@@ -20,7 +21,8 @@ import { startSampler } from '../src/core/telemetry/sampler'
 
 const scenario = (process.argv[2] ?? 'A').toUpperCase()
 const MODELS_DIR = 'D:\\llm-models'
-const WANT = ['qwen2.5-1.5b-instruct-q4_k_m', 'Meta-Llama-3.1-8B-Instruct-Q4_K_M']
+const flag = (k: string) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : undefined }
+const WANT = flag('--models')?.split(',') ?? ['qwen2.5-1.5b-instruct-q4_k_m', 'Meta-Llama-3.1-8B-Instruct-Q4_K_M']
 const GiB = 1024 ** 3
 const t0 = Date.now()
 const el = () => `${((Date.now() - t0) / 1000).toFixed(1).padStart(7)}s`
@@ -103,7 +105,12 @@ async function main(): Promise<void> {
   let abortAt: number | null = null
   let abortScheduled = false
   let cancelledAt: number | null = null
-  const req: SessionRequest = { workload: 'coding', modelIds: models.map((m) => m.id), runQuality: scenario === 'A' }
+  const req: SessionRequest = {
+    workload: (flag('--workload') ?? 'coding') as SessionRequest['workload'], modelIds: models.map((m) => m.id),
+    runQuality: scenario === 'A' || (scenario === 'H' && !process.argv.includes('--no-quality')),
+    heavyMode: process.argv.includes('--heavy'),
+    ...(flag('--ladder') ? { ladder: flag('--ladder')!.split(',').map(Number) } : {})
+  }
   const pidFile = join(tmpdir(), `lao-session-${scenario}.pid`)
   const rec = await runSession(req, {
     backend: () => wrap(new LlamaCppBackend(vendor, { pidFile })),
@@ -135,7 +142,7 @@ async function main(): Promise<void> {
     runtime: det.version, device: dev, models, request: req, recommendation: rec, db, transcripts,
     events: events.filter((e) => e.type !== 'telemetry'), telemetryEvents: events.filter((e) => e.type === 'telemetry').length
   }
-  const file = join('docs', `session-run-${scenario}-${new Date(t0).toISOString().replace(/[:.]/g, '-')}.json`)
+  const file = join('docs', `session-run-${scenario}${scenario === 'H' ? `-${req.workload}${req.heavyMode ? '-heavy' : ''}` : ''}-${new Date(t0).toISOString().replace(/[:.]/g, '-')}.json`)
   writeFileSync(file, JSON.stringify(dump, null, 1))
   console.log(`${el()} wall ${(dump.wallMs / 1000).toFixed(0)} s; abort→cancelled ${unloadMs ?? 'n/a'} ms; leftover llama-server ${left}; wrote ${file}`)
 }
