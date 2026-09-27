@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ChildProcess } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { assertNewArtifact, baseArgv, bounded, idle, launch, outputPathFor, ramFloor, safeEnv, stopOwned, unifiedMemoryKeys, watchRam, type CollisionEvidence, type LaunchProbe } from '../scripts/ab-spill'
+import { join, resolve } from 'node:path'
+import { assertNewArtifact, baseArgv, bounded, idle, launch, outputPathFor, ramFloor, reserveLoopbackPort, safeEnv, stopOwned, unifiedMemoryKeys, verifyProps, watchRam, type CollisionEvidence, type LaunchProbe } from '../scripts/ab-spill'
 
 const GiB = 1024 ** 3
 
@@ -110,6 +110,8 @@ describe('ab-spill launch with a fake Node HTTP child (no GPU)', { timeout: 15_0
   const safeProbe: LaunchProbe = {
     readRam: () => 5 * GiB, countServers: () => 0, devices: () => [],
     startSampler: () => ({ rows: [], stop: async () => {} }),
+    ownerOfPort: async () => process.env.FAKE_PID_FILE && existsSync(process.env.FAKE_PID_FILE)
+      ? Number(readFileSync(process.env.FAKE_PID_FILE, 'utf8')) : null,
     requestTimeoutMs: 100, healthTimeoutMs: 50, loadTimeoutMs: 500, watchIntervalMs: 10
   }
   const args = [fake, '-m', 'fake.gguf', '-c', '2048']
@@ -162,10 +164,73 @@ describe('ab-spill evidence from a fake Node child (no GPU)', { timeout: 15_000 
   const probe: LaunchProbe = {
     readRam: () => 5 * GiB, countServers: () => 0, devices: () => ['fake MiB'],
     startSampler: () => ({ rows: [], stop: async () => {} }),
+    ownerOfPort: async () => process.env.FAKE_AB_PID_FILE && existsSync(process.env.FAKE_AB_PID_FILE)
+      ? Number(readFileSync(process.env.FAKE_AB_PID_FILE, 'utf8')) : null,
     requestTimeoutMs: 500, loadTimeoutMs: 1_000, healthTimeoutMs: 100, watchIntervalMs: 20,
     settleMs: 0, postMs: 0
   }
-  const runFake = (mode: string, promptTokens: number | null) => launch(mode, [fake, '--fake-mode', mode], promptTokens, process.execPath, probe)
+  const runFake = async (mode: string, promptTokens: number | null, over: Partial<LaunchProbe> = {}) => {
+    const dir = mkdtempSync(join(tmpdir(), 'lao-ab-props-'))
+    const pidFile = join(dir, 'pid.txt'), previous = process.env.FAKE_AB_PID_FILE
+    process.env.FAKE_AB_PID_FILE = pidFile
+    try {
+      return await launch(mode, [fake, '-m', 'fake.gguf', '-c', '2048', '--fake-mode', mode],
+        promptTokens, process.execPath, { ...probe, ...over })
+    } finally {
+      if (previous === undefined) delete process.env.FAKE_AB_PID_FILE
+      else process.env.FAKE_AB_PID_FILE = previous
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  it('reserves a real loopback port and accepts only matching model/context props', async () => {
+    const port = await reserveLoopbackPort()
+    expect(port).toBeGreaterThan(0)
+    expect(port).toBeLessThanOrEqual(65535)
+    const argv = ['-m', 'fake.gguf', '-c', '2048']
+    expect(verifyProps({ model_path: resolve('FAKE.gguf'), default_generation_settings: { n_ctx: 2048 } }, argv))
+      .toEqual({ modelPath: resolve('FAKE.gguf'), contextSize: 2048 })
+    expect(() => verifyProps({ model_path: resolve('foreign.gguf'), default_generation_settings: { n_ctx: 2048 } }, argv))
+      .toThrow(/model mismatch/)
+    expect(() => verifyProps({ model_path: resolve('fake.gguf'), default_generation_settings: { n_ctx: 1024 } }, argv))
+      .toThrow(/context mismatch/)
+  })
+
+  it('verifies the fake listener PID and served props before accepting a load', async () => {
+    const row = await runFake('streams', null)
+    expect(row.error).toBeNull()
+    expect(row.listenerOwnerPid).toBeGreaterThan(0)
+    expect(row.servedProps).toEqual({ modelPath: resolve('fake.gguf'), contextSize: 2048 })
+  })
+
+  it.each([
+    ['wrong-model', /\/props model mismatch/],
+    ['wrong-ctx', /\/props context mismatch/]
+  ] as const)('rejects %s props before recording a successful load', async (mode, reason) => {
+    const row = await runFake(mode, 16)
+    expect(row.error).toMatch(reason)
+    expect(row.servedProps).toBeNull()
+    expect(row.reps).toEqual([])
+  })
+
+  it('rejects a foreign listener between reservation and spawn', async () => {
+    const owner = vi.fn(async () => 4242)
+    const row = await runFake('streams', 16, { ownerOfPort: owner })
+    expect(row.error).toMatch(/acquired by another listener before spawn/)
+    expect(row.listenerOwnerPid).toBeNull()
+    expect(row.servedProps).toBeNull()
+    expect(row.reps).toEqual([])
+    expect(owner).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects a listener owned by a different PID after health, before props', async () => {
+    let checks = 0
+    const row = await runFake('streams', 16, { ownerOfPort: async () => ++checks === 1 ? null : 4242 })
+    expect(row.error).toMatch(/not owned server PID/)
+    expect(row.listenerOwnerPid).toBe(4242)
+    expect(row.servedProps).toBeNull()
+    expect(row.reps).toEqual([])
+  })
 
   it('drains and preserves stdout plus stderr and parses buffer declarations from both streams', async () => {
     const row = await runFake('streams', null)
