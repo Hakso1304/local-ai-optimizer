@@ -18,6 +18,11 @@ This is the single consolidated list, and every item is checked against the code
   - Here (llama.cpp Vulkan) it was ≈ 11.6–13.25 GiB of 15.92, about 73–83 %, so a 16 GB card behaved like ≈ 12–13 GB. Ollama's ROCm/HIP backend on an RX 6800 used the full 16 GB. HIP allocates device memory directly, while Vulkan on this driver keeps a per-process ceiling.
   - Ceilings are learned per adapter (PNP id) + driver + backend build, only from residency that persists after a fresh restart. They stay advisory until qualified (identity verified, load-log buffer comparable to the planned allocation). Only qualified, comparable ceilings prune, and never an allocation observed clean. Until one exists, 80 % is shown as an estimate. I-2.8 (placement) is heuristic until the held A/B confirms.
   - The app measures only the backend it runs: a ROCm/HIP backend (LM Studio or Ollama on AMD) may allocate differently from Vulkan, and its ceiling is not inferred from ours.
+- **DONE-WITH-CAVEAT: process ownership is identity-verified, not OS-enforced.**
+  - Owned `llama-server`/`typeperf` trees are bound to pid + creation time, re-read at kill. A timing window or a name is never proof.
+  - A failure to enumerate or verify the tree is fatal (`ServerStuckError`) and blocks backend switching and new loads.
+  - FOLLOW-UP: a Windows Job Object (kill-on-close) would remove the enumeration race, but needs native code (ARCHITECTURE §5).
+- **Replay never upgrades evidence:** a partial or incoherent proof-origin record stays unverified/`reconstructed`. It is never repaired into proof.
 - **OPEN (review-w4q): harness safety blockers. No new GPU stage runs until these are fixed and re-reviewed by Astra:**
   - **Q1** — cancellation can be lost between preprocessing (applyTemplate) and generation.
   - **Q2** — PID-chain teardown kills the parent first and uses `taskkill /T` only if the parent survives, so children can outlive it.

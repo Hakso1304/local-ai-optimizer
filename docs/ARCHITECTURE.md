@@ -182,6 +182,15 @@ Every method may be sync or async. For the event list see `src/shared/bench-even
 | Request validation | `main/validate.ts` | Renderer requests are sanitized: whitelisted rule keys, reps and ladder clamped, model paths resolved and checked to be inside a root. |
 | Uninstall | `build/installer.nsh` | The NSIS uninstall kills the llama-server in the app's pid file only after verifying its exe path and start time (a process it cannot verify is left alone). userData is kept on purpose. |
 
+### Process ownership policy (RECHECK7, docs/review-w4s)
+- **What counts as owned:** a spawned `llama-server` or `typeperf` process, and each of its descendants, is owned only by **verified identity**: pid + creation time. That identity is recorded at spawn and **re-read at the moment of kill**.
+- **Never proof of ownership:** a timing window, a process name, a parent pid alone, or a pid file. A reused pid whose creation time differs is foreign and is never killed.
+- **Failure is fatal:** if the owned tree cannot be enumerated or verified (query failure, unparsable timestamps, a survivor after the kill), that is a fatal cleanup failure (`ServerStuckError`). It stops the session and blocks backend switching and any new load until the tree is confirmed gone. It is not retried silently.
+- **Follow-up:** the ideal is a Windows **Job Object** with kill-on-close, where the OS reaps the whole tree when the handle closes, with no enumeration or identity race. It needs native code (not available from Node without an addon).
+
+### Replay origin rule
+A quality row's proof origin is taken as recorded. A partial or incoherent origin record is never repaired, re-derived or completed into proof. Examples: a missing original prompt hash, a replay without its source row, or mismatched identity fields. Replay output can only label such rows `reconstructed` / unverified.
+
 ## 6. Persistence (`src/core/storage/db.ts`)
 
 `node:sqlite` `DatabaseSync` runs in main (WAL, foreign keys on). Migrations are an ordered array of SQL strings, and `schema_version` records the applied count.
