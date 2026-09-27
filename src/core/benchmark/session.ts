@@ -199,9 +199,9 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     const raw = val(r.peakSharedGpuRawBytes)
     return raw === null ? val(r.peakSharedGpuBytes) : raw - (val(r.hostPinnedBytes) ?? 0) - base
   }
-  /** Device buffers the runtime declared at load (MiB per device; CPU entries excluded). */
+  /** Device buffers the runtime declared at load (MiB per device; host entries — CPU*, Vulkan_Host, ROCm_Host — excluded). */
   const buffersOf = (d: RunDetail) => {
-    const dev = (x: Record<string, number> | undefined) => Object.entries(x ?? {}).filter(([k]) => !/^cpu/i.test(k)).map(([, v]) => v * 1024 ** 2)
+    const dev = (x: Record<string, number> | undefined) => Object.entries(x ?? {}).filter(([k]) => GPU_DEVICE.test(k)).map(([, v]) => v * 1024 ** 2)
     const dl = d.load?.declared
     const all = dl ? [...dev(dl.modelBufferMiB), ...dev(dl.kvBufferMiB), ...dev(dl.computeBufferMiB)] : []
     const kv = dl ? dev(dl.kvBufferMiB) : []
