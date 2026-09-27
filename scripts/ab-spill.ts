@@ -171,6 +171,8 @@ const servers = async (signal?: AbortSignal) => {
   lastServerScan = { observedAt, processes }
   return processes.length
 }
+const typeperfCount = async () => (await osProbe('tasklist', ['/FI', 'IMAGENAME eq typeperf.exe', '/FO', 'CSV', '/NH'], 5_000)).stdout
+  .split(/\r?\n/).filter((l) => /^"typeperf\.exe"/i.test(l)).length
 export interface CollisionEvidence {
   observedAt: string
   tasklist: { observedAt: string; processes: SeenServer[] }
@@ -491,7 +493,10 @@ async function main() {
   } catch (e) { failure = e; throw e }
   finally {
     const cleanupErrors: unknown[] = []
-    try { if (await servers() > 0) cleanupErrors.push(new Error('llama-server.exe remains after experiment')) }
+    try {
+      if (await servers() > 0) cleanupErrors.push(new Error('llama-server.exe remains after experiment'))
+      if (await typeperfCount() > 0) cleanupErrors.push(new Error('typeperf.exe remains after experiment'))
+    }
     catch (e) { cleanupErrors.push(e) }
     supervisor.stop() // remains active through all case and final process reaping
     experimentController = null

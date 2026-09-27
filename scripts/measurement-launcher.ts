@@ -38,15 +38,15 @@ export interface ManifestConfig {
   exportOut: string
 }
 
-export async function hashFile(path: string): Promise<string> {
+export async function hashFile(path: string, signal?: AbortSignal): Promise<string> {
   const hash = createHash('sha256')
-  for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer)
+  for await (const chunk of createReadStream(path, { signal })) { signal?.throwIfAborted(); hash.update(chunk as Buffer) }
   return hash.digest('hex').toUpperCase()
 }
-async function fingerprint(role: FileRole, path: string): Promise<Fingerprint> {
+async function fingerprint(role: FileRole, path: string, signal?: AbortSignal): Promise<Fingerprint> {
   const absolute = resolve(path)
   if (!existsSync(absolute)) throw new Error(`${role} missing: ${absolute}`)
-  return { role, path: absolute, bytes: statSync(absolute).size, sha256: await hashFile(absolute) }
+  return { role, path: absolute, bytes: statSync(absolute).size, sha256: await hashFile(absolute, signal) }
 }
 const flag = (args: string[], name: string) => { const i = args.indexOf(name); return i < 0 ? undefined : args[i + 1] }
 function checkCommand(manifest: MeasurementManifest): void {
@@ -89,7 +89,7 @@ export async function createManifest(config: ManifestConfig, out: string): Promi
   writeFileSync(out, JSON.stringify(manifest, null, 2), { flag: 'wx' })
   return manifest
 }
-export async function verifyManifest(manifest: MeasurementManifest): Promise<void> {
+export async function verifyManifest(manifest: MeasurementManifest, signal?: AbortSignal): Promise<void> {
   if (manifest.kind !== 'local-ai-optimizer/measurement-gate-v1' || !/^[0-9a-f]{40}$/i.test(manifest.snapshotHead)) throw new Error('invalid measurement manifest')
   checkCommand(manifest)
   const map = fileMap(manifest)
@@ -100,7 +100,8 @@ export async function verifyManifest(manifest: MeasurementManifest): Promise<voi
   const recordedDlls = manifest.files.filter((f) => f.role.startsWith('dll:')).map((f) => f.role.slice(4)).sort()
   if (JSON.stringify(actualDlls) !== JSON.stringify(recordedDlls)) throw new Error('runtime DLL set changed')
   for (const original of manifest.files) {
-    const current = await fingerprint(original.role, original.path)
+    signal?.throwIfAborted()
+    const current = await fingerprint(original.role, original.path, signal)
     if (current.bytes !== original.bytes || current.sha256 !== original.sha256) throw new Error(`${original.role} changed: ${original.path}`)
   }
 }
@@ -140,7 +141,7 @@ export async function launchManifest(manifest: MeasurementManifest, deps: Launch
     controller.signal.throwIfAborted()
     if (readRam() < 12 * GiB) throw new Error('preflight RAM below 12 GiB')
     if (await count('llama-server.exe') || await count('typeperf.exe')) throw new Error('competing llama-server/typeperf process before launch')
-    await verify(manifest) // last preflight action before process and model launch
+    await verify(manifest, controller.signal) // last preflight action before process and model launch
     controller.signal.throwIfAborted()
     const map = fileMap(manifest), cwd = manifest.command.cwd
     child = (deps.spawnFn ?? spawn)(process.execPath, [map.get('tsxCli')!.path, map.get('runner')!.path, ...manifest.command.args], { cwd, shell: false, windowsHide: true,
