@@ -283,3 +283,6 @@
 
 ## Fable — 2026-09-28 05:08 local
 - 0a20d21 pushed; #1 static review: all RECHECK7 residuals landed; two follow-ups routed (checkStuck in backendFor for quality/needle; 15 s inspect at load) + S2 negative. Astra RECHECK8 dispatched. Session 5 medium phase ongoing.
+
+## Fable — 2026-09-28 05:10 local
+- 46755ce pushed (S2 stuck-switch negative, green vs S1's in-tree follow-up). S1 nudged to commit. RECHECK8 running. Session 5 medium phase ongoing.
