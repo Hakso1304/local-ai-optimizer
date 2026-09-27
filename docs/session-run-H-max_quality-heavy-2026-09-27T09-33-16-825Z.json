@@ -1,0 +1,1742 @@
+{
+ "scenario": "H",
+ "startedAt": "2026-09-27T09:33:16.825Z",
+ "wallMs": 62222,
+ "abortToCancelledMs": null,
+ "ramAbort": "system RAM available 2.4 GiB < 3.0 GiB at 55.4s",
+ "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)",
+ "device": {
+  "id": "Vulkan0",
+  "name": "AMD Radeon RX 9070 XT",
+  "totalMiB": 16304,
+  "freeMiB": 15416
+ },
+ "models": [
+  {
+   "id": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf",
+   "name": "Qwen3.8-27B",
+   "fileBytes": 16464440224,
+   "paramCount": 27320697856,
+   "quant": "Q4_K_M",
+   "arch": "qwen35",
+   "ctxTrain": 262144,
+   "layers": 65,
+   "nEmbd": 5120,
+   "heads": 24,
+   "headsKv": 4,
+   "keyLength": 256,
+   "valueLength": 256,
+   "nVocab": 248320,
+   "slidingWindow": null
+  },
+  {
+   "id": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+   "name": "Gemma-4-26B-A4B-It",
+   "fileBytes": 16947541728,
+   "paramCount": 25233142046,
+   "quant": "Q4_K_M",
+   "arch": "gemma4",
+   "ctxTrain": 262144,
+   "layers": 30,
+   "nEmbd": 2816,
+   "heads": 16,
+   "headsKv": 8,
+   "keyLength": 512,
+   "valueLength": 512,
+   "nVocab": 262144,
+   "slidingWindow": 1024
+  },
+  {
+   "id": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+   "name": "Meta Llama 3.1 8B Instruct",
+   "fileBytes": 4920739232,
+   "paramCount": 8030261312,
+   "quant": "Q4_K_M",
+   "arch": "llama",
+   "ctxTrain": 131072,
+   "layers": 32,
+   "nEmbd": 4096,
+   "heads": 32,
+   "headsKv": 8,
+   "keyLength": null,
+   "valueLength": null,
+   "nVocab": 128256,
+   "slidingWindow": null
+  }
+ ],
+ "request": {
+  "workload": "max_quality",
+  "modelIds": [
+   "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf",
+   "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+   "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+  ],
+  "runQuality": true,
+  "heavyMode": true,
+  "ladder": [
+   2048,
+   4096,
+   8192,
+   16384
+  ]
+ },
+ "recommendation": null,
+ "db": {
+  "sessions": [
+   {
+    "id": "s1",
+    "workload": "max_quality",
+    "request": {
+     "workload": "max_quality",
+     "modelIds": [
+      "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf",
+      "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+      "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+     ],
+     "runQuality": true,
+     "heavyMode": true,
+     "ladder": [
+      2048,
+      4096,
+      8192,
+      16384
+     ]
+    },
+    "startedAt": 1790501598840,
+    "status": "cancelled"
+   }
+  ],
+  "runs": [
+   {
+    "sessionId": "s1",
+    "run": {
+     "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+     "ctx": 2048,
+     "promptTokens": 1168,
+     "status": "pass",
+     "failureKind": null,
+     "reason": null,
+     "loadTimeMs": {
+      "value": 2570.519,
+      "kind": "measured",
+      "source": "spawn → /health ok"
+     },
+     "ttftMs": {
+      "value": 395.4468999999999,
+      "kind": "measured",
+      "source": "client wall clock, request → first token"
+     },
+     "prefillTps": {
+      "value": 2983.197329425344,
+      "kind": "measured",
+      "source": "llama-server timings"
+     },
+     "decodeTps": {
+      "value": 110.1399446220313,
+      "kind": "measured",
+      "source": "llama-server timings"
+     },
+     "totalMs": {
+      "value": 1548.6723499999998,
+      "kind": "measured",
+      "source": "client wall clock"
+     },
+     "peakVramBytes": {
+      "value": 5129904128,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "peakSharedGpuBytes": {
+      "value": 19845120,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "peakRamBytes": {
+      "value": 138883072,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "avgGpuUtil": {
+      "value": 51.76815525,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "avgCpuUtil": {
+      "value": 29.789074,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "warm": true,
+     "versions": {
+      "benchmark": "bench-1.0.0",
+      "prompts": "ladder-1",
+      "quality": "qb-1.1.0",
+      "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+     }
+    },
+    "detail": {
+     "samples": [
+      {
+       "ts": 1790501601667,
+       "cpuPct": 37.777886,
+       "ramAvailBytes": 16065232896,
+       "gpuUtilPct": 0,
+       "vramDedicatedBytes": 6120943616,
+       "vramSharedBytes": 855732224,
+       "procRamPrivateBytes": 113893376,
+       "procVramDedicatedBytes": 4702334976,
+       "procVramSharedBytes": 438272
+      },
+      {
+       "ts": 1790501602684,
+       "cpuPct": 31.902411,
+       "ramAvailBytes": 13775142912,
+       "gpuUtilPct": 18.967949,
+       "vramDedicatedBytes": 6538285056,
+       "vramSharedBytes": 875139072,
+       "procRamPrivateBytes": 136601600,
+       "procVramDedicatedBytes": 5127282688,
+       "procVramSharedBytes": 19845120
+      },
+      {
+       "ts": 1790501603691,
+       "cpuPct": 25.173784,
+       "ramAvailBytes": 13683916800,
+       "gpuUtilPct": 97.523005,
+       "vramDedicatedBytes": 6540644352,
+       "vramSharedBytes": 875139072,
+       "procRamPrivateBytes": 138883072,
+       "procVramDedicatedBytes": 5129904128,
+       "procVramSharedBytes": 19845120
+      },
+      {
+       "ts": 1790501604695,
+       "cpuPct": 24.302215,
+       "ramAvailBytes": 13666091008,
+       "gpuUtilPct": 90.581667,
+       "vramDedicatedBytes": 6532255744,
+       "vramSharedBytes": 875139072,
+       "procRamPrivateBytes": 137539584,
+       "procVramDedicatedBytes": 5129904128,
+       "procVramSharedBytes": 19845120
+      },
+      {
+       "ts": 1790501605004,
+       "cpuPct": 24.455288,
+       "ramAvailBytes": 13632536576,
+       "gpuUtilPct": 92.92941,
+       "vramDedicatedBytes": 6523867136,
+       "vramSharedBytes": 875139072,
+       "procRamPrivateBytes": 139182080,
+       "procVramDedicatedBytes": 5129904128,
+       "procVramSharedBytes": 19845120
+      }
+     ],
+     "reason": null,
+     "stderrTail": [],
+     "load": {
+      "loadTimeMs": 2570.519,
+      "declared": {
+       "layersOffloaded": 33,
+       "layersTotal": 33,
+       "modelBufferMiB": {
+        "CPU_Mapped": 281.81,
+        "Vulkan0": 4403.49
+       },
+       "kvBufferMiB": {
+        "Vulkan0": 256
+       },
+       "computeBufferMiB": {
+        "Vulkan0": 102.01,
+        "Vulkan_Host": 18.01
+       }
+      }
+     },
+     "startedAt": 1790501598843,
+     "endedAt": 1790501605002,
+     "sampleCount": 4
+    }
+   },
+   {
+    "sessionId": "s1",
+    "run": {
+     "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+     "ctx": 4096,
+     "promptTokens": 2297,
+     "status": "pass",
+     "failureKind": null,
+     "reason": null,
+     "loadTimeMs": {
+      "value": 2570.8437999999987,
+      "kind": "measured",
+      "source": "spawn → /health ok"
+     },
+     "ttftMs": {
+      "value": 760.266450000001,
+      "kind": "measured",
+      "source": "client wall clock, request → first token"
+     },
+     "prefillTps": {
+      "value": 3050.6445542219362,
+      "kind": "measured",
+      "source": "llama-server timings"
+     },
+     "decodeTps": {
+      "value": 106.92575449106411,
+      "kind": "measured",
+      "source": "llama-server timings"
+     },
+     "totalMs": {
+      "value": 1948.201250000001,
+      "kind": "measured",
+      "source": "client wall clock"
+     },
+     "peakVramBytes": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples in the window (run too short or sampler failed)"
+     },
+     "peakSharedGpuBytes": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples in the window (run too short or sampler failed)"
+     },
+     "peakRamBytes": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples in the window (run too short or sampler failed)"
+     },
+     "avgGpuUtil": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples in the window (run too short or sampler failed)"
+     },
+     "avgCpuUtil": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples in the window (run too short or sampler failed)"
+     },
+     "warm": true,
+     "versions": {
+      "benchmark": "bench-1.0.0",
+      "prompts": "ladder-1",
+      "quality": "qb-1.1.0",
+      "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+     }
+    },
+    "detail": {
+     "samples": [],
+     "reason": null,
+     "stderrTail": [],
+     "load": {
+      "loadTimeMs": 2570.8437999999987,
+      "declared": {
+       "layersOffloaded": 33,
+       "layersTotal": 33,
+       "modelBufferMiB": {
+        "CPU_Mapped": 281.81,
+        "Vulkan0": 4403.49
+       },
+       "kvBufferMiB": {
+        "Vulkan0": 512
+       },
+       "computeBufferMiB": {
+        "Vulkan0": 104.01,
+        "Vulkan_Host": 20.01
+       }
+      }
+     },
+     "startedAt": 1790501605003,
+     "endedAt": 1790501613055,
+     "sampleCount": 0
+    }
+   },
+   {
+    "sessionId": "s1",
+    "run": {
+     "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+     "ctx": 8192,
+     "promptTokens": 4593,
+     "status": "pass",
+     "failureKind": null,
+     "reason": null,
+     "loadTimeMs": {
+      "value": 2684.113699999998,
+      "kind": "measured",
+      "source": "spawn → /health ok"
+     },
+     "ttftMs": {
+      "value": 1633.110999999999,
+      "kind": "measured",
+      "source": "client wall clock, request → first token"
+     },
+     "prefillTps": {
+      "value": 2825.606354577986,
+      "kind": "measured",
+      "source": "llama-server timings"
+     },
+     "decodeTps": {
+      "value": 101.87500100062627,
+      "kind": "measured",
+      "source": "llama-server timings"
+     },
+     "totalMs": {
+      "value": 2879.9642999999996,
+      "kind": "measured",
+      "source": "client wall clock"
+     },
+     "peakVramBytes": {
+      "value": 5943361536,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "peakSharedGpuBytes": {
+      "value": 26136576,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "peakRamBytes": {
+      "value": 146817024,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "avgGpuUtil": {
+      "value": 70.826847125,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "avgCpuUtil": {
+      "value": 29.671644000000004,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "warm": true,
+     "versions": {
+      "benchmark": "bench-1.0.0",
+      "prompts": "ladder-1",
+      "quality": "qb-1.1.0",
+      "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+     }
+    },
+    "detail": {
+     "samples": [
+      {
+       "ts": 1790501616607,
+       "cpuPct": 37.01285,
+       "ramAvailBytes": 17020485632,
+       "gpuUtilPct": 0,
+       "vramDedicatedBytes": 6108880896,
+       "vramSharedBytes": 856780800,
+       "procRamPrivateBytes": 113840128,
+       "procVramDedicatedBytes": 4702334976,
+       "procVramSharedBytes": 438272
+      },
+      {
+       "ts": 1790501617612,
+       "cpuPct": 36.972028,
+       "ramAvailBytes": 14701035520,
+       "gpuUtilPct": 9.566132,
+       "vramDedicatedBytes": 7343357952,
+       "vramSharedBytes": 882479104,
+       "procRamPrivateBytes": 143097856,
+       "procVramDedicatedBytes": 5940477952,
+       "procVramSharedBytes": 26136576
+      },
+      {
+       "ts": 1790501618619,
+       "cpuPct": 34.475791,
+       "ramAvailBytes": 14720958464,
+       "gpuUtilPct": 91.908132,
+       "vramDedicatedBytes": 7347290112,
+       "vramSharedBytes": 882479104,
+       "procRamPrivateBytes": 144314368,
+       "procVramDedicatedBytes": 5940477952,
+       "procVramSharedBytes": 26136576
+      },
+      {
+       "ts": 1790501619624,
+       "cpuPct": 28.320654,
+       "ramAvailBytes": 14676918272,
+       "gpuUtilPct": 92.32868,
+       "vramDedicatedBytes": 7358033920,
+       "vramSharedBytes": 882479104,
+       "procRamPrivateBytes": 144896000,
+       "procVramDedicatedBytes": 5943099392,
+       "procVramSharedBytes": 26136576
+      },
+      {
+       "ts": 1790501620641,
+       "cpuPct": 22.007797,
+       "ramAvailBytes": 14595129344,
+       "gpuUtilPct": 97.492347,
+       "vramDedicatedBytes": 7349383168,
+       "vramSharedBytes": 882479104,
+       "procRamPrivateBytes": 145264640,
+       "procVramDedicatedBytes": 5943099392,
+       "procVramSharedBytes": 26136576
+      },
+      {
+       "ts": 1790501621645,
+       "cpuPct": 36.88272,
+       "ramAvailBytes": 14596177920,
+       "gpuUtilPct": 91.56773,
+       "vramDedicatedBytes": 7342837760,
+       "vramSharedBytes": 882479104,
+       "procRamPrivateBytes": 146817024,
+       "procVramDedicatedBytes": 5943361536,
+       "procVramSharedBytes": 26136576
+      },
+      {
+       "ts": 1790501622661,
+       "cpuPct": 20.574536,
+       "ramAvailBytes": 14606663680,
+       "gpuUtilPct": 90.610362,
+       "vramDedicatedBytes": 7342829568,
+       "vramSharedBytes": 882479104,
+       "procRamPrivateBytes": 145641472,
+       "procVramDedicatedBytes": 5943361536,
+       "procVramSharedBytes": 26136576
+      },
+      {
+       "ts": 1790501623666,
+       "cpuPct": 21.126776,
+       "ramAvailBytes": 14567866368,
+       "gpuUtilPct": 93.141394,
+       "vramDedicatedBytes": 7342305280,
+       "vramSharedBytes": 882479104,
+       "procRamPrivateBytes": 145653760,
+       "procVramDedicatedBytes": 5943361536,
+       "procVramSharedBytes": 26136576
+      },
+      {
+       "ts": 1790501623945,
+       "cpuPct": 19.89873,
+       "ramAvailBytes": 14616100864,
+       "gpuUtilPct": 92.264178,
+       "vramDedicatedBytes": 7346237440,
+       "vramSharedBytes": 882479104,
+       "procRamPrivateBytes": 147202048,
+       "procVramDedicatedBytes": 5943361536,
+       "procVramSharedBytes": 26136576
+      }
+     ],
+     "reason": null,
+     "stderrTail": [],
+     "load": {
+      "loadTimeMs": 2684.113699999998,
+      "declared": {
+       "layersOffloaded": 33,
+       "layersTotal": 33,
+       "modelBufferMiB": {
+        "CPU_Mapped": 281.81,
+        "Vulkan0": 4403.49
+       },
+       "kvBufferMiB": {
+        "Vulkan0": 1024
+       },
+       "computeBufferMiB": {
+        "Vulkan0": 108.01,
+        "Vulkan_Host": 24.01
+       }
+      }
+     },
+     "startedAt": 1790501613055,
+     "endedAt": 1790501623944,
+     "sampleCount": 8
+    }
+   },
+   {
+    "sessionId": "s1",
+    "run": {
+     "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+     "ctx": 16384,
+     "promptTokens": 9153,
+     "status": "pass",
+     "failureKind": null,
+     "reason": null,
+     "loadTimeMs": {
+      "value": 2789.6075999999994,
+      "kind": "measured",
+      "source": "spawn → /health ok"
+     },
+     "ttftMs": {
+      "value": 3511.4141999999993,
+      "kind": "measured",
+      "source": "client wall clock, request → first token"
+     },
+     "prefillTps": {
+      "value": 2610.6500120128962,
+      "kind": "measured",
+      "source": "llama-server timings"
+     },
+     "decodeTps": {
+      "value": 92.91252271793704,
+      "kind": "measured",
+      "source": "llama-server timings"
+     },
+     "totalMs": {
+      "value": 4878.729800000001,
+      "kind": "measured",
+      "source": "client wall clock"
+     },
+     "peakVramBytes": {
+      "value": 7028154368,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "peakSharedGpuBytes": {
+      "value": 34525184,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "peakRamBytes": {
+      "value": 157634560,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "avgGpuUtil": {
+      "value": 86.1668606153846,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "avgCpuUtil": {
+      "value": 21.953390846153845,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "warm": true,
+     "versions": {
+      "benchmark": "bench-1.0.0",
+      "prompts": "ladder-1",
+      "quality": "qb-1.1.0",
+      "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+     }
+    },
+    "detail": {
+     "samples": [
+      {
+       "ts": 1790501627512,
+       "cpuPct": 26.091869,
+       "ramAvailBytes": 16866344960,
+       "gpuUtilPct": 0,
+       "vramDedicatedBytes": 6117539840,
+       "vramSharedBytes": 856780800,
+       "procRamPrivateBytes": 114122752,
+       "procVramDedicatedBytes": 4702334976,
+       "procVramSharedBytes": 438272
+      },
+      {
+       "ts": 1790501628516,
+       "cpuPct": 27.641119,
+       "ramAvailBytes": 14597226496,
+       "gpuUtilPct": 2.017052,
+       "vramDedicatedBytes": 8396718080,
+       "vramSharedBytes": 890867712,
+       "procRamPrivateBytes": 141737984,
+       "procVramDedicatedBytes": 6981517312,
+       "procVramSharedBytes": 34525184
+      },
+      {
+       "ts": 1790501629529,
+       "cpuPct": 27.732583,
+       "ramAvailBytes": 14566817792,
+       "gpuUtilPct": 87.567832,
+       "vramDedicatedBytes": 8445190144,
+       "vramSharedBytes": 890867712,
+       "procRamPrivateBytes": 152788992,
+       "procVramDedicatedBytes": 7025270784,
+       "procVramSharedBytes": 34525184
+      },
+      {
+       "ts": 1790501630542,
+       "cpuPct": 21.931248,
+       "ramAvailBytes": 14588837888,
+       "gpuUtilPct": 92.542093,
+       "vramDedicatedBytes": 8436932608,
+       "vramSharedBytes": 890867712,
+       "procRamPrivateBytes": 153059328,
+       "procVramDedicatedBytes": 7025270784,
+       "procVramSharedBytes": 34525184
+      },
+      {
+       "ts": 1790501631559,
+       "cpuPct": 22.940436,
+       "ramAvailBytes": 14600372224,
+       "gpuUtilPct": 92.609717,
+       "vramDedicatedBytes": 8432734208,
+       "vramSharedBytes": 890867712,
+       "procRamPrivateBytes": 153370624,
+       "procVramDedicatedBytes": 7025270784,
+       "procVramSharedBytes": 34525184
+      },
+      {
+       "ts": 1790501632568,
+       "cpuPct": 15.913163,
+       "ramAvailBytes": 14615052288,
+       "gpuUtilPct": 90.535656,
+       "vramDedicatedBytes": 8431423488,
+       "vramSharedBytes": 890867712,
+       "procRamPrivateBytes": 155123712,
+       "procVramDedicatedBytes": 7028154368,
+       "procVramSharedBytes": 34525184
+      },
+      {
+       "ts": 1790501633584,
+       "cpuPct": 20.3702,
+       "ramAvailBytes": 14614003712,
+       "gpuUtilPct": 95.771621,
+       "vramDedicatedBytes": 8423034880,
+       "vramSharedBytes": 890867712,
+       "procRamPrivateBytes": 155160576,
+       "procVramDedicatedBytes": 7028154368,
+       "procVramSharedBytes": 34525184
+      },
+      {
+       "ts": 1790501634601,
+       "cpuPct": 20.202826,
+       "ramAvailBytes": 14625538048,
+       "gpuUtilPct": 99.389525,
+       "vramDedicatedBytes": 8423559168,
+       "vramSharedBytes": 890867712,
+       "procRamPrivateBytes": 155172864,
+       "procVramDedicatedBytes": 7028154368,
+       "procVramSharedBytes": 34525184
+      },
+      {
+       "ts": 1790501635606,
+       "cpuPct": 18.412273,
+       "ramAvailBytes": 14622392320,
+       "gpuUtilPct": 95.172513,
+       "vramDedicatedBytes": 8427753472,
+       "vramSharedBytes": 890867712,
+       "procRamPrivateBytes": 155127808,
+       "procVramDedicatedBytes": 7028154368,
+       "procVramSharedBytes": 34525184
+      },
+      {
+       "ts": 1790501636610,
+       "cpuPct": 26.207608,
+       "ramAvailBytes": 14611906560,
+       "gpuUtilPct": 92.767228,
+       "vramDedicatedBytes": 8431554560,
+       "vramSharedBytes": 890867712,
+       "procRamPrivateBytes": 156676096,
+       "procVramDedicatedBytes": 7028154368,
+       "procVramSharedBytes": 34525184
+      },
+      {
+       "ts": 1790501637618,
+       "cpuPct": 22.385508,
+       "ramAvailBytes": 14610857984,
+       "gpuUtilPct": 90.309235,
+       "vramDedicatedBytes": 8431554560,
+       "vramSharedBytes": 890867712,
+       "procRamPrivateBytes": 156098560,
+       "procVramDedicatedBytes": 7028154368,
+       "procVramSharedBytes": 34525184
+      },
+      {
+       "ts": 1790501638634,
+       "cpuPct": 15.858528,
+       "ramAvailBytes": 14632878080,
+       "gpuUtilPct": 93.289957,
+       "vramDedicatedBytes": 8423165952,
+       "vramSharedBytes": 890867712,
+       "procRamPrivateBytes": 156086272,
+       "procVramDedicatedBytes": 7028154368,
+       "procVramSharedBytes": 34525184
+      },
+      {
+       "ts": 1790501639643,
+       "cpuPct": 22.537706,
+       "ramAvailBytes": 14640218112,
+       "gpuUtilPct": 94.691979,
+       "vramDedicatedBytes": 8423165952,
+       "vramSharedBytes": 890867712,
+       "procRamPrivateBytes": 156078080,
+       "procVramDedicatedBytes": 7028154368,
+       "procVramSharedBytes": 34525184
+      },
+      {
+       "ts": 1790501640647,
+       "cpuPct": 23.260883,
+       "ramAvailBytes": 14642315264,
+       "gpuUtilPct": 93.50478,
+       "vramDedicatedBytes": 8431554560,
+       "vramSharedBytes": 890867712,
+       "procRamPrivateBytes": 157634560,
+       "procVramDedicatedBytes": 7028154368,
+       "procVramSharedBytes": 34525184
+      },
+      {
+       "ts": 1790501640918,
+       "cpuPct": 17.299068,
+       "ramAvailBytes": 14647558144,
+       "gpuUtilPct": 92.24125,
+       "vramDedicatedBytes": 8431554560,
+       "vramSharedBytes": 890867712,
+       "procRamPrivateBytes": 157634560,
+       "procVramDedicatedBytes": 7028154368,
+       "procVramSharedBytes": 34525184
+      }
+     ],
+     "reason": null,
+     "stderrTail": [],
+     "load": {
+      "loadTimeMs": 2789.6075999999994,
+      "declared": {
+       "layersOffloaded": 33,
+       "layersTotal": 33,
+       "modelBufferMiB": {
+        "CPU_Mapped": 281.81,
+        "Vulkan0": 4403.49
+       },
+       "kvBufferMiB": {
+        "Vulkan0": 2048
+       },
+       "computeBufferMiB": {
+        "Vulkan0": 116.01,
+        "Vulkan_Host": 32.01
+       }
+      }
+     },
+     "startedAt": 1790501623944,
+     "endedAt": 1790501640917,
+     "sampleCount": 14
+    }
+   },
+   {
+    "sessionId": "s1",
+    "run": {
+     "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=62|kv=f16|t=8|nkvo",
+     "ctx": 2048,
+     "promptTokens": null,
+     "status": "cancelled",
+     "failureKind": null,
+     "reason": "cancelled by user",
+     "loadTimeMs": {
+      "value": 10866.793000000005,
+      "kind": "measured",
+      "source": "spawn → /health ok"
+     },
+     "ttftMs": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no successful request"
+     },
+     "prefillTps": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no timings"
+     },
+     "decodeTps": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no timings"
+     },
+     "totalMs": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no successful request"
+     },
+     "peakVramBytes": {
+      "value": 13954760704,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "peakSharedGpuBytes": {
+      "value": 896012288,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "peakRamBytes": {
+      "value": 1504739328,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "avgGpuUtil": {
+      "value": 37.90033975,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "avgCpuUtil": {
+      "value": 64.67537025,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "warm": true,
+     "versions": {
+      "benchmark": "bench-1.0.0",
+      "prompts": "ladder-1",
+      "quality": "qb-1.1.0",
+      "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+     }
+    },
+    "detail": {
+     "samples": [
+      {
+       "ts": 1790501644632,
+       "cpuPct": 31.761186,
+       "ramAvailBytes": 8372879360,
+       "gpuUtilPct": 0,
+       "vramDedicatedBytes": 1461653504,
+       "vramSharedBytes": 856780800,
+       "procRamPrivateBytes": 137551872,
+       "procVramDedicatedBytes": 75354112,
+       "procVramSharedBytes": 438272
+      },
+      {
+       "ts": 1790501645650,
+       "cpuPct": 35.137244,
+       "ramAvailBytes": 19145949184,
+       "gpuUtilPct": 0,
+       "vramDedicatedBytes": 1466040320,
+       "vramSharedBytes": 856780800,
+       "procRamPrivateBytes": 137555968,
+       "procVramDedicatedBytes": 75354112,
+       "procVramSharedBytes": 438272
+      },
+      {
+       "ts": 1790501646668,
+       "cpuPct": 42.712555,
+       "ramAvailBytes": 19203620864,
+       "gpuUtilPct": 0,
+       "vramDedicatedBytes": 11983056896,
+       "vramSharedBytes": 856780800,
+       "procRamPrivateBytes": 137572352,
+       "procVramDedicatedBytes": 10600755200,
+       "procVramSharedBytes": 438272
+      },
+      {
+       "ts": 1790501647683,
+       "cpuPct": 33.041189,
+       "ramAvailBytes": 17634951168,
+       "gpuUtilPct": 0,
+       "vramDedicatedBytes": 15165874176,
+       "vramSharedBytes": 1717661696,
+       "procRamPrivateBytes": 998469632,
+       "procVramDedicatedBytes": 13760499712,
+       "procVramSharedBytes": 861319168
+      },
+      {
+       "ts": 1790501648689,
+       "cpuPct": 28.54765,
+       "ramAvailBytes": 14178844672,
+       "gpuUtilPct": 0,
+       "vramDedicatedBytes": 15158525952,
+       "vramSharedBytes": 1717661696,
+       "procRamPrivateBytes": 998543360,
+       "procVramDedicatedBytes": 13760499712,
+       "procVramSharedBytes": 861319168
+      },
+      {
+       "ts": 1790501649693,
+       "cpuPct": 33.070093,
+       "ramAvailBytes": 10870587392,
+       "gpuUtilPct": 0,
+       "vramDedicatedBytes": 15149613056,
+       "vramSharedBytes": 1717661696,
+       "procRamPrivateBytes": 998543360,
+       "procVramDedicatedBytes": 13760499712,
+       "procVramSharedBytes": 861319168
+      },
+      {
+       "ts": 1790501650696,
+       "cpuPct": 29.712119,
+       "ramAvailBytes": 7445938176,
+       "gpuUtilPct": 0,
+       "vramDedicatedBytes": 15161802752,
+       "vramSharedBytes": 1717661696,
+       "procRamPrivateBytes": 998543360,
+       "procVramDedicatedBytes": 13760499712,
+       "procVramSharedBytes": 861319168
+      },
+      {
+       "ts": 1790501651701,
+       "cpuPct": 37.952886,
+       "ramAvailBytes": 5363466240,
+       "gpuUtilPct": 0,
+       "vramDedicatedBytes": 15166787584,
+       "vramSharedBytes": 1717661696,
+       "procRamPrivateBytes": 998543360,
+       "procVramDedicatedBytes": 13760499712,
+       "procVramSharedBytes": 861319168
+      },
+      {
+       "ts": 1790501652707,
+       "cpuPct": 32.17661,
+       "ramAvailBytes": 4000317440,
+       "gpuUtilPct": 0,
+       "vramDedicatedBytes": 15146602496,
+       "vramSharedBytes": 1717661696,
+       "procRamPrivateBytes": 998543360,
+       "procVramDedicatedBytes": 13760499712,
+       "procVramSharedBytes": 861319168
+      },
+      {
+       "ts": 1790501653722,
+       "cpuPct": 68.485689,
+       "ramAvailBytes": 2626682880,
+       "gpuUtilPct": 12.102337,
+       "vramDedicatedBytes": 15329329152,
+       "vramSharedBytes": 1752354816,
+       "procRamPrivateBytes": 1347063808,
+       "procVramDedicatedBytes": 13946896384,
+       "procVramSharedBytes": 896012288
+      },
+      {
+       "ts": 1790501654729,
+       "cpuPct": 80.95362,
+       "ramAvailBytes": 2753560576,
+       "gpuUtilPct": 79.108502,
+       "vramDedicatedBytes": 15340863488,
+       "vramSharedBytes": 1752354816,
+       "procRamPrivateBytes": 1347334144,
+       "procVramDedicatedBytes": 13954498560,
+       "procVramSharedBytes": 896012288
+      },
+      {
+       "ts": 1790501655734,
+       "cpuPct": 77.085562,
+       "ramAvailBytes": 2610954240,
+       "gpuUtilPct": 60.39052,
+       "vramDedicatedBytes": 15340859392,
+       "vramSharedBytes": 1752354816,
+       "procRamPrivateBytes": 1504739328,
+       "procVramDedicatedBytes": 13954760704,
+       "procVramSharedBytes": 896012288
+      },
+      {
+       "ts": 1790501656670,
+       "cpuPct": 60.832101,
+       "ramAvailBytes": 2458910720,
+       "gpuUtilPct": 74.506065,
+       "vramDedicatedBytes": 15366549504,
+       "vramSharedBytes": 1752354816,
+       "procRamPrivateBytes": 1666600960,
+       "procVramDedicatedBytes": 13955809280,
+       "procVramSharedBytes": 896012288
+      }
+     ],
+     "reason": "cancelled by user",
+     "stderrTail": [],
+     "load": {
+      "loadTimeMs": 10866.793000000005,
+      "declared": {
+       "layersOffloaded": 62,
+       "layersTotal": 66,
+       "modelBufferMiB": {
+        "CPU_Mapped": 1513.65,
+        "Vulkan0": 13842.83
+       },
+       "kvBufferMiB": {
+        "CPU": 128
+       },
+       "computeBufferMiB": {
+        "Vulkan0": 159.26,
+        "Vulkan_Host": 32.13
+       }
+      }
+     },
+     "startedAt": 1790501641765,
+     "endedAt": 1790501656668,
+     "sampleCount": 12
+    }
+   }
+  ],
+  "quality": [],
+  "recommendations": []
+ },
+ "transcripts": [],
+ "events": [
+  {
+   "sessionId": "s1",
+   "type": "log",
+   "level": "info",
+   "msg": "rejected D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=all|kv=f16|t=8: est. VRAM 16.0 GiB > budget 14.9 GiB at 2K"
+  },
+  {
+   "sessionId": "s1",
+   "type": "log",
+   "level": "info",
+   "msg": "rejected D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=0|kv=f16|t=8: skipped_memory: est. RAM 17.8 GiB > available − reserve 13.6 GiB at 2K"
+  },
+  {
+   "sessionId": "s1",
+   "type": "log",
+   "level": "info",
+   "msg": "rejected D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=all|kv=f16|t=8: est. VRAM 16.8 GiB > budget 14.9 GiB at 2K"
+  },
+  {
+   "sessionId": "s1",
+   "type": "log",
+   "level": "info",
+   "msg": "rejected D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=0|kv=f16|t=8: CPU baseline skipped: model is >50% of system RAM"
+  },
+  {
+   "sessionId": "s1",
+   "type": "session:started",
+   "workload": "max_quality",
+   "modelIds": [
+    "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf",
+    "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+    "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+   ],
+   "resumed": false,
+   "candidates": 7
+  },
+  {
+   "sessionId": "s1",
+   "type": "candidate:started",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "model": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+   "gpuLayers": 32,
+   "ctxSteps": [
+    2048,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536
+   ]
+  },
+  {
+   "sessionId": "s1",
+   "type": "log",
+   "level": "info",
+   "msg": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8 @131072: skipped (est. VRAM 20.8 GiB > budget 14.9 GiB)"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "phase": "ladder"
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:started",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "phase": "load"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "phase": "warmup"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "phase": "measure"
+  },
+  {
+   "sessionId": "s1",
+   "type": "token-rate",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "prefillTps": 2988.572802964009,
+   "decodeTps": 110.12566465607841,
+   "ttftMs": 396.28979999999956
+  },
+  {
+   "sessionId": "s1",
+   "type": "token-rate",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "prefillTps": 2977.8218558866793,
+   "decodeTps": 110.15422458798416,
+   "ttftMs": 394.60400000000027
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:done",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "result": {
+    "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+    "ctx": 2048,
+    "promptTokens": 1168,
+    "status": "pass",
+    "failureKind": null,
+    "reason": null,
+    "loadTimeMs": {
+     "value": 2570.519,
+     "kind": "measured",
+     "source": "spawn → /health ok"
+    },
+    "ttftMs": {
+     "value": 395.4468999999999,
+     "kind": "measured",
+     "source": "client wall clock, request → first token"
+    },
+    "prefillTps": {
+     "value": 2983.197329425344,
+     "kind": "measured",
+     "source": "llama-server timings"
+    },
+    "decodeTps": {
+     "value": 110.1399446220313,
+     "kind": "measured",
+     "source": "llama-server timings"
+    },
+    "totalMs": {
+     "value": 1548.6723499999998,
+     "kind": "measured",
+     "source": "client wall clock"
+    },
+    "peakVramBytes": {
+     "value": 5129904128,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "peakSharedGpuBytes": {
+     "value": 19845120,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "peakRamBytes": {
+     "value": 138883072,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "avgGpuUtil": {
+     "value": 51.76815525,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "avgCpuUtil": {
+     "value": 29.789074,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "warm": true,
+    "versions": {
+     "benchmark": "bench-1.0.0",
+     "prompts": "ladder-1",
+     "quality": "qb-1.1.0",
+     "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+    }
+   },
+   "verdict": "pass"
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:started",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 4096
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 4096,
+   "phase": "load"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 4096,
+   "phase": "warmup"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 4096,
+   "phase": "measure"
+  },
+  {
+   "sessionId": "s1",
+   "type": "token-rate",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 4096,
+   "prefillTps": 3048.513434959296,
+   "decodeTps": 106.80723732568133,
+   "ttftMs": 765.6238000000012
+  },
+  {
+   "sessionId": "s1",
+   "type": "token-rate",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 4096,
+   "prefillTps": 3052.7756734845766,
+   "decodeTps": 107.0442716564469,
+   "ttftMs": 754.9091000000008
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:done",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 4096,
+   "result": {
+    "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+    "ctx": 4096,
+    "promptTokens": 2297,
+    "status": "pass",
+    "failureKind": null,
+    "reason": null,
+    "loadTimeMs": {
+     "value": 2570.8437999999987,
+     "kind": "measured",
+     "source": "spawn → /health ok"
+    },
+    "ttftMs": {
+     "value": 760.266450000001,
+     "kind": "measured",
+     "source": "client wall clock, request → first token"
+    },
+    "prefillTps": {
+     "value": 3050.6445542219362,
+     "kind": "measured",
+     "source": "llama-server timings"
+    },
+    "decodeTps": {
+     "value": 106.92575449106411,
+     "kind": "measured",
+     "source": "llama-server timings"
+    },
+    "totalMs": {
+     "value": 1948.201250000001,
+     "kind": "measured",
+     "source": "client wall clock"
+    },
+    "peakVramBytes": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples in the window (run too short or sampler failed)"
+    },
+    "peakSharedGpuBytes": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples in the window (run too short or sampler failed)"
+    },
+    "peakRamBytes": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples in the window (run too short or sampler failed)"
+    },
+    "avgGpuUtil": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples in the window (run too short or sampler failed)"
+    },
+    "avgCpuUtil": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples in the window (run too short or sampler failed)"
+    },
+    "warm": true,
+    "versions": {
+     "benchmark": "bench-1.0.0",
+     "prompts": "ladder-1",
+     "quality": "qb-1.1.0",
+     "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+    }
+   },
+   "verdict": "pass"
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:started",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 8192
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 8192,
+   "phase": "load"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 8192,
+   "phase": "warmup"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 8192,
+   "phase": "measure"
+  },
+  {
+   "sessionId": "s1",
+   "type": "token-rate",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 8192,
+   "prefillTps": 2832.67948783576,
+   "decodeTps": 101.77317723838883,
+   "ttftMs": 1633.1205999999984
+  },
+  {
+   "sessionId": "s1",
+   "type": "token-rate",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 8192,
+   "prefillTps": 2818.5332213202123,
+   "decodeTps": 101.97682476286373,
+   "ttftMs": 1633.1013999999996
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:done",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 8192,
+   "result": {
+    "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+    "ctx": 8192,
+    "promptTokens": 4593,
+    "status": "pass",
+    "failureKind": null,
+    "reason": null,
+    "loadTimeMs": {
+     "value": 2684.113699999998,
+     "kind": "measured",
+     "source": "spawn → /health ok"
+    },
+    "ttftMs": {
+     "value": 1633.110999999999,
+     "kind": "measured",
+     "source": "client wall clock, request → first token"
+    },
+    "prefillTps": {
+     "value": 2825.606354577986,
+     "kind": "measured",
+     "source": "llama-server timings"
+    },
+    "decodeTps": {
+     "value": 101.87500100062627,
+     "kind": "measured",
+     "source": "llama-server timings"
+    },
+    "totalMs": {
+     "value": 2879.9642999999996,
+     "kind": "measured",
+     "source": "client wall clock"
+    },
+    "peakVramBytes": {
+     "value": 5943361536,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "peakSharedGpuBytes": {
+     "value": 26136576,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "peakRamBytes": {
+     "value": 146817024,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "avgGpuUtil": {
+     "value": 70.826847125,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "avgCpuUtil": {
+     "value": 29.671644000000004,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "warm": true,
+    "versions": {
+     "benchmark": "bench-1.0.0",
+     "prompts": "ladder-1",
+     "quality": "qb-1.1.0",
+     "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+    }
+   },
+   "verdict": "pass"
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:started",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 16384
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 16384,
+   "phase": "load"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 16384,
+   "phase": "warmup"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 16384,
+   "phase": "measure"
+  },
+  {
+   "sessionId": "s1",
+   "type": "token-rate",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 16384,
+   "prefillTps": 2631.2876865912995,
+   "decodeTps": 92.86252763025797,
+   "ttftMs": 3483.508099999999
+  },
+  {
+   "sessionId": "s1",
+   "type": "token-rate",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 16384,
+   "prefillTps": 2590.012337434493,
+   "decodeTps": 92.9625178056161,
+   "ttftMs": 3539.3202999999994
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:done",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 16384,
+   "result": {
+    "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+    "ctx": 16384,
+    "promptTokens": 9153,
+    "status": "pass",
+    "failureKind": null,
+    "reason": null,
+    "loadTimeMs": {
+     "value": 2789.6075999999994,
+     "kind": "measured",
+     "source": "spawn → /health ok"
+    },
+    "ttftMs": {
+     "value": 3511.4141999999993,
+     "kind": "measured",
+     "source": "client wall clock, request → first token"
+    },
+    "prefillTps": {
+     "value": 2610.6500120128962,
+     "kind": "measured",
+     "source": "llama-server timings"
+    },
+    "decodeTps": {
+     "value": 92.91252271793704,
+     "kind": "measured",
+     "source": "llama-server timings"
+    },
+    "totalMs": {
+     "value": 4878.729800000001,
+     "kind": "measured",
+     "source": "client wall clock"
+    },
+    "peakVramBytes": {
+     "value": 7028154368,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "peakSharedGpuBytes": {
+     "value": 34525184,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "peakRamBytes": {
+     "value": 157634560,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "avgGpuUtil": {
+     "value": 86.1668606153846,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "avgCpuUtil": {
+     "value": 21.953390846153845,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "warm": true,
+    "versions": {
+     "benchmark": "bench-1.0.0",
+     "prompts": "ladder-1",
+     "quality": "qb-1.1.0",
+     "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+    }
+   },
+   "verdict": "pass"
+  },
+  {
+   "sessionId": "s1",
+   "type": "candidate:done",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "status": "done",
+   "reason": null
+  },
+  {
+   "sessionId": "s1",
+   "type": "candidate:started",
+   "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=62|kv=f16|t=8|nkvo",
+   "model": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf",
+   "gpuLayers": 62,
+   "ctxSteps": [
+    2048,
+    4096,
+    8192,
+    16384,
+    32768
+   ]
+  },
+  {
+   "sessionId": "s1",
+   "type": "log",
+   "level": "info",
+   "msg": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=62|kv=f16|t=8|nkvo @65536: skipped (skipped_memory: est. RAM 17.5 GiB > available − reserve 13.6 GiB)"
+  },
+  {
+   "sessionId": "s1",
+   "type": "log",
+   "level": "info",
+   "msg": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=62|kv=f16|t=8|nkvo @131072: skipped (skipped_memory: est. RAM 33.7 GiB > available − reserve 13.6 GiB)"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=62|kv=f16|t=8|nkvo",
+   "ctx": 2048,
+   "phase": "ladder"
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:started",
+   "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=62|kv=f16|t=8|nkvo",
+   "ctx": 2048
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=62|kv=f16|t=8|nkvo",
+   "ctx": 2048,
+   "phase": "load"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=62|kv=f16|t=8|nkvo",
+   "ctx": 2048,
+   "phase": "warmup"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=62|kv=f16|t=8|nkvo",
+   "ctx": 2048,
+   "phase": "measure"
+  },
+  {
+   "sessionId": "s1",
+   "type": "log",
+   "level": "error",
+   "msg": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=62|kv=f16|t=8|nkvo @2048: cancelled by user"
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:done",
+   "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=62|kv=f16|t=8|nkvo",
+   "ctx": 2048,
+   "result": {
+    "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=62|kv=f16|t=8|nkvo",
+    "ctx": 2048,
+    "promptTokens": null,
+    "status": "cancelled",
+    "failureKind": null,
+    "reason": "cancelled by user",
+    "loadTimeMs": {
+     "value": 10866.793000000005,
+     "kind": "measured",
+     "source": "spawn → /health ok"
+    },
+    "ttftMs": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no successful request"
+    },
+    "prefillTps": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no timings"
+    },
+    "decodeTps": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no timings"
+    },
+    "totalMs": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no successful request"
+    },
+    "peakVramBytes": {
+     "value": 13954760704,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "peakSharedGpuBytes": {
+     "value": 896012288,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "peakRamBytes": {
+     "value": 1504739328,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "avgGpuUtil": {
+     "value": 37.90033975,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "avgCpuUtil": {
+     "value": 64.67537025,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "warm": true,
+    "versions": {
+     "benchmark": "bench-1.0.0",
+     "prompts": "ladder-1",
+     "quality": "qb-1.1.0",
+     "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+    }
+   },
+   "verdict": "fail"
+  },
+  {
+   "sessionId": "s1",
+   "type": "candidate:done",
+   "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=62|kv=f16|t=8|nkvo",
+   "status": "cancelled",
+   "reason": "stopped after cancelled at 2048"
+  },
+  {
+   "sessionId": "s1",
+   "type": "session:cancelled"
+  }
+ ],
+ "telemetryEvents": 38
+}

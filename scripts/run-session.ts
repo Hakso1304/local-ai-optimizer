@@ -1,5 +1,5 @@
 // Core session runner E2E on real hardware, independent of the Electron/IPC wiring.
-// Usage: npx tsx scripts/run-session.ts <A|B|C|H> [--heavy] [--workload coding] [--models a,b] [--ladder 2048,8192] [--no-quality]
+// Usage: npx tsx scripts/run-session.ts <A|B|C|H> [--heavy] [--workload coding] [--models a,b] [--ladder 2048,8192] [--no-quality] [--ram-abort-gib 3]
 //   A  coding workload, qwen2.5-1.5b + llama-3.1-8b, quality on, default ladder/reps
 //   B  same session, abort ~20 s into the 8B ladder (cancel path)
 //   C  RAM floor 64 GiB (guard path: every step skipped_memory, no load)
@@ -112,7 +112,27 @@ async function main(): Promise<void> {
     ...(flag('--ladder') ? { ladder: flag('--ladder')!.split(',').map(Number) } : {})
   }
   const pidFile = join(tmpdir(), `lao-session-${scenario}.pid`)
-  const rec = await runSession(req, {
+  const file = join('docs', `session-run-${scenario}${scenario === 'H' ? `-${req.workload}${req.heavyMode ? '-heavy' : ''}` : ''}-${new Date(t0).toISOString().replace(/[:.]/g, '-')}.json`)
+  let rec: Recommendation | null = null
+  let ramAbort: string | null = null
+  // File-backed: rewritten after every step/candidate/session event, so a killed job keeps what it measured.
+  const save = () => {
+    const unloadMs = abortAt !== null && cancelledAt !== null ? cancelledAt - abortAt : null
+    writeFileSync(file, JSON.stringify({
+      scenario, startedAt: new Date(t0).toISOString(), wallMs: Date.now() - t0, abortToCancelledMs: unloadMs, ramAbort,
+      runtime: det.version, device: dev, models, request: req, recommendation: rec, db, transcripts,
+      events: events.filter((e) => e.type !== 'telemetry'), telemetryEvents: events.filter((e) => e.type === 'telemetry').length
+    }, null, 1))
+  }
+  // Self-abort when system RAM runs low (heavy runs on a 31 GB box).
+  const ramAbortBytes = Number(flag('--ram-abort-gib') ?? 3) * GiB
+  const watchdog = setInterval(() => {
+    if (ctl.signal.aborted || freemem() >= ramAbortBytes) return
+    ramAbort = `system RAM available ${(freemem() / GiB).toFixed(1)} GiB < ${(ramAbortBytes / GiB).toFixed(1)} GiB at ${el().trim()}`
+    console.log(`${el()} >>> RAM WATCHDOG ABORT: ${ramAbort}`)
+    ctl.abort()
+  }, 500)
+  rec = await runSession(req, {
     backend: () => wrap(new LlamaCppBackend(vendor, { pidFile })),
     startSampler: (pid) => startSampler({ pid }),
     storage, machine, gpuDevice: dev?.id ?? null, backendKind: 'vulkan', runtimeVersion: det.version ?? null, models,
@@ -134,17 +154,12 @@ async function main(): Promise<void> {
       : e.type === 'session:done' ? `session:done best=${e.recommendation.best?.configId ?? 'none'}`
         : JSON.stringify(e).replace(/D:\\\\llm-models\\\\/g, '').slice(0, 300)
     console.log(`${el()} ${short}`)
+    if (e.type === 'step:done' || e.type === 'candidate:done' || e.type.startsWith('session:')) save()
   })
+  clearInterval(watchdog)
+  save()
   const unloadMs = abortAt !== null && cancelledAt !== null ? cancelledAt - abortAt : null
-  const left = servers()
-  const dump = {
-    scenario, startedAt: new Date(t0).toISOString(), wallMs: Date.now() - t0, abortToCancelledMs: unloadMs, leftoverLlamaServers: left,
-    runtime: det.version, device: dev, models, request: req, recommendation: rec, db, transcripts,
-    events: events.filter((e) => e.type !== 'telemetry'), telemetryEvents: events.filter((e) => e.type === 'telemetry').length
-  }
-  const file = join('docs', `session-run-${scenario}${scenario === 'H' ? `-${req.workload}${req.heavyMode ? '-heavy' : ''}` : ''}-${new Date(t0).toISOString().replace(/[:.]/g, '-')}.json`)
-  writeFileSync(file, JSON.stringify(dump, null, 1))
-  console.log(`${el()} wall ${(dump.wallMs / 1000).toFixed(0)} s; abort→cancelled ${unloadMs ?? 'n/a'} ms; leftover llama-server ${left}; wrote ${file}`)
+  console.log(`${el()} wall ${((Date.now() - t0) / 1000).toFixed(0)} s; abort→cancelled ${unloadMs ?? 'n/a'} ms; ram abort ${ramAbort ?? 'no'}; leftover llama-server ${servers()}; wrote ${file}`)
 }
 
 main().catch((e) => { console.error(e); process.exit(1) })
