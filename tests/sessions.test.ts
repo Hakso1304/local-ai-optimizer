@@ -101,6 +101,10 @@ describe('session storage', () => {
     // the superseded attempt stays in history, pointing at its replacement (W4f: a failed attempt still surfaces)
     expect(cand.history.map((r) => [r.rowId, r.status, r.supersededBy])).toEqual([[1, 'pass', null], [2, 'fail', 3], [3, 'pass', null]])
     expect(sessionInputs(db, Number(id))!.inputs[0]).toMatchObject({ history: expect.arrayContaining([expect.objectContaining({ rowId: 2, supersededBy: 3 })]) })
+    // engine inputs (interp-2): every attempt with string ids, and why the session stopped
+    const si = sessionInputs(db, Number(id))!
+    expect(si.allRuns.map((r) => [r.runId, r.status, r.supersededBy ?? null])).toEqual([['1', 'pass', null], ['2', 'fail', '3'], ['3', 'pass', null]])
+    expect(si.stopReason).toBeUndefined() // status still 'running'
     db.close()
   })
 

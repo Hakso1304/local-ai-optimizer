@@ -11,6 +11,7 @@ import type { TelemetrySample } from '../telemetry/sampler'
 import { insertTelemetrySamples } from './db'
 import { defaultTestSet, qualityScore } from '../quality'
 import { BASELINE_GEN, genConfigsFor, summarizeGen, type GenRow } from '../benchmark/gen'
+import type { StoredRun } from '../interpret/verdicts'
 import { detectCliffs } from '../scoring/cliff'
 import { recommend } from '../scoring/recommend'
 
@@ -146,11 +147,30 @@ export function getSession(db: DatabaseSync, id: number): SessionDetail | null {
 
 /** Scoring inputs of a stored session (latest row per step, quality per model) + the scan it was planned with,
  *  for re-scoring the same measurements under another workload. */
-export function sessionInputs(db: DatabaseSync, id: number): { inputs: CandidateInput[]; machine: SessionPayload['machine']; request: SessionRequest | null } | null {
+export function sessionInputs(db: DatabaseSync, id: number): {
+  inputs: CandidateInput[]; machine: SessionPayload['machine']; request: SessionRequest | null
+  /** Engine inputs (interp-2 InterpretData): every attempt, session planning values, why the session stopped. */
+  allRuns: StoredRun[]
+  planningSnapshot: { ramFloorBytes?: number; mmapCreditBytes?: number }
+  stopReason?: 'done' | 'cancelled' | 'paused' | 'interrupted' | 'user-cap'
+} | null {
   const d = getSession(db, id)
   const row = db.prepare('SELECT payload FROM benchmark_session WHERE id = ?').get(id) as { payload: string } | undefined
   if (!d || !row) return null
   const p = json<SessionPayload>(row.payload)
+  const history = d.candidates.flatMap((c) => c.history)
+  const allRuns: StoredRun[] = history.map(({ rowId, supersededBy, recordedAt: _r, samplerErrors: _s, startedAt, endedAt, ...run }) => ({
+    ...run, runId: String(rowId), ...(supersededBy !== null ? { supersededBy: String(supersededBy) } : {}),
+    ...(startedAt !== null ? { startedAt } : {}), ...(endedAt !== null ? { endedAt } : {})
+  }))
+  // Session-level planning values from the runs that recorded them (§12); absent = the engine's defaults.
+  const nums = (k: 'ramFloorBytes' | 'mmapCreditBytes') => history.map((r) => (r as unknown as Record<string, unknown>)[k]).filter((v): v is number => typeof v === 'number')
+  const floor = nums('ramFloorBytes'), mmap = nums('mmapCreditBytes')
+  const planningSnapshot = { ...(floor.length ? { ramFloorBytes: Math.max(...floor) } : {}), ...(mmap.length ? { mmapCreditBytes: Math.min(...mmap) } : {}) }
+  // A finished session whose ladder the user capped stopped by choice, not at a limit.
+  const st = d.session.status
+  const stopReason = st === 'done' ? (p.request?.ladder?.length ? 'user-cap' as const : 'done' as const)
+    : st === 'cancelled' || st === 'paused' || st === 'interrupted' ? st : undefined
   return {
     // Baseline rows feed `quality`; every gen config (baseline included) feeds genQuality, like the runner does.
     inputs: d.candidates.map((c) => ({
@@ -159,7 +179,8 @@ export function sessionInputs(db: DatabaseSync, id: number): { inputs: Candidate
       ...(c.genQuality?.length ? { genQuality: c.genQuality } : {})
     })),
     machine: p.machine,
-    request: p.request ?? null
+    request: p.request ?? null,
+    allRuns, planningSnapshot, ...(stopReason ? { stopReason } : {})
   }
 }
 
