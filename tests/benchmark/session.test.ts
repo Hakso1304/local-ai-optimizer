@@ -314,8 +314,7 @@ describe('runSession', () => {
     const kw = ref!.calls.templateOpts.map((o) => JSON.stringify((o as { templateKwargs?: unknown } | undefined)?.templateKwargs))
     const generationCount = N + N * 3 * 2
     expect(seen.filter((q) => q.prompt !== ladderPrompt(2048))).toHaveLength(generationCount)
-    expect(kw.length).toBeGreaterThanOrEqual(generationCount)
-    expect(kw.length).toBeLessThanOrEqual(generationCount + 5) // one first-item probe per requested kwarg
+    expect(kw).toHaveLength(generationCount + N + 2 * N * 3 * 2) // one template-only counterfactual per requested key and row
     for (const requested of ['{"enable_thinking":false}', '{"enable_thinking":true,"reasoning_effort":"low"}', '{"enable_thinking":true,"reasoning_effort":"medium"}']) {
       expect(kw.filter((x) => x === requested).length).toBeGreaterThanOrEqual(N)
     }
@@ -330,11 +329,10 @@ describe('runSession', () => {
     expect(rows.some((x) => x.appliedTemplateKwargs)).toBe(false)
     const quick = await run(() => ({}), { workload: 'coding', runQuality: true, ladder: [2048], qualityMode: 'quick' }, { models: [m] })
     expect(quick.backend.calls.prompts.filter((q) => q.prompt !== ladderPrompt(2048))).toHaveLength(17 * 3)
-    expect(quick.backend.calls.templates).toBeGreaterThanOrEqual(17 * 3)
-    expect(quick.backend.calls.templates).toBeLessThanOrEqual(17 * 3 + 5)
+    expect(quick.backend.calls.templates).toBe(17 * 3 + 17 + 2 * 17 * 2)
     const off = await run(() => ({}), { workload: 'coding', runQuality: true, ladder: [2048], genSearch: false }, { models: [m] })
     expect(off.backend.calls.prompts.filter((q) => q.prompt !== ladderPrompt(2048))).toHaveLength(N)
-    expect(off.backend.calls.templates).toBe(N)
+    expect(off.backend.calls.templates).toBe(2 * N)
   })
 
   it('data contract: template kwargs count as applied only when they change the render; failed requests are infra_error', async () => {
@@ -356,8 +354,9 @@ describe('runSession', () => {
 
   it('thinking models: quality templates use enable_thinking=false; others get no kwargs', async () => {
     const thinking = await run(() => ({}), { workload: 'fast_assistant', runQuality: true, ladder: [2048, 4096], genSearch: false }, { models: [{ ...model, supportsThinking: true }] })
-    expect(thinking.backend.calls.templateOpts.length).toBe(N)
-    expect(thinking.backend.calls.templateOpts.every((o) => JSON.stringify(o) === '{"templateKwargs":{"enable_thinking":false}}')).toBe(true)
+    expect(thinking.backend.calls.templateOpts.length).toBe(2 * N)
+    expect(thinking.backend.calls.templateOpts.filter((o) => JSON.stringify(o) === '{"templateKwargs":{"enable_thinking":false}}')).toHaveLength(N)
+    expect(thinking.backend.calls.templateOpts.filter((o) => JSON.stringify(o) === '{"templateKwargs":{"enable_thinking":true}}')).toHaveLength(N) // template-only counterfactual
     expect(thinking.rec?.insights?.map((i) => i.text).join('\n')).toMatch(/\[I-5\.4\] .*: quality measured with thinking off \(T=0\)/)
     const plain = await run(() => ({}), { runQuality: true, ladder: [2048] })
     expect(plain.backend.calls.templateOpts.every((o) => o === undefined)).toBe(true)
@@ -633,8 +632,10 @@ describe('runSession', () => {
         expect(rows[0].evaluationStatus).toBe('infra_error')
         expect(rows.slice(1).every((x) => x.evaluationStatus === 'valid')).toBe(true)
         expect(rows.every((x) => !x.appliedTemplateKwargs)).toBe(true)
-        expect(Object.keys(rows[0].templateKwargProof ?? {})).toHaveLength(id === 'off' ? 1 : 2)
-        expect(rows.every((x) => Object.values(x.templateKwargProof ?? {}).every((p) => p.status === 'unchanged'))).toBe(true)
+        expect(Object.keys(rows[0].templateKwargProof ?? {})).toHaveLength(0)
+        expect(rows[0].renderProof?.status).toBe('unproved')
+        expect(Object.keys(rows[1].templateKwargProof ?? {})).toHaveLength(id === 'off' ? 1 : 2)
+        expect(rows.slice(1).every((x) => Object.values(x.templateKwargProof ?? {}).every((p) => p.status === 'unchanged'))).toBe(true)
       }
     })
   })
@@ -987,8 +988,7 @@ describe('runSession', () => {
     const mixed = stored.results.map((r) => ({ ...r, runtimeVersion: (r as { genId?: string }).genId === 'off' ? 'vulkan:b1' : 'vulkan:b2' }))
     const resumed = await run(() => ({}), { ...req, resumeSessionId: 's1' }, { models: [m], runtimeVersion: 'b1' }, first.s.runs, [{ ...stored, results: mixed }])
     expect(resumed.backend.calls.prompts.filter((q) => q.prompt !== ladderPrompt(2048))).toHaveLength(stored.results.length)
-    expect(resumed.backend.calls.templates).toBeGreaterThanOrEqual(stored.results.length)
-    expect(resumed.backend.calls.templates).toBeLessThanOrEqual(stored.results.length + 2)
+    expect(resumed.backend.calls.templates).toBe(2 * stored.results.length)
   })
 
   it('quality resume requires distinct T1 sample numbers 1, 2, 3 for each item', async () => {
@@ -1002,8 +1002,7 @@ describe('runSession', () => {
       ? { ...r, sample: 1 } : r)
     const resumed = await run(() => ({}), { ...req, resumeSessionId: 's1' }, { models: [m], runtimeVersion: 'b1' }, first.s.runs, [{ ...stored, results: mixed }])
     expect(resumed.backend.calls.prompts.filter((q) => q.prompt !== ladderPrompt(2048))).toHaveLength(stored.results.length)
-    expect(resumed.backend.calls.templates).toBeGreaterThanOrEqual(stored.results.length)
-    expect(resumed.backend.calls.templates).toBeLessThanOrEqual(stored.results.length + 2)
+    expect(resumed.backend.calls.templates).toBe(2 * stored.results.length)
   })
 
   it('v2 runner emits skill and instance provenance that yields skill-clustered uncertainty', async () => {
