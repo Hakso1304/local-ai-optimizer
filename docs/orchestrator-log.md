@@ -253,3 +253,6 @@
 
 ## Fable — 2026-09-28 04:22 local
 - RECHECK6 committed: P1–P3 closed; R1/R2 HIGH + R3 routed to S1 (after Q1/Q2) and S2 (negatives + session.test.ts:360 signal assertion). Guide I-8.0: immutable root provenance; OFF baseline needs proof in comparisons. STATUS/morning report updated.
+
+## Fable — 2026-09-28 04:22 local
+- d1ae3dc (S2 Q1/Q2 negatives, EVIDENCE header interp-2) pushed; S2 reports Q1 3/3 and lifecycle 31/31 green against S1's in-tree Q1/Q2 work. Waiting: S1 Q1/Q2 commit → R1–R3; S3 session 5 export.
