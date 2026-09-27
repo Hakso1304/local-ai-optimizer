@@ -35,9 +35,10 @@ export interface JsonSchema {
 const res = (pass: boolean, score: number, detail: string): CheckResult => ({ pass, score, detail })
 const clip = (s: string, n = 80) => JSON.stringify(s.length > n ? `${s.slice(0, n)}…` : s)
 
-/** Drop reasoning blocks some templates leave in content (<think>…</think>, or an unclosed one), then trim. */
+/** Drop reasoning blocks some templates leave in content, closed or not, then trim:
+ *  Qwen/DeepSeek `<think>…</think>` and Gemma 4 `<|channel>thought…<channel|>`. */
 export function stripThinking(s: string): string {
-  return s.replace(/<think>[\s\S]*?(<\/think>|$)/gi, '').trim()
+  return s.replace(/<think>[\s\S]*?(<\/think>|$)/gi, '').replace(/<\|channel>thought[\s\S]*?(<channel\|>|$)/gi, '').trim()
 }
 
 /** Contents of the first ``` fence (preferring a js/javascript one); the whole string if there is no fence. */
@@ -103,9 +104,23 @@ export function containsAll(output: string, items: string[], caseSensitive = fal
 }
 
 /** Full needle = 1. Only the part before the first '-' (e.g. HELIOTROPE without -5) = 0.5, fail. */
+const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const NEGATION = /\b(not|no|never|neither|nor|isn't|wasn't|aren't|doesn't|don't|cannot|can't)\b|n't\b/i
+
+/** The needle must be retrieved as the answer: whole token (HELIOTROPE-59 ≠ HELIOTROPE-5), no negation earlier in its
+ *  sentence ("…is not HELIOTROPE-5"), and no other needle-shaped candidate (WORD-123) named alongside it. */
 export function needle(output: string, value: string): CheckResult {
-  const hay = stripThinking(output).toLowerCase()
-  if (hay.includes(value.toLowerCase())) return res(true, 1, `needle ${value} retrieved`)
+  const text = stripThinking(output)
+  const hay = text.toLowerCase()
+  const tok = new RegExp(`(?<![\\w-])${esc(value)}(?![\\w-])`, 'i')
+  const m = tok.exec(text)
+  if (m) {
+    const sentence = text.slice(0, m.index).split(/[.!?\n]/).pop() ?? ''
+    if (NEGATION.test(sentence)) return res(false, 0, `needle ${value} appears negated: ${clip(sentence + value)}`)
+    const others = [...new Set((text.match(/(?<![\w-])[A-Za-z]{3,}-\d+(?![\w-])/g) ?? []).map((x) => x.toUpperCase()))].filter((x) => x !== value.toUpperCase())
+    if (others.length) return res(false, 0, `ambiguous: ${value} named together with ${others.join(', ')}`)
+    return res(true, 1, `needle ${value} retrieved`)
+  }
   const stem = value.split('-')[0].toLowerCase()
   if (stem !== value.toLowerCase() && hay.includes(stem)) return res(false, 0.5, `partial needle: found ${stem} but not ${value}`)
   return res(false, 0, `needle not found in ${clip(hay)}`)

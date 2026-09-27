@@ -53,7 +53,7 @@ describe('W4 adversarial review', () => {
     expect(classifyExit(['ggml_vulkan: VK_ERROR_DEVICE_LOST'])).toBe('device_lost')
   })
 
-  it.fails('rejects a negated needle instead of crediting retrieval', () => {
+  it('rejects a negated needle instead of crediting retrieval', () => {
     expect(needle('The project name is not HELIOTROPE-5.', 'HELIOTROPE-5').pass).toBe(false)
   })
 

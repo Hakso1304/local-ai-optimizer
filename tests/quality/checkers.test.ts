@@ -17,6 +17,12 @@ describe('text checkers', () => {
     expect(stripThinking('<think>never closed')).toBe('')
     expect(exactMatch('<think>hmm Dave</think>Carol', 'Carol').pass).toBe(true)
   })
+  it('strips Gemma 4 thought channels, closed, empty or unclosed', () => {
+    expect(stripThinking('<|channel>thought\n*   Alice > Bob\n<channel|>Carol')).toBe('Carol')
+    expect(stripThinking('<|channel>thought\n<channel|>BANANA')).toBe('BANANA')
+    expect(stripThinking('<|channel>thought\n*   Topic: the ocean')).toBe('')
+    expect(exactMatch('<|channel>thought\nDave? no.<channel|>\n**Carol**', 'Carol').pass).toBe(true)
+  })
   it('regex', () => {
     expect(regex('red,green,blue', '^red,green,blue$').pass).toBe(true)
     expect(regex('red, green, blue', '^red,green,blue$').pass).toBe(false)
@@ -35,6 +41,16 @@ describe('text checkers', () => {
     expect(needle('HELIOTROPE-5', 'HELIOTROPE-5')).toMatchObject({ pass: true, score: 1 })
     expect(needle('Heliotrope', 'HELIOTROPE-5')).toMatchObject({ pass: false, score: 0.5 })
     expect(needle('I do not know', 'HELIOTROPE-5')).toMatchObject({ pass: false, score: 0 })
+  })
+  it('needle: must be the answer — whole token, not negated, not one of several candidates', () => {
+    expect(needle('The secret project name is HELIOTROPE-5.', 'HELIOTROPE-5').pass).toBe(true)
+    expect(needle('**heliotrope-5**', 'HELIOTROPE-5').pass).toBe(true)
+    expect(needle('The project name is not HELIOTROPE-5.', 'HELIOTROPE-5')).toMatchObject({ pass: false, score: 0 })
+    expect(needle("It isn't HELIOTROPE-5.", 'HELIOTROPE-5').pass).toBe(false)
+    expect(needle('It is not ORION-2. The secret project name is HELIOTROPE-5.', 'HELIOTROPE-5').pass).toBe(false) // two candidates
+    expect(needle('Either HELIOTROPE-5 or CORONA-3', 'HELIOTROPE-5').detail).toMatch(/ambiguous/)
+    expect(needle('HELIOTROPE-59', 'HELIOTROPE-5').pass).toBe(false)
+    expect(needle('Answer: HELIOTROPE-5 (not the old name)', 'HELIOTROPE-5').pass).toBe(true) // negation after the needle is fine
   })
   it('wordCount', () => {
     expect(wordCount('The ocean is very deep.', 5, 5).pass).toBe(true)
