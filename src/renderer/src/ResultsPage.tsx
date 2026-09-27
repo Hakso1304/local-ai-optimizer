@@ -1,8 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { Metric } from '../../shared/bench-types'
 import type { SessionCandidate, SessionDetail, SessionSummary } from '../../shared/types'
+import type { TelemetrySample } from '../../shared/bench-events'
 import { ExportMenu } from './ExportMenu'
 import { LineChart, type Band } from './LineChart'
+import { ParetoChart } from './ParetoChart'
+import { SloFilter } from './SloFilter'
+import { TelemetryChart } from './TelemetryChart'
 import { CtxPick, DemoBanner, M, Prov, fmtCtx, gib, num } from './ui'
 
 const RESUMABLE = new Set(['cancelled', 'failed', 'paused', 'interrupted'])
@@ -30,15 +34,20 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
   // Same model can appear with several configs, so always show the configId too.
   const name = (id: string | null) => (id ? `${d.candidates.find((c) => c.config.id === id)?.model.name ?? '?'} — ${id}` : '—')
   const tag = d.session.demo ? ' (DEMO DATA)' : ''
+  const [slo, setSlo] = useState<(c: SessionCandidate) => boolean>(() => () => true)
+  const onSlo = useCallback((p: (c: SessionCandidate) => boolean) => setSlo(() => p), [])
+  const [tele, setTele] = useState<{ key: string; samples: TelemetrySample[] } | null>(null)
 
   return (
     <>
       {d.session.demo && <DemoBanner />}
       <h2>Comparison — {d.session.workload}{tag}</h2>
+      <SloFilter workload={d.session.workload} candidates={d.candidates} onChange={onSlo} />
       <table>
         <thead><tr><th /><th>Model</th><th>Quant</th><th>Config</th><th>Recommended ctx</th><th>Practical ctx</th><th>Quality</th><th>Decode t/s</th><th>Prefill t/s</th><th>Peak VRAM</th><th>Peak RAM</th><th>Stability</th><th /></tr></thead>
         <tbody>
           {d.candidates.map((c, i) => {
+            if (!slo(c)) return null
             const q = comp(c, 'quality'), st = comp(c, 'stability'), r = refRun(c)
             return (
               <tr key={c.config.id}>
@@ -64,6 +73,9 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
         </tbody>
       </table>
 
+      <h2>Quality vs speed (Pareto){tag}</h2>
+      <ParetoChart candidates={d.candidates.filter(slo)} />
+
       <h2>Context scaling{tag}</h2>
       <div className="charts">
         <div><h3>Prefill t/s</h3><LineChart xs={xs} bands={bands} yLabel="prefill t/s" fmtY={(v) => num(v, 0)}
@@ -88,6 +100,11 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
             )))}
             {c.cliff.steps.every((s) => !s.reasons.length) && <li className="muted">No cliff reasons: every step passed.</li>}
           </ul>
+          <div className="bar">{c.runs.map((r, k) => (
+            <button key={r.ctx} className="mini" title="Show this step's telemetry"
+              onClick={() => void window.api.telemetryForRun(c.runIds[k]).then((samples) => setTele({ key: `${c.config.id}@${r.ctx}`, samples }))}>{fmtCtx(r.ctx)} telemetry</button>
+          ))}</div>
+          {tele?.key.startsWith(`${c.config.id}@`) && <><p className="muted">Telemetry {tele.key}</p><TelemetryChart samples={tele.samples} /></>}
         </div>
       ))}
 
