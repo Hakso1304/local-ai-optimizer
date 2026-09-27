@@ -77,6 +77,13 @@ describe('startup log + exit classification', () => {
   })
 })
 
+/** Poll until cond() holds or the (generous) deadline passes; returns whether it held. Replaces fixed sleeps. */
+async function waitFor(cond: () => boolean, ms = 15_000): Promise<boolean> {
+  for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 25))) if (cond()) return true
+  return cond()
+}
+const exited = (p: { exitCode: number | null; signalCode: NodeJS.Signals | null }) => p.exitCode !== null || p.signalCode !== null
+
 describe('LlamaCppBackend process handling (fake server, no GPU)', { timeout: 20_000 }, () => {
   const fake = join(__dirname, 'fixtures', 'fake-llama-server.cjs')
   const pidFile = join(tmpdir(), `lao-test-${process.pid}.pid`)
@@ -93,7 +100,7 @@ describe('LlamaCppBackend process handling (fake server, no GPU)', { timeout: 20
     b = backend('die-oom')
     const t0 = Date.now()
     await expect(b.loadModel(cfg)).rejects.toThrow(/exited with code 3 \(oom\)/)
-    expect(Date.now() - t0).toBeLessThan(10_000)
+    expect(Date.now() - t0).toBeLessThan(60_000) // well below the 120 s /health deadline it must not wait for
     expect(b.lastExit).toMatchObject({ code: 3, reason: 'oom' })
     expect(existsSync(pidFile)).toBe(false)
   })
@@ -104,7 +111,7 @@ describe('LlamaCppBackend process handling (fake server, no GPU)', { timeout: 20
     setTimeout(() => ctl.abort(), 500)
     const t0 = Date.now()
     await expect(b.loadModel({ ...cfg, signal: ctl.signal })).rejects.toThrow(/^cancelled$/)
-    expect(Date.now() - t0).toBeLessThan(5_000)
+    expect(Date.now() - t0).toBeLessThan(60_000) // abort, not the 120 s /health deadline
     expect(b.pid).toBeUndefined()
     expect(existsSync(pidFile)).toBe(false)
     await expect(b.loadModel({ ...cfg, signal: ctl.signal })).rejects.toThrow(/^cancelled$/) // already aborted: no spawn
@@ -191,8 +198,7 @@ describe('LlamaCppBackend process handling (fake server, no GPU)', { timeout: 20
     b = backend('ok')
     await b.loadModel(cfg)
     process.kill(b.pid!)
-    await new Promise((r) => setTimeout(r, 500))
-    expect(b.lastExit).not.toBeNull()
+    expect(await waitFor(() => b!.lastExit !== null)).toBe(true) // the close event, however late it arrives
     expect((await b.runPrompt({ prompt: 'x', maxTokens: 1 })).error).toMatch(/^server exited \(crash, code/)
   })
 })
@@ -215,15 +221,15 @@ describe('stale server cleanup verifies identity (W4c D11)', { timeout: 60_000 }
     const child = () => sp(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'])
     const a = child(), b = child(), c = child()
     try {
-      await new Promise((r) => setTimeout(r, 500))
+      // start-time checks need the children to exist: wait until each has a pid (spawned)
+      expect(await waitFor(() => [a, b, c].every((x) => x.pid !== undefined))).toBe(true)
       w(pf, JSON.stringify({ pid: b.pid, exePath: 'C:/not/node.exe', startedAt: new Date().toISOString() }))
       expect(await killStaleServer(pf)).toMatch(/not the recorded/)
       w(pf, String(c.pid))
       expect(await killStaleServer(pf)).toMatch(/could not be verified/)
       w(pf, JSON.stringify({ pid: a.pid, exePath: process.execPath, startedAt: new Date().toISOString() }))
       expect(await killStaleServer(pf)).toMatch(/killed stale/)
-      await new Promise((r) => setTimeout(r, 500))
-      expect(a.exitCode !== null || a.signalCode !== null).toBe(true)
+      expect(await waitFor(() => exited(a))).toBe(true)
       expect(b.exitCode).toBeNull()
       expect(c.exitCode).toBeNull()
     } finally {

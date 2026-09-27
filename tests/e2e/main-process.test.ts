@@ -50,13 +50,17 @@ describe.skipIf(!canRun)('main process (real Electron, real IPC)', { timeout: 12
     db.close()
     app = spawn(electronExe, [root, `--user-data-dir=${userDataArg}`, `--remote-debugging-port=${PORT}`], { stdio: 'ignore' })
     page = await cdp(PORT)
-    await sleep(1500)
+    // ready = the renderer has mounted its nav (not a fixed sleep); generous bound for slow machines
+    for (const end = Date.now() + 60_000; Date.now() < end && !(await page.ev<number>('document.querySelectorAll("nav button").length')); ) await sleep(250)
   })
   afterAll(async () => {
     page?.close()
-    app?.kill()
-    await sleep(1500)
-    rmSync(base, { recursive: true, force: true })
+    if (app && app.exitCode === null) {
+      const gone = new Promise((r) => app.once('exit', r))
+      app.kill()
+      await Promise.race([gone, sleep(15_000)]) // wait for the real exit before deleting its user-data dir
+    }
+    rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 })
   })
 
   it('marks a session left running by a previous run as interrupted on launch', async () => {
