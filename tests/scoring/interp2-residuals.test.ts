@@ -424,6 +424,7 @@ describe('I-8.0 off/think comparator proof on both sides', () => {
   it('compares a fully proven think config with a fully proven off control', () => {
     const { options } = assess(offValid)
     expect(options.find((g) => g.gq.gen.id === 'off')).toMatchObject({ comparable: true })
+    expect(options.find((g) => g.gq.gen.id === 'think-low')?.why).toBeUndefined()
     expect(options.find((g) => g.gq.gen.id === 'think-low')).toMatchObject({ comparable: true })
   })
   it('does not compare T=1 think against T=1 off with one missing accepted temperature', () => {

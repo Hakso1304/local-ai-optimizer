@@ -541,6 +541,53 @@ describe('runSession', () => {
     expect(rec?.insights?.some((i) => i.ruleId === 'I-2.8') ?? false).toBe(false)
   })
 
+  it('Q1: RAM guard tripped during prompt sizing prevents warmup and generation', async () => {
+    const b = fakeBackend(() => ({}))
+    let low = false
+    b.tokenize = async () => { low = true; await new Promise((r) => setTimeout(r, 40)); return 1000 }
+    const r = await run(() => ({}), { ladder: [2048] }, {
+      backend: () => b, models: [{ ...model, fileBytes: 100 * 1024 ** 2 }],
+      readRamAvailableBytes: () => low ? GiB : 20 * GiB, config: { guardPollMs: 5 }
+    })
+    expect(r.s.runs[0]).toMatchObject({ status: 'fail', failureKind: 'guard_abort' })
+    expect(b.calls.prompts).toHaveLength(0)
+    expect(b.calls.unloads).toBeGreaterThan(0)
+  })
+
+  it('Q1: RAM guard tripped during quality template rendering prevents a generation request', async () => {
+    const b = fakeBackend(() => ({}))
+    let low = false
+    b.applyTemplate = async (msgs) => { low = true; await new Promise((r) => setTimeout(r, 40)); return msgs.map((x) => x.content).join('\n') }
+    const r = await run(() => ({}), { ladder: [2048], runQuality: true, qualityMode: 'quick' }, {
+      backend: () => b, models: [{ ...model, fileBytes: 100 * 1024 ** 2 }],
+      readRamAvailableBytes: () => low ? GiB : 20 * GiB, config: { guardPollMs: 5 }
+    })
+    expect(r.s.runs[0].status).toBe('pass')
+    expect(b.calls.prompts.filter((q) => q.prompt !== ladderPrompt(2048))).toEqual([])
+    expect(r.s.quality).toEqual([])
+    expect(b.calls.unloads).toBeGreaterThan(0)
+    expect(b.calls.cancels).toBeGreaterThan(0)
+  })
+
+  it('Q1: RAM guard tripped during long-needle template rendering prevents its request', async () => {
+    const b = fakeBackend(() => ({}))
+    let low = false
+    b.applyTemplate = async (msgs) => {
+      const content = msgs.map((x) => x.content).join('\n')
+      if (content.includes('OBSIDIAN-42')) { low = true; await new Promise((r) => setTimeout(r, 40)) }
+      return content
+    }
+    const r = await run(() => ({}), { workload: 'long_context_coding', requiredContext: 32768,
+      ladder: [2048, 32768], runQuality: true, qualityMode: 'quick' }, {
+      backend: () => b, models: [{ ...model, fileBytes: 100 * 1024 ** 2 }],
+      readRamAvailableBytes: () => low ? GiB : 20 * GiB, config: { guardPollMs: 5 }
+    })
+    expect(r.s.runs.every((x) => x.status === 'pass')).toBe(true)
+    expect(b.calls.prompts.some((q) => q.prompt.includes('OBSIDIAN-42'))).toBe(false)
+    expect(r.s.quality.flatMap((q) => q.results).some((x) => x.testId === 'CR-04-long')).toBe(false)
+    expect(b.calls.unloads).toBeGreaterThan(0)
+  })
+
   describe('I-8.0 one-key template proof for effort settings', () => {
     const off = { id: 'off', thinking: false, temperature: 0, source: 'default' as const }
     const low = { id: 'low', thinking: true, effort: 'low', temperature: 0, source: 'default' as const }
