@@ -45,6 +45,8 @@ for (let i = 3; i < process.argv.length; i++) {
 if (scenario === 'H' && (!flag('--request-cap-ms') || !flag('--ram-abort-gib'))) throw new Error('scenario H requires explicit --request-cap-ms and --ram-abort-gib')
 const limits = validateHarnessLimits({ requestCapMs: Number(flag('--request-cap-ms') ?? 300_000), ramAbortGib: Number(flag('--ram-abort-gib') ?? 5) })
 const DB_PATH = existingDbPath(flag('--db'), scenario === 'H')
+const BACKEND = flag('--backend') ?? 'vulkan'
+if (BACKEND !== 'vulkan' && BACKEND !== 'hip') throw new Error('--backend must be vulkan or hip')
 const WANT = flag('--models')?.split(',') ?? ['qwen2.5-1.5b-instruct-q4_k_m', 'Meta-Llama-3.1-8B-Instruct-Q4_K_M']
 /** --request-cap-ms N: upper bound on every prompt request's timeout (overnight runs: 300000). */
 const REQUEST_CAP_MS = limits.requestCapMs
@@ -60,7 +62,7 @@ function pin(model: ModelMeta, cands: CandidateConfig[]): CandidateConfig[] {
   return pins.map((p) => {
     const all = p.ngl >= model.layers, kv = p.kv ?? base.kvType
     return {
-      ...base, id: `${model.id}|ngl=${all ? 'all' : p.ngl}|kv=${kv}|t=${base.threads}`, gpuLayers: Math.min(p.ngl, model.layers), gpuLayersAll: all, kvType: kv,
+      ...base, id: `${model.id}|ngl=${all ? 'all' : p.ngl}|kv=${kv}|t=${base.threads}${BACKEND === 'hip' ? '|hip' : ''}`, gpuLayers: Math.min(p.ngl, model.layers), gpuLayersAll: all, kvType: kv,
       kvOffload: undefined, mmap: all ? base.mmap : false, ...(all ? {} : { expectDegraded: true, degradedReason: 'pinned partial offload' }),
       ctxSteps: flag('--ladder') ? flag('--ladder')!.split(',').map(Number) : base.ctxSteps, skippedSteps: [],
       notes: [...base.notes, `pinned by run-session --pin; estimates are the planner's for ngl ${base.gpuLayers} kv ${base.kvType}`]
@@ -132,7 +134,7 @@ async function main(): Promise<void> {
     console.log(`${el()} llama-server already running (another worker) — waiting 30 s`)
     await new Promise((r) => setTimeout(r, 30_000))
   }
-  const vendor = join('vendor', 'llama.cpp')
+  const vendor = join('vendor', BACKEND === 'hip' ? 'llama.cpp-hip' : 'llama.cpp')
   const probe = new LlamaCppBackend(vendor)
   const [scanned, det, devs, infos] = await Promise.all([scanSystem(), probe.detect(), probe.listDevices(), findGgufModels([MODELS_DIR])])
   // Same as main.ts withVramInUse: other-process VRAM measured at planning time (effective budget).
@@ -141,6 +143,8 @@ async function main(): Promise<void> {
     ? { value: vr.bytes, status: 'available', source: `typeperf GPU Adapter Memory(luid_${vr.luid}_phys_0)\Dedicated Usage` }
     : { value: null, status: 'unavailable', source: 'typeperf GPU Adapter Memory', error: 'reading failed' } }
   const dev = pickDiscreteDevice(devs)
+  const gpuDevice = BACKEND === 'hip' ? (devs.find((d) => d.id === 'ROCm0')?.id ?? null) : (dev?.id ?? null)
+  if (BACKEND === 'hip' && gpuDevice !== 'ROCm0') throw new Error('HIP build did not enumerate ROCm0; session not started')
   const dbPath = DB_PATH
   const appDb = dbPath ? openDb(dbPath) : null
   // --resume <id> (needs --db): continue a stored session exactly like the app's Resume — stored request, scan and
@@ -186,13 +190,13 @@ async function main(): Promise<void> {
   const gitState = { head: git(['rev-parse', 'HEAD']) ?? (existsSync('HEAD.txt') ? readFileSync('HEAD.txt', 'utf8').trim() : null), dirty: (git(['status', '--porcelain']) ?? '').split('\n').filter(Boolean) }
   // Same planning as the runner / main.ts: planCandidates over the (Vulkan-only) backend with the learned per-process
   // budget observations, so the stored plan carries the configs the runner actually runs.
-  const bk = vramBudgetKey(machine, 'vulkan', det.version ?? null)
+  const bk = vramBudgetKey(machine, BACKEND, det.version ?? null)
   const observations = bk && appDb ? applicableObservations(bk, listVramBudget(appDb, bk.key)) : []
   const planFor: PlanFor = (r) => {
-    const mach = machineFromProfile(machine, dev?.id ?? null, undefined, observations)
+    const mach = machineFromProfile(machine, gpuDevice, undefined, observations)
     return {
       machine, vramBytes: val(mach.vramBytes, true),
-      candidates: models.flatMap((model) => pin(model, planCandidates(machine, model, [{ kind: 'vulkan', device: dev?.id ?? null, runtimeVersion: det.version ?? null, observations }], WORKLOADS[r.workload], rulesForRequest(r)).candidates).map((config) => ({ config, model })))
+      candidates: models.flatMap((model) => pin(model, planCandidates(machine, model, [{ kind: BACKEND, device: gpuDevice, runtimeVersion: det.version ?? null, observations }], WORKLOADS[r.workload], rulesForRequest(r)).candidates).map((config) => ({ config, model })))
     }
   }
   const appStorage = appDb ? makeSessionStorage(appDb, planFor) : null
@@ -226,7 +230,8 @@ async function main(): Promise<void> {
   rec = await runSession(req, {
     backend: () => wrap(new LlamaCppBackend(vendor, { pidFile })),
     startSampler: (pid) => startSampler({ pid }),
-    storage: appStorage ?? storage, machine, gpuDevice: dev?.id ?? null, backendKind: 'vulkan', runtimeVersion: det.version ?? null, models,
+    storage: appStorage ?? storage, machine, gpuDevice, backendKind: 'vulkan', runtimeVersion: det.version ?? null,
+    backends: [{ kind: BACKEND, backend: () => wrap(new LlamaCppBackend(vendor, { pidFile })), device: gpuDevice, runtimeVersion: det.version ?? null, exePath: join(vendor, 'llama-server.exe') }], models,
     clock: { now: () => Date.now() },
     readRamAvailableBytes: () => freemem(), // Windows: GlobalMemoryStatusEx ullAvailPhys = "Available"
     signal: ctl.signal,
