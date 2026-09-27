@@ -47,4 +47,7 @@ docs/EVIDENCE.md E-1…E-31 (S2 owns updates); E-12/E-13 now supported by stage 
 
 ## 7. Builds
 - Nightly pre-verdict at 3ec8278: `dist/Local AI Optimizer-0.1.0-nightly-2026-09-28-pre-verdict-*.exe` (+ BUILD-INFO.txt).
-- Post-fix nightly at 5814270 (`dist/nightly-2026-09-28-postfix-unvalidated`) — predates 7166792/70c5c9e/842d396; a final build follows the G08 fix + re-check on an idle lane.
+- Post-fix nightly at 5814270 (`dist/nightly-2026-09-28-postfix-unvalidated`) — predates 7166792/70c5c9e/842d396.
+- **Interim post-T3 nightly at f0fda83** (identity hotfix in; full suite 915/915 at HEAD, gate 914/915 + 1 named skip): `dist/Local AI Optimizer-0.1.0-nightly-2026-09-28-post-T3-interim-portable.exe` sha256 2bc71ed7…4eb0e (100,319,073 B), `…-setup.exe` sha256 c1d9dc37…a40d9. Packaged launch check passed (Dashboard renders, --list-devices ran, 0 visible windows from the app's tree, clean quit). Release gate now names every skip (607bcae).
+- **Final nightly** at the HEAD after Astra's W re-check (w4y) — pending.
+- Note: the visible PowerShell windows during the night came from the Codex worker terminals' own commands, not from the app (verified by parent chain).
