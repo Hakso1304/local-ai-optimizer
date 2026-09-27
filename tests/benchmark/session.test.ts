@@ -182,6 +182,18 @@ describe('runSession', () => {
     expect(rec?.best?.score.recommendedCtx).toBe(32768) // coding: largest step within 15 s TTFT, ≤ 32K
   })
 
+  it('resume re-runs cancelled and RAM-skipped steps instead of stopping on them', async () => {
+    const ac = new AbortController()
+    const first = await run((ctx) => (ctx === 8192 ? { hook: () => ac.abort() } : {}), {}, { signal: ac.signal })
+    expect(first.s.runs.at(-1)).toMatchObject({ ctx: 8192, status: 'cancelled' })
+    const { backend, rec } = await run(() => ({}), { resumeSessionId: 's1' }, {}, first.s.runs) // includes the cancelled 8K row
+    expect(ctxOf(backend)).toEqual([8192, 16384, 32768])
+    expect(rec?.best).not.toBeNull()
+    const skipped = await run(() => ({}), { ladder: [2048] }, { readRamAvailableBytes: () => 1 * GiB })
+    const again = await run(() => ({}), { resumeSessionId: 's1', ladder: [2048] }, {}, skipped.s.runs)
+    expect(ctxOf(again.backend)).toEqual([2048])
+  })
+
   it('emits events in order', async () => {
     const { events } = await run((ctx) => (ctx > 4096 ? { load: 'oom' } : {}), { ladder: [2048, 4096, 8192] })
     const types = events.map((e) => (e.type === 'phase' ? `phase:${e.phase}` : e.type)).filter((t) => t !== 'telemetry' && t !== 'log')

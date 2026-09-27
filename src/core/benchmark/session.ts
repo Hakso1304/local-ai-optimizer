@@ -134,7 +134,10 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   try {
     if (!sessionId) sessionId = await storage.createSession({ workload: req.workload, request: req, startedAt: clock.now() })
     await storage.setSessionStatus(sessionId, 'running')
-    const done = new Map((req.resumeSessionId ? await storage.listRuns(sessionId) : []).map((r) => [`${r.configId}@${r.ctx}`, r] as const))
+    // Resume re-runs steps that never really ran: cancelled ones and RAM-guard skips (memory may be free now).
+    // Later rows win, so a re-run supersedes the stored attempt.
+    const rerun = (r: BenchmarkRunResult) => r.status === 'cancelled' || r.failureKind === 'skipped_memory'
+    const done = new Map((req.resumeSessionId ? await storage.listRuns(sessionId) : []).filter((r) => !rerun(r)).map((r) => [`${r.configId}@${r.ctx}`, r] as const))
     send({ type: 'session:started', workload: req.workload, modelIds: req.modelIds, resumed: !!req.resumeSessionId })
 
     // All candidates of all requested models, smallest estimated footprint first.
