@@ -40,6 +40,14 @@ This is the MVP Definition of Done, the later user requirements and the cross-cu
 | Heavy-model mode | PARTIAL | e38ce73, 4ad9884 (UI toggle), 1027926, 5dacad4 (RAM safety, ordering); `tests/scoring/heavy.test.ts`, `kv.test.ts`; `calibration-heavy-2026-09-27.md` (Qwen3.8-27B 55/65 layers: 12–13 t/s, no spill) | One real dense model; MoE, -nkvo and CPU-baseline paths not yet measured |
 | Heavy-model live re-run | pending: #3 heavy re-run | — | — |
 | Pareto chart + SLO filter | DONE-WITH-CAVEAT | 184eb33 `ParetoChart.tsx`, `SloFilter.tsx`, `tests/results/pareto-slo.test.ts` | Hidden configs don't show why (review finding 1) |
+| Required context 32K / 64K / 128K | DONE-WITH-CAVEAT | Core 0a99f35 (effective profile, ladder to the required ctx, gate "practical < required (limited by …)", advisory TTFT, user min-decode, fallback, KV q8_0 / -nkvo variants, CR-04-long); UI 91ec981; `tests/scoring/required.test.ts` + session tests | Long-context behaviour is not yet calibrated on real 64K–128K runs |
+| Long-context calibration (64K–128K) | pending: #3 | — | — |
+| Large-scale Coding profile + Dashboard card / view-as | PARTIAL | Profile + `recommendForWorkload` 0a99f35 (27B at 12 t/s with higher quality beats 8B; Coding still picks 8B); card + view-as b7baf98 | #2 is swapping the card over to `recommendForWorkload` |
+| Spill false-positive fix (`-lm none` pinned host memory) | DONE-WITH-CAVEAT | 2d51cc0: spill = shared − host-pinned − unsaturated baseline, only while dedicated ≥ 80 %; session tests | Checked against #3's figures (Qwen3.8 ngl 50: 3.82 GiB shared, 4 GiB free); not yet re-run live |
+| VRAM in use before planning | DONE | 960166c (measured before planning) + 4de83cc (`machineFromProfile` reads it; the note says when unavailable); `candidates.test.ts` | — |
+| Sampler pid-column restart | DONE-WITH-CAVEAT | 82670a9 (sampler `hasPidColumns`/`restart`) + 5f8f669 (runner restarts once; `samplerErrors` persisted); session test | Fake sampler only; live behaviour depends on typeperf timing |
+| Responsive layout | pending: #2 | — | — |
+| GPT reviewer pass | pending: #4 | — | — |
 | HF download with login | DONE-WITH-CAVEAT | Core 282b3ec + `tests/hub.test.ts` (local servers: resume, redirect/no token leak, sha256, 401/403/404); IPC/page 2a349e7, 09fbf8b; wired fa491b0, 486f958 | No real huggingface.co call in the test suite; not yet verified live |
 
 ## Cross-cutting requirements
