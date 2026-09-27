@@ -93,6 +93,8 @@ npm test                 # vitest unit tests (no GPU needed; fake llama-server f
 npm run build            # typecheck + production build to out/
 npm run preview          # run the production build
 npm run package          # build + electron-builder -> dist/ (portable .exe and NSIS installer, unsigned)
+                         # + dist/BUILD-INFO.txt: commit (DIRTY if uncommitted edits), rules version, test results, HIP flag
+                         #   (LAO_BUILD_LABEL="nightly …" labels it; package from a clean worktree for a clean build)
 LAO_SEED_DEMO=1 npm run dev   # UI demo with fixture data in a separate optimizer-demo.db, flagged "DEMO DATA"
 ```
 

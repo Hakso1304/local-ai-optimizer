@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "setup:runtime": "tsx scripts/ensure-runtime.ts",
-    "package": "npm run build && electron-builder --win portable nsis"
+    "package": "npm run build && electron-builder --win portable nsis && node scripts/build-info.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
