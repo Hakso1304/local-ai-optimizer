@@ -12,16 +12,13 @@ This is the single consolidated list, and every item is checked against the code
 - **DONE-WITH-CAVEAT: PDH glitch rows are dropped.** Rows with an impossible percentage (1.3e13 % GPU util, and garbage RAM cells) are discarded whole, which can leave a step with fewer or zero samples.
 - **DONE-WITH-CAVEAT: GPU util is the max over the PID's 3D/Compute engine groups.** It is display-only; scoring and cliff rules don't use it.
 - **DONE-WITH-CAVEAT: per-PID VRAM comes from WDDM counters.** On this GPU the spill starts at ≈83 % dedicated, and other drivers may differ.
-- **BLOCKED (env): NVIDIA telemetry (`telemetry/nvidia.ts`) is fixture-tested only**, and it is not wired into the runner. nvidia-smi here fails with "insufficient permissions" (stale driver, exit 4).
+- **BLOCKED (env): NVIDIA telemetry is wired but fixture-tested only.** `withNvidia` merges nvidia-smi temp/power into samples when `probeNvidiaSmi()` works (acbd169). nvidia-smi here fails with "insufficient permissions" (stale driver, exit 4).
 
 ## Runtimes and models
 - **DONE-WITH-CAVEAT: llama.cpp (llama-server, Vulkan build b11208) is the only benchmark runtime.**
-- **PARTIAL: Ollama / LM Studio.**
-  - Done: runtime detection over HTTP (`runtimes/others.ts`), the Ollama manifest→blob enumeration (`runtimes/ollama/models.ts`) and the LM Studio default dirs.
-  - Not yet listed in the Models page (`models:list` scans GGUF folders only).
-  - The Ollama blobs are benchmarked through our llama-server, not through Ollama itself.
+- **DONE-WITH-CAVEAT: Ollama / LM Studio models** are listed in `models:list` (acbd169) and benchmarked through our llama-server, not through Ollama or LM Studio themselves. Runtime detection is HTTP-only.
 - **BLOCKED (env): the Ollama / LM Studio on-disk layouts come from upstream code and docs.** Neither app is installed, so they have never been observed here.
-- **PARTIAL + BLOCKED (env): the CUDA path.** `pickReleaseAsset` (`runtimes/llamacpp/assets.ts`) selects the CUDA build plus cudart. `ensureRuntime` still downloads Vulkan only (`pickVulkanAsset`), so this is untested on real NVIDIA hardware.
+- **BLOCKED (env): the CUDA path is wired but untested on real NVIDIA hardware.** `runtime:install` picks the CUDA build + cudart via `pickReleaseAsset` from the driver's CUDA major, and falls back to Vulkan if `--version` fails (acbd169).
 - **PARTIAL: no ROCm / SYCL / CPU-only build selection.** A CPU-only machine gets ngl=0 candidates on the Vulkan build.
 - **DONE-WITH-CAVEAT: GGUF parsing is header-only.** Split shards and mmproj files are listed as-is, without grouping (`models/gguf.ts`).
 - **DONE-WITH-CAVEAT: loadModel waits a hardcoded 120 s for `/health`**, not configurable per phase. A served n_ctx ≠ requested is reported as `config_drift`.
@@ -44,7 +41,7 @@ This is the single consolidated list, and every item is checked against the code
 ## Quality
 - **DONE-WITH-CAVEAT: suite `qb-1.1.0` is small and strict.** It has 17 tests in 6 categories, with deterministic checkers and one rep at temperature 0. It is a relative signal, not a leaderboard; with few tests per category, one flaky answer moves Q by 5–33 points.
 - **DONE-WITH-CAVEAT: without a quality run, Q is an ESTIMATED prior** from parameter count and quantization. It is labelled in the breakdown and reasons, and it can decide close calls (e.g. 8B vs 14B for Document Analysis).
-- **PARTIAL: thinking-model token boost (×4) is off**, because `ModelMeta` has no `supportsThinking`.
+- **DONE-WITH-CAVEAT: thinking models are scored with thinking OFF.** The quality suite passes `enable_thinking=false`, and the reason says so. A model's with-thinking quality is not measured; the ×4 token-boost path exists but is unused.
 - **DONE-WITH-CAVEAT: model-written JS runs in a child-process sandbox** (`--permission`, memory cap, vm context, timeout). Network is blocked by the vm context, not by `--permission`.
   - The sandbox spawns `process.execPath` with `ELECTRON_RUN_AS_NODE=1` (`quality/sandbox.ts`), so it depends on Electron's **RunAsNode fuse** staying enabled (the electron-builder default).
   - If the fuses are hardened (`electronFuses.runAsNode: false`), the coding-quality tests (CD-01..03) fail as "request failed" instead of running. Keep the fuse on, or ship a separate Node binary for the sandbox.
@@ -54,14 +51,18 @@ This is the single consolidated list, and every item is checked against the code
 - **DONE-WITH-CAVEAT: unavailable inputs score a neutral 50.** They are flagged "unknown", never counted as 0 or as a pass.
 - **DONE-WITH-CAVEAT: scoring vs recommended ctx.** Scores are taken at the workload's target ctx, while the recommended `-c` is the largest passing step within the TTFT tolerance. The reasons show both.
 - **DONE-WITH-CAVEAT: partial offload is ineligible** whenever the same model's full offload has a usable step (calibration: −83 % decode; a spilled full offload still beat ngl 30 by 4.7×).
-- **PARTIAL: heavy-model mode** (partial offload for models that don't fit) is opt-in. It is tested with a synthetic 27B only; no real >16 GB model has been benchmarked. `-nkvo` is verified in `--help` only. A decode gate (`minDecodeTps`) keeps such models out of Fast Assistant, Chat and Coding.
+- **PARTIAL: heavy-model mode** (opt-in partial offload for models that don't fit) has **no calibration of its own**. The thresholds come from the 8B/14B full-offload data; the unit tests use a synthetic 27B plus the headers of the two real heavy models (Qwen3.8-27B, Gemma-4-26B); the live heavy run is pending. `-nkvo` is verified in `--help` only. The `minDecodeTps` gate keeps such models out of Fast Assistant, Chat and Coding.
 - **PARTIAL: KV layout for hybrid / sliding-window archs.**
-  - `kvLayout` handles per-layer KV heads, `full_attention_interval` (qwen35) and `sliding_window_pattern` (gemma4) when ModelMeta carries them.
-  - Until gguf.ts reads those keys, such models get the all-layers **upper bound**. That is conservative, so fewer configs and shorter ladders, never OOM from an under-estimate.
+  - `kvLayout` handles per-layer KV heads, `full_attention_interval` (qwen35) and `sliding_window_pattern` (gemma4). gguf.ts reads those keys since a456679.
+  - Unknown archs without layout keys get the all-layers **upper bound**: conservative, never OOM from an under-estimate.
   - Recurrent state (e.g. DeltaNet layers, about 150 MB) is not modelled; the 1 GiB VRAM margin covers it.
 
+## Hugging Face download
+- **PARTIAL: HF search/list/resumable download works in core** (`core/hub/hf.ts`, tested against local servers). The Electron parts (`main/hub.ts`: safeStorage token, token-page window, IPC; `HubPage.tsx`) are **untested live until #2 wires them**.
+- **BLOCKED (env): no real huggingface.co call is in the test suite.** The API field names and the Link pagination follow the HF docs.
+
 ## Export
-- **PARTIAL: the core generators exist** (`export/config.ts`: llama-server, Ollama Modelfile, LM Studio, JSON, provenance note). The Results page still uses its own simpler llama-server text.
+- **DONE-WITH-CAVEAT: export menu** (e31dc64): llama-server command, Ollama Modelfile, LM Studio settings, JSON and the provenance note, saved to a file.
 - **BLOCKED (env): the Ollama Modelfile `num_gpu/num_thread/num_batch` and the LM Studio setting keys are unverified.** The llama-server export is exact, because it mirrors the measured launch.
 
 ## Safety
@@ -70,9 +71,9 @@ This is the single consolidated list, and every item is checked against the code
   - 4 GiB candidate RAM reserve
   - 2 GiB shared-spill abort
   - 1 GiB VRAM margin, keep-over ≤ 1.15×
-  - The RAM estimate counts the whole mmap'd file, which makes it conservative: it may skip configs that would page fine.
+  - The RAM estimate is resident-only (non-GPU weights + CPU KV + 0.5 GiB), checked after the previous server is unloaded. The in-step floor credits reclaimable mmap pages.
 - **DONE-WITH-CAVEAT: the guard reacts at 1 s telemetry granularity.** A very fast allocation can still reach OOM, which is then recorded as `oom`.
-- **DONE-WITH-CAVEAT: process cleanup** is kill → `taskkill /T /F`, a pid file and a stale-server kill at start. A hard kill of the Electron main process can still leave one llama-server until the next launch.
+- **DONE-WITH-CAVEAT: process cleanup** is kill → `taskkill /T /F`, a pid file and a stale-server kill at start, plus the NSIS uninstall killing the pid-file server. A hard kill of the Electron main process can still leave one llama-server until the next launch. Its session is shown as `interrupted` and is resumable.
 - **DONE-WITH-CAVEAT: one benchmark at a time per app instance.** Two app instances are not prevented from running at once.
 
 ## Platform and packaging
@@ -80,5 +81,5 @@ This is the single consolidated list, and every item is checked against the code
 - **DONE-WITH-CAVEAT: packaging** (a3dc31e): electron-builder portable exe and a per-user NSIS installer.
   - The binaries are **unsigned**, so Windows SmartScreen warns on first launch.
   - The packaged app installs the llama.cpp runtime to `userData/runtime/llama.cpp` on first run, via the System page.
-  - Dev and packaged builds share `%APPDATA%\local-ai-optimizer`.
+  - Packaged data lives in `%APPDATA%\local-ai-optimizer`; dev uses `…-dev`. A DB newer than the build is refused. Uninstall keeps userData.
 - **DONE-WITH-CAVEAT: the runtime download takes the newest `bNNNNN` prerelease that has a win-vulkan asset, and keeps it** (`release-tag.txt`); there is no update check. Upstream flag churn in a newer build can break the argv, and flags are not re-validated against `--help` at install.

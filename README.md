@@ -6,6 +6,21 @@ quality suite, and recommends a configuration per workload (chat, coding, long-c
 analysis, fast assistant, max quality). Every number is labelled MEASURED, DECLARED, ESTIMATED or UNAVAILABLE —
 nothing is guessed silently.
 
+## Features
+
+- Hardware scan with provenance labels (GPU/VRAM, CPU, RAM, disks); llama.cpp runtime install (Vulkan, or CUDA on NVIDIA)
+- Models from your folders, LM Studio and Ollama; optional **download from Hugging Face** (search, gated-model login, resumable, sha256-verified)
+- Benchmark sessions per workload: context ladder with cliff/spill detection, quality suite, live telemetry, pause/resume, retry failed steps, rerun a selected configuration
+- **Heavy models**: models larger than VRAM can be benchmarked with partial GPU offload (flagged as degraded speed)
+- Recommendation with a score breakdown, recommended context size and plain-English reasons; per-run telemetry chart; export to llama-server / Ollama Modelfile / LM Studio / JSON
+
+## Usage
+
+1. System page: *Install llama.cpp runtime* (first run).
+2. Models page: check your models. **Download from Hugging Face**: Download page → search → pick a GGUF file → Download (sign in with a read token for gated models). *(Download page wiring pending.)*
+3. Benchmark page: pick a workload and models. **Include heavy models** to also test models whose full GPU offload does not fit (partial offload, slow). Then Start; Pause/Resume and Cancel work mid-run.
+4. Results page: recommendation, charts, per-run telemetry, and the *Export* menu.
+
 ## Prerequisites
 
 - Windows 11 (the scanner and telemetry use PowerShell 5.1, WMI/CIM, the registry and `typeperf`); no admin rights

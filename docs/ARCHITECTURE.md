@@ -8,7 +8,9 @@ This document describes what the code does today. The design record and its rati
 renderer (React, sandboxed)            main (Electron, Node 24)                     core (plain TS, no Electron)
 ────────────────────────────           ────────────────────────────                 ──────────────────────────────
 Dashboard / Benchmark / Models   ──►   preload: window.api (contextBridge)   ──►   system/scanner.ts      hardware scan
-Results / System pages                 ipcMain.handle(...) in main/index.ts        runtimes/*             llama.cpp, Ollama, LM Studio
+Results (ExportMenu, TelemetryChart)   ipcMain.handle(...) in main/index.ts        runtimes/*             llama.cpp, Ollama, LM Studio
+System / HubPage (HF, pending wire)    main/validate.ts (request sanitizing)        hub/hf.ts              Hugging Face client
+                                       main/hub.ts (HF IPC, pending wire)
 benchState.ts (event fold)      ◄──   'bench:event' channel (sendBenchEvent) ◄──   benchmark/session.ts   session runner
                                        settings.json (userData)                     benchmark/candidates.ts  config generation
                                        optimizer.db (node:sqlite, userData)         telemetry/sampler.ts   typeperf sampler
@@ -17,7 +19,7 @@ benchState.ts (event fold)      ◄──   'bench:event' channel (sendBenchEven
                                                                                     models/gguf.ts         GGUF header reader
                                                                                     storage/db.ts, sessions.ts  SQLite schema + queries
                                                                                     runtimes/ollama/models.ts   Ollama/LM Studio model stores
-                                                                                    telemetry/nvidia.ts    nvidia-smi sampler (standalone)
+                                                                                    telemetry/nvidia.ts    nvidia-smi sampler (merged via withNvidia)
                                                                                     export/config.ts       llama-server/Ollama/LM Studio export
 shared/ (types only): types.ts (scan, IPC API, stored payloads), bench-types.ts (benchmark/scoring), bench-events.ts (live events)
 ```
@@ -34,23 +36,34 @@ shared/ (types only): types.ts (scan, IPC API, stored payloads), bench-types.ts 
 
 **Scan.** `system:scan` calls `scanSystem()` (`core/system/scanner.ts`): one PowerShell call that emits JSON. VRAM comes from registry `qwMemorySize`, and adapters are joined to present PnP devices so stale registry GPUs are dropped. The call also runs `detectRuntimes()`. It returns a `SystemProfile` in which every section is `Sourced<T>`, and a failing section only marks itself `unavailable`.
 
-**Models.** `models:list` calls `LlamaCppBackend.enumerateModels(dirs)`, which calls `findGgufModels` (`core/models/gguf.ts`). The dirs are `<app>/models` plus `settings.modelDirs` (default `D:\llm-models`). Each `ModelInfo` carries `meta` (GGUF header, streamed in 1 MiB windows) or `metaError`.
-- `core/runtimes/ollama/models.ts` exists but is not yet called by `models:list`:
-  - `listOllamaModels(root = defaultOllamaRoot())` reads `manifests/…` and returns the GGUF blob paths.
-  - `toModelInfo(m)` returns entries shaped like `ModelInfo`, with runtime `ollama`.
-  - `defaultLmStudioDirs()` returns dirs to pass to `findGgufModels`.
+**Models.** `models:list` (`listAllModels`, `main/index.ts`) merges three sources, deduplicated by path:
+- `findGgufModels` over the model dirs: `userData/models` (packaged) or `<project>/models` (dev), plus `settings.modelDirs`;
+- LM Studio's `defaultLmStudioDirs()`;
+- Ollama blobs via `listOllamaModels()` → `toModelInfo` (runtime `ollama`). These are benchmarked through our llama-server.
+
+Each `ModelInfo` carries `meta` (GGUF header, streamed in 1 MiB windows, including per-layer KV / hybrid / SWA layout keys since a456679) or `metaError`. `models:fit` tells the UI which models need heavy mode.
 
 **Benchmark (live).** The renderer calls `startBench(SessionRequest)`, which goes to `bench:start` → `startSession` (`main/index.ts`):
-1. Only one session or smoke run at a time. The request is validated, and model paths must be inside a configured dir.
+1. Only one session or smoke run at a time. `sanitizeRequest` (`main/validate.ts`) whitelists fields, clamps reps and the ladder, and checks that model paths are inside a model root (`isInside`, resolve-based).
 2. The system scan is cached per app run.
 3. `findGgufModels` + `toModelMeta`, then `listDevices()` → `pickDiscreteDevice`, and `detect()` for the runtime version.
 4. `runSession(req, {backend: () => llama, startSampler: (pid) => startSampler({pid}), storage: makeSessionStorage(db, planFor), readRamAvailableBytes: os.freemem, evaluate: evaluateAsync, runtimeVersion, signal}, sendBenchEvent)`.
 
-Events go to every window on `bench:event`, and the renderer folds them in `benchState.ts`. `bench:cancel` aborts the session's AbortController. `bench:resume(id)` re-runs the stored request with `resumeSessionId`.
+Events go to every window on `bench:event`, and the renderer folds them in `benchState.ts`.
+- `bench:cancel` aborts the session.
+- `bench:pause` sets `pauseSignal`: the current step finishes, then the session is marked `paused`.
+- `bench:resume(id, {retryFailed?, rerunConfigIds?})` re-runs the stored request with `resumeSessionId`, using the stored machine scan so the plan is identical.
+- At startup, `markInterrupted` turns sessions left `running` by a killed app into `interrupted`; those are resumable too.
 
 **Results.** `sessions:list`, `sessions:get` and `recommendation:latest` read `core/storage/sessions.ts`. `getSession` recomputes `detectCliffs` from the stored runs, so cliff verdicts always reflect the current code.
-- **Export:** the Results page "Export config" button still builds its own llama-server text (`ResultsPage.tsx` `exportText`).
-- `core/export/config.ts` provides `exportConfigFrom`, `toLlamaServerArgs/Command` (mirrors the measured launch exactly), `toOllamaModelfile`, `toLmStudioSettings` (unverified keys), `toJson` and `provenanceNote`. It is not wired into the UI yet.
+- **Export** (wired in e31dc64): `ExportMenu.tsx` uses `core/export/config.ts`. It offers the llama-server command (mirrors the measured launch exactly), an Ollama Modelfile, LM Studio settings (unverified keys), JSON and the provenance note, saved via `file:save`.
+- **Per-run telemetry:** `telemetry:run(runId)` → `TelemetryChart.tsx`, showing GPU/CPU % and per-PID VRAM/shared/private GiB over time, with gaps for null readings.
+
+**Hugging Face download** (`core/hub/hf.ts`, `main/hub.ts`, `preload/hub.ts`, `HubPage.tsx`): **pending wiring by #2** (three insertions).
+- Channels: `hub:whoami/login/logout/openTokenPage/dirs/search/files/download/cancel` and the `hub:progress` event.
+- The token is stored encrypted with safeStorage (`userData/hf-token.bin`). The token page opens in a sandboxed window with its own `persist:huggingface` partition.
+
+**IPC channels** (main/index.ts): `system:scan`, `runtimes:detect`, `runtime:install`, `models:list`, `models:fit`, `settings:get`, `settings:setWorkload`, `workloads:list`, `sessions:list`, `sessions:get`, `recommendation:latest`, `telemetry:run`, `file:save`, `bench:start|pause|cancel|resume|smoke`; events `bench:event`, `runtime:progress`.
 
 **Smoke.** `bench:smoke` runs one tiny real request: ctx 2048, 32 tokens, one warmup, on the discrete Vulkan device chosen by `pickDiscreteDevice(listDevices())`.
 
@@ -89,7 +102,9 @@ interface InferenceBackend {
 | NVIDIA | CUDA build + `cudart-llama-bin-win-cuda-<ver>-x64.zip` extracted into the **same dir**, chosen by `pickReleaseAsset` (`runtimes/llamacpp/assets.ts`) from the driver's CUDA major, with Vulkan as the fallback | PDH (same as AMD) plus `startNvidiaSampler` (`telemetry/nvidia.ts`, `nvidia-smi --query-gpu … -lms`): util, VRAM used, temperature, power. `probeNvidiaSmi()` treats failure text or a non-zero exit as unavailable. | **UNTESTED on real hardware.** Fixtures only. The dev box's stale driver reports "insufficient permissions" (exit 4). |
 | Intel | Vulkan | PDH (same as AMD) | Untested |
 
-Not integrated yet: `assets.ts` and `nvidia.ts` are standalone. `ensureRuntime` still downloads Vulkan only, and the session runner uses only the PDH sampler.
+Integrated in acbd169:
+- `runtime:install` → `ensureRuntime(log, {vendor, cudaMajor})` picks the build with `pickReleaseAsset`, falling back to Vulkan if the CUDA build fails `--version`.
+- When `probeNvidiaSmi()` is available, the runner's sampler is `withNvidia(startSampler({pid}), startNvidiaSampler())`, which merges tempC/powerW into the samples.
 
 ## 4. Session runner (`src/core/benchmark/session.ts`)
 
@@ -102,7 +117,7 @@ Not integrated yet: `assets.ts` and `nvidia.ts` are standalone. `ensureRuntime` 
 | `storage` | `SessionStorage` (below) |
 | `machine`, `gpuDevice`, `backendKind` | the scan profile, the runtime device id (`Vulkan0`) and the backend kind |
 | `models: ModelMeta[]` | `id` = absolute GGUF path, which is passed as `modelPath` |
-| `clock`, `readRamAvailableBytes?`, `evaluate?`, `signal?`, `config?` | time, live RAM, the quality checker (default `evaluateAsync`), cancellation, overrides of `DEFAULT_SESSION_CONFIG` |
+| `clock`, `readRamAvailableBytes?`, `evaluate?`, `signal?`, `pauseSignal?`, `runtimeVersion?`, `config?` | time, live RAM, the quality checker (default `evaluateAsync`), cancel, pause (between steps only), the version stamped on runs, overrides of `DEFAULT_SESSION_CONFIG` |
 
 Flow:
 1. `createSession`, or reuse `req.resumeSessionId` → status `running` → `session:started`.
@@ -110,7 +125,7 @@ Flow:
 3. For each candidate (`candidate:started`):
    - If the GPU was lost earlier in the session, a GPU candidate is skipped.
    - For each ctx in `cand.ctxSteps` (2K…128K ∩ declared ctx ∩ VRAM estimate, ∩ `req.ladder`): a step already stored for this session is reused. Otherwise `runStep`:
-     - Live RAM pre-check: an estimate above available − floor records `fail/skipped_memory` without loading.
+     - Unload the previous step's server (and wait for exit), then the live RAM pre-check: resident estimate > available − floor → `fail/skipped_memory` without loading.
      - `loadModel` with `-c ctx`, `-ngl 999|n`, `--device`, `-t`, `-b 2048`, `-ub 512`, `-fa on`, plus `-ctk/-ctv q8_0` for q8 candidates. The KV cache is allocated at load, so each step restarts the server.
        - A 50 ms poll starts the sampler once `backend.pid` changes, so typeperf's ~2 s start-up overlaps the load.
        - Load errors map to failure kinds: `ConfigDriftError` (`/props` n_ctx ≠ requested) → `config_drift`; exit reasons → `oom|device_lost|crash`; "healthy within" → `load_timeout`; otherwise `load_fail`.
@@ -122,10 +137,13 @@ Flow:
        - Still 0 samples → unavailable.
      - `BenchmarkRunResult` carries `versions` {benchmark, prompts, quality, runtime} → `saveRun`, then `step:done` with its cliff verdict.
    - Stop the ladder on the first FAIL verdict or after 2 consecutive DEGRADED steps.
-   - Quality: once per model, on the first candidate of that model with a usable step, at `min(profile.targetContext, practical ceiling)`. Skipped when `runQuality === false`, and reused on resume via `listQuality`.
-   - `unloadModel` → `candidate:done {status: done|failed|cancelled|skipped, reason}`.
-4. `recommend(inputs, machine, workload)` → `saveRecommendation` → status `done` → `session:done`.
-5. Cancel: `signal` abort calls `backend.cancel()`; loops check `signal.aborted`; status `cancelled` → `session:cancelled`, with partial runs already persisted. Any thrown error is caught and becomes `session:failed` + status `failed`, and `finally` always unloads.
+   - `unloadModel` → `candidate:done {status: done|failed|cancelled|paused|skipped, reason}`.
+4. Quality runs after all ladders, once per model, on its **best-offload** usable candidate: most GPU layers, then fastest decode. It is never run on a CPU/-nkvo probe. The ctx is `min(targetContext, practical ceiling)`.
+   - Thinking models (`supportsThinking`) run with `enable_thinking=false`.
+   - Skipped when `runQuality === false`; reused on resume via `listQuality`.
+5. `recommend(inputs, machine, workload)` → `saveRecommendation` → status `done` → `session:done`. A pause at any point → status `paused` → `session:paused`.
+   - Resume rules: cancelled and `skipped_memory` steps always re-run; `retryFailed` re-runs fail/timeout steps (not `config_drift`); `rerunConfigIds` re-runs every step of those configs. Reads keep the last row per (configId, ctx).
+6. Cancel: `signal` abort calls `backend.cancel()`; loops check `signal.aborted`; status `cancelled` → `session:cancelled`, with partial runs already persisted. Any thrown error is caught and becomes `session:failed` + status `failed`, and `finally` always unloads.
 
 ### SessionStorage (implemented by `makeSessionStorage(db, planFor)` in `storage/sessions.ts`)
 ```ts
@@ -154,10 +172,15 @@ Every method may be sync or async. For the event list see `src/shared/bench-even
 | Device loss | `session.ts` | `device_lost` fails the step and skips all later GPU candidates in the session. |
 | Model code | `quality/sandbox.ts` | Runs in a child process (`ELECTRON_RUN_AS_NODE`, `--permission`, `--max-old-space-size`, fresh vm context, timeout, 64 KB stdout cap). Not in a worker, because a heap blow-up there aborts the host. |
 | Demo data isolation | `main/index.ts` | `LAO_SEED_DEMO=1` uses a separate `optimizer-demo.db`, and demo sessions are excluded from `latestRecommendation`. |
+| Request validation | `main/validate.ts` | Renderer requests are sanitized: whitelisted rule keys, reps and ladder clamped, model paths resolved and checked to be inside a root. |
+| Uninstall | `build/installer.nsh` | The NSIS uninstall kills only the llama-server whose pid is in the app's pid file. userData is kept on purpose. |
 
 ## 6. Persistence (`src/core/storage/db.ts`)
 
-`node:sqlite` `DatabaseSync` runs in main (WAL, foreign keys on). Migrations are an ordered array of SQL strings, and `schema_version` records the applied count. Rows are thin: a JSON `payload` column plus a few indexed scalars.
+`node:sqlite` `DatabaseSync` runs in main (WAL, foreign keys on). Migrations are an ordered array of SQL strings, and `schema_version` records the applied count.
+- A DB newer than the build is **refused** ("database schema vN is newer than this build").
+- userData is `%APPDATA%\local-ai-optimizer` when packaged and `…-dev` in dev, so dev migrations never touch the installed app's data.
+- Rows are thin: a JSON `payload` column plus a few indexed scalars.
 
 | Table | Scalars | payload |
 |---|---|---|

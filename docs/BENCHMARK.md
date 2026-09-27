@@ -77,7 +77,10 @@ ACCEPTANCE A11 mapping: ok → pass; failed / oom / device_lost / crashed → fa
 
 - Files: `src/core/quality/tests.v1.json` (17 tests), `checkers.ts`, `index.ts`.
 - Categories: instruction IF-01..03, reasoning RS-01..04 (since qb-1.1.0: step-by-step reasoning allowed, ending in a final `Answer: X` line; the `finalAnswer` checker takes the last Answer line, tolerating case, bold and backticks, and applies the inner exact/number check), coding CD-01..03 (`jsCode` cases `{expr, expected}`, compared as canonical JSON), structured SO-01..02, extraction EX-01..02, context CR-10/50/90 (needle at 10/50/90 % depth in seeded filler).
-- Runner (`session.ts` `runQuality`): runs once per **model**, on the first candidate with a usable step. It loads at ctx = min(profile.targetContext, practical ceiling) with filler `min(3000, 0.6·ctx)` tokens. Each prompt goes `applyTemplate(messages)` → `runPrompt` (temp 0, seed 1) → `evaluateAsync` (`jsCode` runs in the child-process sandbox).
+- Runner (`session.ts` `runQuality`): runs once per **model**, after all ladders, on the model's **best-offload** usable candidate: most GPU layers, then fastest measured decode. It is never run on a CPU baseline or `-nkvo` probe just because that ran first.
+  - It loads at ctx = min(profile.targetContext, practical ceiling) with filler `min(3000, 0.6·ctx)` tokens.
+  - Each prompt goes `applyTemplate(messages)` → `runPrompt` (temp 0, seed 1) → `evaluateAsync` (`jsCode` runs in the child-process sandbox).
+- **Thinking models** (`ModelMeta.supportsThinking`, from a chat template with `enable_thinking`): the template is applied with `enable_thinking=false`, so results are deterministic and fast and the suite's `max_tokens` fit. The recommendation says "Quality measured with thinking disabled". The ×4 token boost is kept for a future thinking-on option.
 - A failed request counts as `pass:false` with the error in `detail`. An incomplete suite (cancel/crash) is **discarded**, not stored as partial.
 - Q = 100 · Σ_c W_c · passRate_c / Σ_c W_c over the categories that have results, where passRate_c = Σ weight·pass / Σ weight. W = instruction .2, reasoning .25, coding .25, structured .1, extraction .1, context .1. Scoring restricts c to the profile's `promptSetIds`.
 - With no results, the scorer uses the prior `min(90, 35 + 15·log2(params/1e9)) × {bpw ≥ 6: 1, ≥ 4.5: .97, ≥ 3.5: .9, else .75}`, labelled **estimated** in the breakdown and the reasons.
@@ -181,7 +184,7 @@ Estimates are `kind:'estimated'`, prune only, and never rank.
 - **`estimateMemory`:**
   - KV = ctx·L·Hkv·(dk+dv)·bytes. This is exact vs the llama-server log: 8B 0.125 MiB/token, Qwen2.5-1.5B 0.0273 MiB/token.
   - VRAM = file·min(ngl,L)/L + KV + compute, where compute = 32 MiB + ubatch·n_embd·32 B + 1 KiB·ctx (fit to the measured 61–164 MiB compute buffers).
-  - RAM = **whole file (mmap resident)** + KV if ngl=0 + 512 MiB. Available RAM fell by ≈ file size even at ngl 99. This makes the pre-check conservative, and spill detection never uses it: spill uses the private working set and per-PID shared memory.
+  - RAM = **resident part**: weights not on the GPU + CPU-side KV + 512 MiB. It is checked after the previous step's server is unloaded (D1: its mmap had made a 14B look out of RAM). Offloaded weights' mmap pages are reclaimable and are credited by the in-step floor guard. Spill detection never uses RAM available: it uses the private working set and per-PID shared memory.
   - Estimated vs measured on 8B: −2 % … +3 % per rung.
 - **Budgets:**
   - VRAM = total − in-use − **1 GiB**. The margin absorbs the measured residual of 0.2–0.9 GiB, largest at 64K.
@@ -205,6 +208,16 @@ Estimates are `kind:'estimated'`, prune only, and never rank.
   - fa = on.
   - VRAM total unavailable → no VRAM pruning (with a note).
   - SWA/hybrid/recurrent archs prune on weights only.
+
+### Heavy-model mode (summary)
+- **What it is:** opt-in (`SessionRequest.heavyMode`, the "Include heavy models" checkbox). A model whose full GPU offload does not fit gets up to 4 partial-offload probes (§9, all `expectDegraded` with a reason) instead of being rejected.
+- **RAM:** the check uses the resident part with a 2 GiB reserve. The in-step floor credits the mmap pages of GPU-offloaded weights.
+- **Gates:**
+  - `minDecodeTps` per workload (fast 30, chat/coding 10, reasoning/long-ctx 5, doc 3, max quality 2 t/s) keeps slow partial configs out of interactive workloads.
+  - A partial config is never eligible when the same model's full offload ran.
+  - Across models, the scores decide: a ~27B at 8 t/s can win Maximum Quality.
+- **Reasons:** they say "Partial GPU offload (N/M layers) — degraded speed expected: decode X t/s (…)".
+- **KV:** it uses the per-layer layout (hybrid `full_attention_interval`, SWA pattern, per-layer heads) when the GGUF declares it; otherwise an all-layers upper bound, never 0.
 
 ## 10. Export (`src/core/export/config.ts`)
 - `exportConfigFrom(rec, cand, model, sessionId)` takes the winner at `recommendedCtx`.
