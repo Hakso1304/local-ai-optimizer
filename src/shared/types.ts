@@ -141,8 +141,10 @@ export interface RendererApi {
   latestRecommendation(w: WorkloadId): Promise<{ sessionId: number; recommendation: Recommendation } | null>
   startBench(req: SessionRequest): Promise<StartResult>
   cancelBench(): Promise<{ ok: boolean; error?: string }>
-  /** Continue a cancelled/failed session; already-measured steps are reused. */
-  resumeBench(sessionId: number): Promise<StartResult>
+  /** Stop between steps; the session ends 'paused' and is resumable. */
+  pauseBench(): Promise<{ ok: boolean; error?: string }>
+  /** Continue a paused/cancelled/interrupted/failed session; measured steps are reused unless retried/rerun. */
+  resumeBench(sessionId: number, opts?: { retryFailed?: boolean; rerunConfigIds?: string[] }): Promise<StartResult>
   /** Download + install the llama.cpp runtime (first run / packaged app). Progress via onRuntimeProgress. */
   installRuntime(): Promise<RuntimeDetection>
   onRuntimeProgress(cb: (msg: string) => void): () => void
@@ -167,6 +169,8 @@ export interface SessionPayload {
   candidates: { config: CandidateConfig; model: ModelMeta }[]
   /** Original request (for resume). */
   request?: SessionRequest
+  /** The scan the candidate plan was generated from; resume re-plans from it so configIds/ctxSteps match. */
+  machine?: SystemProfile
   /** Set when status = failed. */
   error?: string
 }

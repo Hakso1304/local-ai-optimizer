@@ -3,9 +3,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { openDb } from '../src/core/storage/db'
-import { getSession, getSessionRequest, latestRecommendation, listSessions, makeSessionStorage, saveRecommendation, saveSession, seedDemoSession, telemetryForRun } from '../src/core/storage/sessions'
+import { getSession, getSessionResume, latestRecommendation, listSessions, makeSessionStorage, markInterrupted, saveRecommendation, saveSession, seedDemoSession, telemetryForRun } from '../src/core/storage/sessions'
 import { insertTelemetrySamples } from '../src/core/storage/db'
 import type { BenchmarkRunResult, CandidateConfig, ModelMeta, Recommendation } from '../src/shared/bench-types'
+import type { SystemProfile } from '../src/shared/types'
 
 const dir = mkdtempSync(join(tmpdir(), 'lao-sess-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
@@ -54,7 +55,8 @@ describe('session storage', () => {
     const db = openDb(join(dir, 'd.db'))
     const model = { id: 'E:/m/tiny.gguf', name: 'tiny', layers: 2, ctxTrain: 4096, quant: 'Q8_0' } as ModelMeta
     const config = { id: `${model.id}|ngl=all|kv=f16|t=8`, modelId: model.id, kvType: 'f16', gpuLayers: 99, gpuLayersAll: true, threads: 8 } as CandidateConfig
-    const st = makeSessionStorage(db, () => ({ vramBytes: 16e9, candidates: [{ config, model }] }))
+    const machine = { scannedAt: 'scan-1' } as SystemProfile
+    const st = makeSessionStorage(db, () => ({ vramBytes: 16e9, candidates: [{ config, model }], machine }))
     const req = { workload: 'fast_assistant' as const, modelIds: [model.id] }
     const id = await st.createSession({ workload: req.workload, request: req, startedAt: 0 })
     const run = { configId: config.id, ctx: 2048, status: 'pass', decodeTps: { value: 300, kind: 'measured' } } as unknown as BenchmarkRunResult
@@ -72,8 +74,33 @@ describe('session storage', () => {
     const runId = (db.prepare('SELECT id, model_id FROM benchmark_run').get() as { id: number; model_id: string })
     expect(runId.model_id).toBe(model.id)
     expect(telemetryForRun(db, runId.id)).toHaveLength(1)
-    expect(getSessionRequest(db, Number(id))).toEqual(req)
+    expect(getSessionResume(db, Number(id))).toEqual({ request: req, machine }) // resume re-plans from the stored scan (d)
     expect(latestRecommendation(db, 'fast_assistant')?.sessionId).toBe(Number(id))
+    db.close()
+  })
+
+  it('a retried/rerun step supersedes the old row in listRuns and getSession (a)', async () => {
+    const db = openDb(join(dir, 'e.db'))
+    const model = { id: 'E:/m/x.gguf', name: 'x' } as ModelMeta
+    const config = { id: 'E:/m/x.gguf|ngl=all|kv=f16|t=8', modelId: model.id } as CandidateConfig
+    const st = makeSessionStorage(db, () => ({ vramBytes: null, candidates: [{ config, model }] }))
+    const id = await st.createSession({ workload: 'coding', request: { workload: 'coding', modelIds: [model.id] }, startedAt: 0 })
+    const detail = { samples: [], reason: null, stderrTail: [], load: null, startedAt: 0, endedAt: 0 }
+    const run = (ctx: number, status: string) => ({ configId: config.id, ctx, status }) as unknown as BenchmarkRunResult
+    await st.saveRun(id, run(2048, 'pass'), detail)
+    await st.saveRun(id, run(4096, 'fail'), detail)
+    await st.saveRun(id, run(4096, 'pass'), detail) // retry
+    expect((await st.listRuns(id)).map((r) => `${r.ctx}:${r.status}`)).toEqual(['2048:pass', '4096:pass'])
+    expect(getSession(db, Number(id))!.candidates[0].runs.map((r) => `${r.ctx}:${r.status}`)).toEqual(['2048:pass', '4096:pass'])
+    db.close()
+  })
+
+  it('markInterrupted flips sessions left running by a previous app run (b)', () => {
+    const db = openDb(join(dir, 'f.db'))
+    const a = saveSession(db, { workload: 'coding', vramBytes: null, candidates: [] }, 'running')
+    const b = saveSession(db, { workload: 'coding', vramBytes: null, candidates: [] }, 'done')
+    expect(markInterrupted(db)).toBe(1)
+    expect(listSessions(db).map((s) => [s.id, s.status])).toEqual([[b, 'done'], [a, 'interrupted']])
     db.close()
   })
 })

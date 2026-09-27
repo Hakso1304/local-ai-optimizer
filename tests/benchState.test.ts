@@ -9,16 +9,16 @@ const result = { status: 'pass', decodeTps: { value: 88.5, kind: 'measured' } } 
 describe('live benchmark reducer', () => {
   it('tracks candidate, phase, progress, telemetry and final status', () => {
     const evs: SessionEvent[] = [
-      { sessionId: s, type: 'session:started', workload: 'coding', modelIds: ['m'], resumed: false },
+      { sessionId: s, type: 'session:started', workload: 'coding', modelIds: ['m'], resumed: false, candidates: 2 },
       { sessionId: s, type: 'candidate:started', configId: 'c1', model: 'm', gpuLayers: 99, ctxSteps: [2048, 4096] },
       { sessionId: s, type: 'phase', configId: 'c1', ctx: 2048, phase: 'measure' },
       { sessionId: s, type: 'token-rate', configId: 'c1', ctx: 2048, prefillTps: 3000, decodeTps: 88.5, ttftMs: 600 },
       { sessionId: s, type: 'step:done', configId: 'c1', ctx: 2048, result, verdict: 'pass' },
       { sessionId: s, type: 'candidate:done', configId: 'c1', status: 'done', reason: null },
-      { sessionId: s, type: 'session:cancelled' }
+      { sessionId: s, type: 'session:paused' }
     ]
     const st = evs.reduce(applyEvent, initialLive)
-    expect(st).toMatchObject({ status: 'cancelled', configId: 'c1', phase: 'measure', ctx: 2048, stepsDone: 1, candidatesStarted: 1, candidatesDone: 1, rate: { decodeTps: 88.5 } })
+    expect(st).toMatchObject({ status: 'paused', candidatesTotal: 2, configId: 'c1', phase: 'measure', ctx: 2048, stepsDone: 1, candidatesStarted: 1, candidatesDone: 1, rate: { decodeTps: 88.5 } })
     expect(st.log.some((l) => l.includes('decode 88.5 t/s'))).toBe(true)
   })
 

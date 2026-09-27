@@ -25,9 +25,20 @@ export function setSessionStatus(db: DatabaseSync, id: number, status: string, e
   else db.prepare("UPDATE benchmark_session SET status = ?, payload = json_set(payload, '$.error', ?) WHERE id = ?").run(status, error, id)
 }
 
-export function getSessionRequest(db: DatabaseSync, id: number): SessionRequest | null {
+/** Latest row per (configId, ctx): a retry/rerun inserts a new row that supersedes the old one. */
+const LATEST_RUNS = `SELECT payload FROM benchmark_run WHERE id IN (
+  SELECT max(id) FROM benchmark_run WHERE session_id = ? GROUP BY json_extract(payload, '$.configId'), ctx_size) ORDER BY id`
+
+/** What resume needs: the original request and the scan the plan was made from (so configIds come out identical). */
+export function getSessionResume(db: DatabaseSync, id: number): { request: SessionRequest; machine: SessionPayload['machine'] } | null {
   const row = db.prepare('SELECT payload FROM benchmark_session WHERE id = ?').get(id) as { payload: string } | undefined
-  return row ? json<SessionPayload>(row.payload).request ?? null : null
+  const p = row ? json<SessionPayload>(row.payload) : null
+  return p?.request ? { request: p.request, machine: p.machine } : null
+}
+
+/** App start: sessions still 'running' belong to a previous app run that quit mid-session. Returns how many. */
+export function markInterrupted(db: DatabaseSync): number {
+  return Number(db.prepare("UPDATE benchmark_session SET status = 'interrupted' WHERE status = 'running'").run().changes)
 }
 
 export function saveRun(db: DatabaseSync, sessionId: number, modelId: string, run: BenchmarkRunResult): number {
@@ -71,7 +82,10 @@ export function getSession(db: DatabaseSync, id: number): SessionDetail | null {
   const row = db.prepare('SELECT id, created_at, status, payload FROM benchmark_session WHERE id = ?').get(id) as SessionRow | undefined
   if (!row) return null
   const p = json<SessionPayload>(row.payload)
-  const runs = (db.prepare('SELECT payload FROM benchmark_run WHERE session_id = ? ORDER BY id').all(id) as { payload: string }[]).map((r) => json<BenchmarkRunResult>(r.payload))
+  const runs = (db.prepare(LATEST_RUNS).all(id) as { payload: string }[]).map((r) => {
+    const { detail: _d, ...run } = json<BenchmarkRunResult & { detail?: unknown }>(r.payload)
+    return run
+  })
   const quality = db.prepare('SELECT model_id, payload FROM quality_result WHERE session_id = ? ORDER BY id').all(id) as { model_id: string; payload: string }[]
   const recRow = db.prepare('SELECT payload FROM recommendation WHERE session_id = ? ORDER BY id DESC LIMIT 1').get(id) as { payload: string } | undefined
   const recommendation = recRow ? json<Recommendation>(recRow.payload) : null
@@ -104,7 +118,7 @@ export function telemetryForRun(db: DatabaseSync, runId: number): TelemetrySampl
 }
 
 /** Candidate plan for a request (same deterministic generateCandidates call the runner makes). */
-export type PlanFor = (req: SessionRequest) => Pick<SessionPayload, 'vramBytes' | 'candidates'>
+export type PlanFor = (req: SessionRequest) => Pick<SessionPayload, 'vramBytes' | 'candidates' | 'machine'>
 
 /** The runner's SessionStorage over these tables. Session ids are the integer row ids as strings.
  *  Runs keep RunDetail (minus samples) under payload.detail; samples go to telemetry_sample. */
@@ -123,7 +137,7 @@ export function makeSessionStorage(db: DatabaseSync, planFor: PlanFor): SessionS
     createSession: ({ workload, request }) => String(saveSession(db, { workload, request, ...planFor(request) }, 'running')),
     setSessionStatus: (id, status, error) => setSessionStatus(db, sid(id), status, error),
     listRuns: (id) =>
-      (db.prepare('SELECT payload FROM benchmark_run WHERE session_id = ? ORDER BY id').all(sid(id)) as { payload: string }[]).map((r) => {
+      (db.prepare(LATEST_RUNS).all(sid(id)) as { payload: string }[]).map((r) => {
         const { detail: _d, ...run } = json<BenchmarkRunResult & { detail?: unknown }>(r.payload)
         return run
       }),

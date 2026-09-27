@@ -8,13 +8,14 @@ import { detectRuntimes } from '../core/runtimes'
 import { LlamaCppBackend, killStaleServer } from '../core/runtimes/llamacpp'
 import { pickDiscreteDevice } from '../core/runtimes/llamacpp/parse'
 import { openDb } from '../core/storage/db'
-import { getSession, getSessionRequest, latestRecommendation, listSessions, makeSessionStorage, seedDemoSession, type PlanFor } from '../core/storage/sessions'
+import { getSession, getSessionResume, latestRecommendation, listSessions, makeSessionStorage, markInterrupted, seedDemoSession, type PlanFor } from '../core/storage/sessions'
+import { isInside, sanitizeRequest } from './validate'
 import { WORKLOADS } from '../core/scoring/workloads'
 import { val } from '../core/scoring/cliff'
 import { runSession, type SessionStorage } from '../core/benchmark/session'
-import { DEFAULT_CANDIDATE_RULES, generateCandidates, machineFromProfile } from '../core/benchmark/candidates'
+import { generateCandidates, machineFromProfile, rulesForRequest } from '../core/benchmark/candidates'
 import { findGgufModels, toModelMeta } from '../core/models/gguf'
-import { startSampler } from '../core/telemetry/sampler'
+import { startSampler, stopAllSamplers } from '../core/telemetry/sampler'
 import { evaluateAsync } from '../core/quality'
 import type { SessionEvent, SessionRequest } from '../shared/bench-events'
 import type { ModelMeta, WorkloadId } from '../shared/bench-types'
@@ -78,18 +79,30 @@ ipcMain.handle('workloads:list', () => Object.values(WORKLOADS))
 ipcMain.handle('sessions:list', () => listSessions(needDb()))
 ipcMain.handle('sessions:get', (_e, id: number) => getSession(needDb(), Number(id)))
 ipcMain.handle('recommendation:latest', (_e, w: WorkloadId) => latestRecommendation(needDb(), w))
-ipcMain.handle('bench:start', (_e, req: SessionRequest) => startSession(req))
-ipcMain.handle('bench:resume', (_e, id: number) => {
-  const req = getSessionRequest(needDb(), Number(id))
-  return req ? startSession({ ...req, resumeSessionId: String(id) }) : { ok: false, error: `session ${id} has no stored request` }
+ipcMain.handle('bench:start', (_e, raw: unknown) => {
+  const v = sanitizeRequest(raw, modelDirs())
+  return v.ok ? startSession(v.req) : { ok: false, error: v.error }
+})
+/** Continue a paused/cancelled/interrupted/failed session. opts: retryFailed / rerunConfigIds (validated). */
+ipcMain.handle('bench:resume', (_e, id: number, opts?: { retryFailed?: unknown; rerunConfigIds?: unknown }) => {
+  const stored = getSessionResume(needDb(), Number(id))
+  if (!stored) return { ok: false, error: `session ${id} has no stored request` }
+  const v = sanitizeRequest({ ...stored.request, retryFailed: opts?.retryFailed, rerunConfigIds: opts?.rerunConfigIds }, modelDirs())
+  return v.ok ? startSession({ ...v.req, resumeSessionId: String(Number(id)) }, stored.machine) : { ok: false, error: v.error }
 })
 ipcMain.handle('bench:cancel', () => {
   if (!active) return { ok: false, error: 'no benchmark running' }
-  active.abort()
+  active.cancel.abort()
+  return { ok: true }
+})
+/** Stops between steps; the session ends as 'paused' and can be resumed. */
+ipcMain.handle('bench:pause', () => {
+  if (!active) return { ok: false, error: 'no benchmark running' }
+  active.pause.abort()
   return { ok: true }
 })
 ipcMain.handle('bench:smoke', async (_e, modelPath: string): Promise<SmokeResult> => {
-  if (typeof modelPath !== 'string' || !modelDirs().some((d) => modelPath.startsWith(d))) throw new Error('model path not in a configured model dir')
+  if (typeof modelPath !== 'string' || !modelDirs().some((d) => isInside(d, modelPath))) throw new Error('model path not in a configured model dir')
   if (smokeBusy || active) throw new Error('a smoke run or benchmark is already in progress')
   smokeBusy = true
   try {
@@ -108,19 +121,19 @@ ipcMain.handle('bench:smoke', async (_e, modelPath: string): Promise<SmokeResult
 })
 
 // ---- Benchmark session (one at a time, in the main process) ----
-let active: AbortController | null = null
+let active: { cancel: AbortController; pause: AbortController } | null = null
 let profileCache: SystemProfile | null = null
 
-async function startSession(req: SessionRequest): Promise<StartResult> {
+/** req is already sanitized. storedMachine: the scan a resumed session was planned from. */
+async function startSession(req: SessionRequest, storedMachine?: SystemProfile): Promise<StartResult> {
   if (active || smokeBusy) return { ok: false, error: 'a benchmark or smoke run is already in progress' }
-  if (!req || !(req.workload in WORKLOADS) || !Array.isArray(req.modelIds) || !req.modelIds.length) return { ok: false, error: 'pick a workload and at least one model' }
-  const dirs = modelDirs()
-  if (!req.modelIds.every((id) => typeof id === 'string' && dirs.some((d) => id.startsWith(d)))) return { ok: false, error: 'model path not in a configured model dir' }
-  const ctl = new AbortController()
-  active = ctl // claim before the first await so a double click can't start two sessions
+  const me = { cancel: new AbortController(), pause: new AbortController() }
+  active = me // claim before the first await so a double click can't start two sessions
   try {
-    profileCache ??= await scanSystem() // ponytail: static facts cached per app run; RAM is re-read live via freemem()
-    const [infos, devices, runtime] = await Promise.all([findGgufModels(dirs), llama.listDevices(), llama.detect()])
+    // ponytail: static facts cached per app run; RAM is re-read live via freemem(). A resume re-uses the stored scan
+    // so generateCandidates yields the same configIds/ctxSteps as the original plan (review item d).
+    const profile = storedMachine ?? (profileCache ??= await scanSystem())
+    const [infos, devices, runtime] = await Promise.all([findGgufModels(modelDirs()), llama.listDevices(), llama.detect()])
     const device = pickDiscreteDevice(devices)?.id ?? null
     const models: ModelMeta[] = []
     for (const id of req.modelIds) {
@@ -131,14 +144,14 @@ async function startSession(req: SessionRequest): Promise<StartResult> {
     }
     if (!models.length) throw new Error('none of the selected models can be benchmarked')
     const backendKind = device ? 'vulkan' as const : 'cpu' as const
-    const profile = profileCache
-    // Same deterministic candidate generation the runner does, so stored sessions carry full configs.
+    // Same deterministic candidate generation the runner does (rulesForRequest keeps heavyMode), so stored sessions
+    // carry full configs.
     const planFor: PlanFor = (r) => {
       const machine = machineFromProfile(profile, device)
-      const rules = { ...DEFAULT_CANDIDATE_RULES, ...r.candidateRules }
       return {
+        machine: profile,
         vramBytes: val(machine.vramBytes, true),
-        candidates: models.flatMap((model) => generateCandidates(machine, model, { backend: backendKind }, WORKLOADS[r.workload], rules).candidates.map((config) => ({ config, model })))
+        candidates: models.flatMap((model) => generateCandidates(machine, model, { backend: backendKind }, WORKLOADS[r.workload], rulesForRequest(r)).candidates.map((config) => ({ config, model })))
       }
     }
     let gotId: (id: string) => void = () => {}
@@ -148,13 +161,13 @@ async function startSession(req: SessionRequest): Promise<StartResult> {
     if (req.resumeSessionId) gotId(req.resumeSessionId)
     const run = runSession(req, {
       backend: () => llama, startSampler: (pid) => startSampler({ pid }), storage, machine: profile, gpuDevice: device, backendKind,
-      models, clock: Date, readRamAvailableBytes: () => freemem(), evaluate: evaluateAsync, signal: ctl.signal,
-      runtimeVersion: runtime.version ?? null
-    }, sendBenchEvent).finally(() => { if (active === ctl) active = null })
+      models, clock: Date, readRamAvailableBytes: () => freemem(), evaluate: evaluateAsync,
+      signal: me.cancel.signal, pauseSignal: me.pause.signal, runtimeVersion: runtime.version ?? null
+    }, sendBenchEvent).finally(() => { if (active === me) active = null })
     const id = await Promise.race([idReady, run.then(() => null)])
     return id ? { ok: true, sessionId: id } : { ok: false, error: 'session ended before it started (see event log)' }
   } catch (e) {
-    if (active === ctl) active = null
+    if (active === me) active = null
     return { ok: false, error: (e as Error).message }
   }
 }
@@ -174,6 +187,8 @@ function createWindow(): void {
 app.whenReady().then(async () => {
   // LAO_SEED_DEMO=1 uses a separate DB file so fixture data can never reach the real one.
   db = openDb(join(app.getPath('userData'), DEMO ? 'optimizer-demo.db' : 'optimizer.db'))
+  const n = markInterrupted(db) // a previous app run quit mid-session (before-quit can't await the runner)
+  if (n) console.warn(`${n} session(s) marked interrupted`)
   const fixtures = join(app.getAppPath(), 'tests', 'fixtures', 'scoring')
   if (DEMO && existsSync(fixtures)) seedDemoSession(db, fixtures) // dev-only: fixtures are not packaged
   const stale = await killStaleServer(join(app.getPath('userData'), 'llama-server.pid')).catch((e: Error) => `stale-server check failed: ${e.message}`)
@@ -181,5 +196,5 @@ app.whenReady().then(async () => {
   createWindow()
 })
 app.on('window-all-closed', () => app.quit())
-app.on('before-quit', () => { active?.abort(); llama.killSync() })
+app.on('before-quit', () => { active?.cancel.abort(); stopAllSamplers(); llama.killSync() })
 process.on('exit', () => llama.killSync())

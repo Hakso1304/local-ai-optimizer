@@ -4,6 +4,7 @@ import type { SessionCandidate, SessionDetail, SessionSummary } from '../../shar
 import { LineChart, type Band } from './LineChart'
 import { CtxPick, DemoBanner, M, Prov, fmtCtx, gib, num } from './ui'
 
+const RESUMABLE = new Set(['cancelled', 'failed', 'paused', 'interrupted'])
 const COLORS = ['#58a6ff', '#f0883e', '#a371f7', '#3fb950', '#db61a2']
 const NA = (reason: string): Metric => ({ value: null, kind: 'unavailable', reason })
 
@@ -28,7 +29,7 @@ function exportText(c: SessionCandidate): string {
   return `llama-server ${args.join(' ')}\n\n${JSON.stringify(json, null, 2)}\n`
 }
 
-function Detail({ d }: { d: SessionDetail }) {
+function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) => void }) {
   const [copied, setCopied] = useState<string | null>(null)
   const rec = d.recommendation
   const xs = [...new Set(d.candidates.flatMap((c) => c.runs.map((r) => r.ctx)))].sort((a, b) => a - b)
@@ -69,7 +70,10 @@ function Detail({ d }: { d: SessionDetail }) {
                 <td><M m={peak(c, 'peakVramBytes')} fmt={gib} /></td>
                 <td><M m={peak(c, 'peakRamBytes')} fmt={gib} /></td>
                 <td>{st ? <>{st.score.toFixed(0)} <Prov kind={st.input.kind} /></> : '—'}</td>
-                <td className="bar"><button onClick={() => void copy(c)}>{copied === c.config.id ? 'Copied' : 'Export config'}</button></td>
+                <td className="bar">
+                  <button onClick={() => void copy(c)}>{copied === c.config.id ? 'Copied' : 'Export config'}</button>
+                  {!d.session.demo && <button onClick={() => onRerun(c.config.id)} title="Re-run every step of this configuration">Rerun</button>}
+                </td>
               </tr>
             )
           })}
@@ -128,11 +132,17 @@ export function ResultsPage({ sessionId }: { sessionId?: number }) {
   const [sel, setSel] = useState<number | undefined>(sessionId)
   const [detail, setDetail] = useState<SessionDetail | null>(null)
   const [err, setErr] = useState<string | null>(null)
-  useEffect(() => { window.api.listSessions().then(setList, (e: Error) => setErr(e.message)) }, [])
+  const [tick, setTick] = useState(0)
+  useEffect(() => { window.api.listSessions().then(setList, (e: Error) => setErr(e.message)) }, [tick])
   useEffect(() => {
     if (sel == null) return setDetail(null)
     window.api.getSession(sel).then(setDetail, (e: Error) => setErr(e.message))
-  }, [sel])
+  }, [sel, tick])
+  // Refresh when a session ends or a step lands while this page is open (list status + detail charts).
+  useEffect(() => window.api.onBenchEvent((e) => {
+    if (e.type === 'step:done' || e.type.startsWith('session:')) setTick((t) => t + 1)
+  }), [])
+  const act = (p: Promise<{ ok: boolean; error?: string }>) => void p.then((r) => { if (!r.ok) setErr(r.error ?? 'failed'); else setTick((t) => t + 1) })
 
   return (
     <section>
@@ -147,8 +157,8 @@ export function ResultsPage({ sessionId }: { sessionId?: number }) {
               <td>
                 {s.demo ? <span className="pill demo-pill">DEMO DATA</span> : s.status}
                 {s.error && <span className="err" title={s.error}> ⚠</span>}
-                {!s.demo && (s.status === 'cancelled' || s.status === 'failed') && (
-                  <button className="mini" onClick={(e) => { e.stopPropagation(); void window.api.resumeBench(s.id).then((r) => { if (!r.ok) setErr(r.error) }) }}>Resume</button>
+                {!s.demo && RESUMABLE.has(s.status) && (
+                  <button className="mini" onClick={(e) => { e.stopPropagation(); act(window.api.resumeBench(s.id)) }}>Resume</button>
                 )}
               </td>
               <td>{s.candidateCount}</td><td className="muted">{s.bestConfigId ?? '—'}</td>
@@ -157,7 +167,12 @@ export function ResultsPage({ sessionId }: { sessionId?: number }) {
           {list?.length === 0 && <tr><td colSpan={6} className="muted">No benchmark sessions yet.</td></tr>}
         </tbody>
       </table>
-      {detail && <Detail d={detail} />}
+      {detail && !detail.session.demo && (
+        <div className="bar actions">
+          <button onClick={() => act(window.api.resumeBench(detail.session.id, { retryFailed: true }))} title="Re-run steps that failed or timed out">Retry failed tests</button>
+        </div>
+      )}
+      {detail && <Detail d={detail} onRerun={(configId) => act(window.api.resumeBench(detail.session.id, { rerunConfigIds: [configId] }))} />}
     </section>
   )
 }

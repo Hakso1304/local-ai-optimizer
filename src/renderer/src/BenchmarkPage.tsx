@@ -33,6 +33,7 @@ export function BenchmarkPage({ onDone }: { onDone: (sessionId: number) => void 
     if (!r.ok) setMsg(r.error)
   }
   const cancel = async () => { const r = await window.api.cancelBench(); if (!r.ok) setMsg(r.error ?? 'cancel failed') }
+  const pause = async () => { const r = await window.api.pauseBench(); if (!r.ok) setMsg(r.error ?? 'pause failed') }
   useEffect(() => {
     if (live.status === 'done' && live.sessionId) onDone(Number(live.sessionId))
   }, [live.status, live.sessionId, onDone])
@@ -56,6 +57,7 @@ export function BenchmarkPage({ onDone }: { onDone: (sessionId: number) => void 
         </label>
         <label><input type="checkbox" checked={quality} onChange={(e) => setQuality(e.target.checked)} disabled={running} /> quality suite</label>
         <button onClick={() => void start()} disabled={running || !picked.size}>Start</button>
+        <button onClick={() => void pause()} disabled={!running} title="Stops after the current step; resume from Results">Pause</button>
         <button onClick={() => void cancel()} disabled={!running}>Cancel</button>
       </header>
       {msg && <p className="err">{msg}</p>}
@@ -82,7 +84,7 @@ export function BenchmarkPage({ onDone }: { onDone: (sessionId: number) => void 
       <div className="tiles">
         <div className="tile"><span className="muted">Model / config</span>{live.model ?? '—'}<span className="muted">{live.configId ?? ''}</span></div>
         <div className="tile"><span className="muted">Phase / ctx</span>{live.phase ?? '—'} {live.ctx != null && `@ ${fmtCtx(live.ctx)}`}</div>
-        <div className="tile"><span className="muted">Progress</span>step {live.stepsDone}/{live.ctxSteps.length || '—'}, candidate {live.candidatesDone}/{live.candidatesStarted || '—'}</div>
+        <div className="tile"><span className="muted">Progress</span>step {live.stepsDone}/{live.ctxSteps.length || '—'}, config {live.candidatesDone}/{live.candidatesTotal ?? '—'}</div>
       </div>
       <div className="tiles">
         <div className="tile"><span className="muted">GPU util</span>{v(t?.gpuUtilPct, (n) => `${n.toFixed(0)}%`)}</div>

@@ -197,6 +197,15 @@ export interface Sampler {
   stop(): TelemetrySample[]
 }
 
+const active = new Set<ChildProcess>()
+/** Kill every running typeperf (app quit). */
+export function stopAllSamplers(): void {
+  for (const c of active) c.kill()
+  active.clear()
+}
+// Safety net if stop() is never reached (hard kill of the app): typeperf exits by itself after this many samples.
+const MAX_SAMPLES = 6 * 3600
+
 export function startSampler(o: SamplerOpts = {}): Sampler {
   const parser = new TypeperfParser(o)
   const samples: TelemetrySample[] = []
@@ -204,7 +213,9 @@ export function startSampler(o: SamplerOpts = {}): Sampler {
   const tail: string[] = []
   const si = String(Math.max(1, Math.round((o.intervalMs ?? 1000) / 1000)))
   let stopped = false
-  const child: ChildProcess = spawn('typeperf', [...counterPaths(o), '-si', si], { windowsHide: true })
+  const child: ChildProcess = spawn('typeperf', [...counterPaths(o), '-si', si, '-sc', String(MAX_SAMPLES)], { windowsHide: true })
+  active.add(child)
+  child.on('close', () => active.delete(child))
   createInterface({ input: child.stdout! }).on('line', (l) => {
     const s = parser.line(l)
     if (s) samples.push(s)
