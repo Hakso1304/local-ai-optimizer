@@ -98,8 +98,8 @@ export async function trackOwnedProcess(p: ChildProcess, tree: ProcessTree = win
       try {
         // The injected tree can miss an orphan after root exit. Production adds an independent OS census.
         if (!rootSeenByOs && rootKilledDuringStop && descendants.size === 0) throw new Error(`owned PID ${pid} final descendant scan unavailable after root exit`)
-        const finalTree: ProcessTree = rootSeenByOs ? { ...tree, descendants: async () => {
-          const [treeRows, osRows] = await Promise.all([tree.descendants(pid), finalDescendantCensus(pid)])
+        const finalTree: ProcessTree = rootSeenByOs ? { ...tree, descendants: async (source) => {
+          const [treeRows, osRows] = await Promise.all([tree.descendants(source), finalDescendantCensus(source)])
           return [...new Map([...treeRows, ...osRows].map((child) => [child.pid, child])).values()]
         } } : tree
         const deadline = Date.now() + 3_000
