@@ -256,3 +256,6 @@
 
 ## Fable — 2026-09-28 04:22 local
 - d1ae3dc (S2 Q1/Q2 negatives, EVIDENCE header interp-2) pushed; S2 reports Q1 3/3 and lifecycle 31/31 green against S1's in-tree Q1/Q2 work. Waiting: S1 Q1/Q2 commit → R1–R3; S3 session 5 export.
+
+## Fable — 2026-09-28 04:23 local
+- #1 validated docs/GPU-QUEUE vs parsers: --reps ignored by runner (S1), validateHarnessLimits not wired (S3), $DB not expanded under shell:false + openDb creates missing DB (S3 launcher + doc), E5 49152 > 14B declared ctx (doc), session ids shift (doc). All routed. Waiting: S1 Q1/Q2 commit; S3 session 5 export.
