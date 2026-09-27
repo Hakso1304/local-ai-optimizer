@@ -1,4 +1,5 @@
 {
+  "_reconciliation": "RECONCILED (calibration-ledger.md): warm timing means reproduce CAL-S. Memory is an adapter-minus-idle PROXY (not per-PID); peak reduction is mixed (64K = mean(14.61,13.88)-1.33, earlier rungs max/identical); shared .105 GiB is a mean of .12/.09; vramInUseBytes 1.2 GiB is a fixed approximation. Decode/TTFT are the mean of two reps (BENCHMARK quotes the first rep).",
  "_source": "docs/calibration-2026-09-27.md per-request table, 8B Q4_K_M: median of run1/run2; peakVramBytes = adapter peak dedicated \u2212 idle (per-PID proxy); GPU util garbage (>100%) dropped; peakRamBytes unavailable (not captured).",
  "vramBytes": 17095983104,
  "vramInUseBytes": 1288490189,

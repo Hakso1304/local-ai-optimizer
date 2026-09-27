@@ -1,4 +1,5 @@
 {
+  "_reconciliation": "RECONCILED (calibration-ledger.md): rows reproduce rounded CAL-14 values; shared is RAW per-PID (pre adjusted-v1); 48K failed = served-context drift (config_drift), mapped to a generic failure by the helper.",
  "_source": "docs/calibration-2026-09-27.md \"Qwen2.5-14B Q4_K_M spill/cliff observation\": per-PID telemetry, median of run1/run2. 48K: server served n_ctx 32768 (ctx_train) and rejected the prompt (HTTP 400) -> failed. fileBytes/paramCount from the HF Q4_K_M GGUF [S].",
  "vramBytes": 17095983104,
  "models": [

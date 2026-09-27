@@ -1,4 +1,5 @@
 {
+  "_reconciliation": "PARTLY SYNTHETIC (calibration-ledger.md): promptTokens = 0.75*ctx is SYNTHETIC (first 8 console rows have no recorded counts; 0939 rows measured 1169/1151 at 2K); measured private WS and raw shared (2.52-7.73 GiB) are dropped to null/0 by retrospective policy; failures omitted; mixed load modes. Not a complete session; use for policy tests only.",
  "_source": "docs/calibration-heavy-2026-09-27.md \"Steps measured\" (warm median of 2 reps, per-PID VRAM/shared). Run incomplete: the Qwen3.8 CPU baseline guard_abort row is omitted (it drove RAM to 1.0 GiB); private WS not captured \u2192 null. | 2K rows from docs/session-run-H-max_quality-heavy-2026-09-27T09-39-07-979Z.json (commit 33c9460): raw per-PID shared was 3.8\u20137.7 GiB = pinned host buffers under -lm none with dedicated < 80 % \u2192 spill 0 by the 2d51cc0 rule; the -nkvo rows (dedicated \u2265 80 %, host buffers unknown) have spill null.",
  "vramBytes": 17095983104,
  "vramInUseBytes": 1288490189,

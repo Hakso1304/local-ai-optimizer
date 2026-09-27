@@ -330,13 +330,13 @@ ineligible; action `rerun-idle`.
 
 | Threshold | Value | Origin |
 |---|---|---|
-| adjusted spill warn | 256 MiB | measured-calibration cal-2026-09-27 (14B@32K 1.05 GiB; 8B ≤ 0.12) |
+| adjusted spill warn | 256 MiB | policy informed by cal-2026-09-27 (CAL-14 14B@32K 1.05 GiB raw per-PID shared; CAL-S 8B ≤ 0.12 GiB adapter delta) — not validated for adjusted-v2 |
 | decode cliff | ratio ≤ 0.60 and ≥ 2 t/s | policy, consistent with 14B (0.516) vs 8B smooth (≥ 0.73) |
 | decode/TTFT bands | §3 | policy |
 | prefill severe scaling | 0.5× per doubling | heuristic (smooth worst 0.74×) |
 | thinking effective | 50 % | heuristic |
 | budget headroom warn | 0.5 GiB | policy (8B residual 0.17–0.89 GiB observed) |
-| in-use at plan | 1.5 GiB | policy (idle other-app usage ≈ 1.2 GiB observed) |
+| in-use at plan | 1.5 GiB | policy (idle other-app usage ≈ 1.2 GiB observed in CAL-S idle adapter readings) |
 | rep spread | 15 % of median, ≥ 2 reps | heuristic |
 | limited coverage | < 30 unique items or < 3 per category | policy |
 | category weak | ≤ 1/3 (≤ 2/3 coding) | policy |

@@ -446,6 +446,33 @@ describe('runSession', () => {
     expect(r.backend.calls.loads.some((l) => l.contextSize === 131072)).toBe(false)
   })
 
+  it('ladder-2: with a tokenizer, the ladder prompt is resized to 0.75·ctx tokens (within 3 %)', async () => {
+    const seen: string[] = []
+    const tok = (t: string) => Math.round(t.length / 3.1) // a tokenizer denser than the 4 chars/token guess
+    const backend = () => {
+      const b = fakeBackend(() => ({}))
+      b.tokenize = async (t: string) => tok(t)
+      const rp = b.runPrompt.bind(b)
+      b.runPrompt = async (q) => { seen.push(q.prompt); return rp(q) }
+      return b
+    }
+    await run(() => ({}), { ladder: [8192] }, { backend })
+    const n = tok(seen[0])
+    expect(Math.abs(n - 0.75 * 8192) / (0.75 * 8192)).toBeLessThanOrEqual(0.03)
+    expect(n).not.toBe(tok(ladderPrompt(8192))) // resized, not the character-sized ladder-1 prompt
+  })
+
+  it('L1: spill saturation is taken against the effective budget (total − VRAM in use by other processes)', async () => {
+    // 11 GiB dedicated on a 16 GiB card: 69 % of the total (not saturated), but 91 % of 12 GiB left by other processes.
+    const at = (ctx: number) => [{ ...sample(ctx), procVramDedicatedBytes: 11 * GiB, procVramSharedBytes: ctx >= 4096 ? Math.round(2 * GiB) : Math.round(0.02 * GiB) }]
+    const sampler = (pid: number) => { const v = at(pid - 1000); return { samples: v, unavailable: {}, stop: () => v } }
+    const busy = { ...machine, vramInUse: { status: 'available' as const, value: 4 * GiB, source: 'test' } } as SystemProfile
+    const idle = await run(() => ({}), { ladder: [2048, 4096] }, { startSampler: sampler })
+    expect(idle.s.runs[1].peakSharedGpuBytes.value).toBe(0) // idle GPU: 69 % of the budget is below saturation
+    const contended = await run(() => ({}), { ladder: [2048, 4096] }, { startSampler: sampler, machine: busy })
+    expect(contended.s.runs[1].peakSharedGpuBytes.value).toBeGreaterThan(1.9 * GiB)
+  })
+
   it('L2: an explicit ladder that reaches the required rung is honoured (no 2K–16K extras)', async () => {
     const m = { ...model, ctxTrain: 131072 }
     const r = await run(() => ({}), { workload: 'long_context_coding', requiredContext: 65536, ladder: [32768, 65536] }, { models: [m] })

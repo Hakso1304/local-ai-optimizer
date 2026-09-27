@@ -1,4 +1,5 @@
 {
+  "_reconciliation": "DERIVED (calibration-ledger.md): totalMs values differ from the source warm means beyond rounding (e.g. L8 2K 1692 vs 1683.05); private WS is estimated; Q1 2K GPU 50 % has no valid warm observation; Q1 paramCount 1,543,714,304 vs session metadata 1,777,088,000; 64K VRAM uses 14.61-1.33 unlike calib-8b. Treat as a derived test fixture, not a copy of a measured run.",
  "_source": "docs/calibration-2026-09-27.md: warm run means; VRAM = adapter peak − idle baseline (per-PID proxy); RAM = private WS estimate (mmap excluded)",
  "vramBytes": 17095983104,
  "models": [

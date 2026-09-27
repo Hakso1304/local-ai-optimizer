@@ -14,7 +14,7 @@ import { detectCliffs, fmtCtx, isUsable, val } from '../scoring/cliff'
 import { recommend } from '../scoring/recommend'
 import { DEFAULT_SCORING_CONFIG, effectiveProfile, withProfile } from '../scoring/workloads'
 import { DEFAULT_CANDIDATE_RULES, estimateMemory, generateCandidates, machineFromProfile, rulesForRequest, type CandidateRules } from './candidates'
-import { LADDER_FILL, LADDER_PREDICT, PROMPT_VERSION, ladderPrompt } from './prompts'
+import { LADDER_FILL, LADDER_FILL_TOLERANCE, LADDER_PREDICT, LADDER_SIZE_ROUNDS, PROMPT_VERSION, ladderPrompt } from './prompts'
 import { RULES_VERSION } from '../interpret'
 import { BASELINE_GEN, genConfigsFor, genLabel, samplingFor, splitReasoning, summarizeGen, templateKwargsFor, type GenRow } from './gen'
 
@@ -35,6 +35,9 @@ export interface SessionBackend {
   /** Model chat template → raw prompt (llama-server POST /apply-template). */
   applyTemplate(messages: { role: string; content: string }[], opts?: { templateKwargs?: Record<string, unknown> }): Promise<string>
   cancel(): Promise<void>
+  /** Token count of text with the loaded model (llama-server POST /tokenize); optional — without it the ladder prompt
+   *  stays character-sized. */
+  tokenize?(text: string): Promise<number>
 }
 
 export interface SessionSampler {
@@ -420,6 +423,25 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   // Cancel during load kills the server immediately (not after the 120 s /health deadline).
   function loadCfg(cand: CandidateConfig, model: ModelMeta, ctx: number): LoadConfig { return { ...loadConfigFor(cand, model, ctx, rules), signal } }
 
+  /** ladder-2: resize the filler with the loaded model's tokenizer until the prompt is LADDER_FILL·ctx tokens. */
+  async function sizedLadderPrompt(ctx: number): Promise<string> {
+    const target = Math.floor(ctx * LADDER_FILL)
+    let fill = LADDER_FILL
+    let prompt = ladderPrompt(ctx, fill)
+    if (!backend.tokenize) return prompt
+    try {
+      for (let i = 0; i < LADDER_SIZE_ROUNDS; i++) {
+        const n = await backend.tokenize(prompt)
+        if (!(n > 0) || Math.abs(n - target) / target <= LADDER_FILL_TOLERANCE) break
+        fill = Math.min(fill * (target / n), 2) // ponytail: proportional resize; converges in 1–2 rounds on word filler
+        prompt = ladderPrompt(ctx, fill)
+      }
+    } catch (e) {
+      log('warn', `tokenize failed at ${ctx}; ladder prompt stays character-sized: ${(e as Error).message}`)
+    }
+    return prompt
+  }
+
   async function runStep(cand: CandidateConfig, model: ModelMeta, ctx: number, spillBase = 0): Promise<{ run: BenchmarkRunResult; detail: RunDetail }> {
     let pinned = 0 // host-pinned bytes, known once the load log is parsed
     const startedAt = clock.now()
@@ -552,7 +574,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       flush()
       return guard ? { status: 'fail' as const, kind: 'guard_abort' as const, reason: guard } : classify(error, timedOut)
     }
-    const prompt = ladderPrompt(ctx)
+    const prompt = await sizedLadderPrompt(ctx)
     const timeoutMs = cfg.promptTimeoutBaseMs + ctx * cfg.promptTimeoutPerCtxMs
     const reps: PromptResult[] = []
     const windows: [number, number][] = []

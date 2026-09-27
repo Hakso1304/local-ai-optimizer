@@ -27,9 +27,10 @@ nothing is guessed silently.
    - **Required context** (Auto / 32K / 64K / 128K): Auto uses the workload's default. A fixed value extends the
      context ladder to that size and only recommends configurations that reach it; the workload's TTFT tolerance
      then becomes advisory (a long prompt is allowed to take long).
-   - **Min decode t/s**: your preferred generation speed (blank = the workload's gate). It gates the recommendation,
-     except with a fixed Required context: if nothing reaching it is fast enough, the fastest one that reaches it is
-     recommended and marked "meets required context; below preferred speed". 20–30 t/s is fine for large-scale work.
+   - **Min decode t/s**: your floor for generation speed (blank = the workload's gate). It is a hard constraint and is
+     never overridden: with a fixed Required context, configurations that reach it but are slower are listed as
+     unmet-constraint alternatives, not recommended. 20–30 t/s is a common preference for large-scale work (a product
+     choice, not a measured threshold).
    - Any selection can be benchmarked regardless of these gates; they only decide what gets recommended.
 4. Results page: recommendation, charts, per-run telemetry, and the *Export* menu.
 

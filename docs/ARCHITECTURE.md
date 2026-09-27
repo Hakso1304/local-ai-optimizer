@@ -134,6 +134,7 @@ Flow:
        - Load errors map to failure kinds: `ConfigDriftError` (`/props` n_ctx < requested; larger/absent n_ctx and GPU layers/device are not compared, D17) → `config_drift`; exit reasons → `oom|device_lost|crash`; "healthy within" → `load_timeout`; otherwise `load_fail`.
      - A guard timer (1 s; 250 ms for heavy configs), running from the start of load, emits `telemetry` and trips `guard_abort` (kill during load, else `backend.cancel()`) if RAM available + mmap credit < floor or per-PID shared GPU memory > 2 GiB (heavy configs: spill recorded, next config). RAM is read from the OS on every poll, independent of typeperf; 3 polls with no reading at all trip it too (fail-safe).
        - The request error that this cancel causes is attributed to the guard: the guard reason wins over "cancelled".
+     - The ladder prompt is resized with the loaded model's tokenizer to 0.75·ctx tokens (`ladder-2`, `SessionBackend.tokenize`; character-sized if unavailable).
      - One size-matched warmup (sets `warm`), then `reps` measured prompts (median). Each rep emits `token-rate`.
      - If there are 0 samples after the reps, the runner waits for one real row until `firstSampleWaitMs` (3 s) after sampler start, then stops the sampler.
        - Peaks use all samples; averages use only the warmup+measure window.
