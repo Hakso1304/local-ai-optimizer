@@ -200,9 +200,12 @@ describe('runSession', () => {
     const m27 = { ...model, id: 'C:/models/q27b.gguf', fileBytes: Math.round(16.1 * GiB), layers: 64, nEmbd: 5120, heads: 40, headsKv: 8, keyLength: 128, valueLength: 128, nVocab: 152064 }
     const normal = await run(() => ({}), { workload: 'max_quality', modelIds: [m27.id], ladder: [2048] }, { models: [m27] })
     expect(normal.backend.calls.loads).toEqual([]) // does not fit → nothing to run
-    const h = await run(() => ({}), { workload: 'max_quality', modelIds: [m27.id], ladder: [2048], heavyMode: true }, { models: [m27] })
+    const h = await run(() => ({}), { workload: 'long_context_coding', modelIds: [m27.id], ladder: [2048], heavyMode: true }, { models: [m27] })
     const args = h.backend.calls.loads.map((l) => `${l.gpuLayers} ${l.device} ${(l.extraArgs ?? []).join(' ')}`)
     expect(args.some((a) => / -nkvo( |$)/.test(a))).toBe(true)
+    // Run order: KV-on-GPU rungs first, the -nkvo rung after them.
+    const kinds = h.backend.calls.loads.map((l) => ((l.extraArgs ?? []).includes('-nkvo') ? 'nkvo' : 'gpu'))
+    expect(kinds.lastIndexOf('gpu')).toBeLessThan(kinds.indexOf('nkvo'))
     // Partial-offload (heavy) loads run without mmap; the 8B-style full offload keeps the default.
     expect(h.backend.calls.loads.every((l) => (l.extraArgs ?? []).join(' ').includes('-lm none'))).toBe(true)
     const full = await run(() => ({}), { ladder: [2048] })

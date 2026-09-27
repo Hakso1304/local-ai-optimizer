@@ -26,7 +26,11 @@ describe('heavy-model candidate generation (27B, 16.1 GiB, 16 GB VRAM)', () => {
     const { candidates, rejected } = generateCandidates(M, m27, { backend: 'vulkan' }, WORKLOADS.max_quality, heavy)
     expect(candidates.length).toBeLessThanOrEqual(4)
     expect(candidates.every((c) => c.expectDegraded && !c.gpuLayersAll)).toBe(true)
-    const [short, target, nkvo] = candidates
+    const [short, target] = candidates
+    // 8K target: the target's KV costs < 8 layers vs 2K → no -nkvo rung (it lost to dropping ~5 layers at 2K).
+    expect(candidates.some((c) => c.kvOffload === false)).toBe(false)
+    const long = generateCandidates(M, m27, { backend: 'vulkan' }, WORKLOADS.long_context_coding, heavy).candidates
+    const nkvo = long.find((c) => c.kvOffload === false)!
     // 16.1 GiB file > 50% of 31 GiB RAM → the CPU baseline is skipped (it drove a real host to 1 GiB free).
     expect(candidates.some((c) => c.gpuLayers === 0)).toBe(false)
     expect(rejected.map((r) => r.reason)).toContain('CPU baseline skipped: model is >50% of system RAM')
@@ -36,10 +40,11 @@ describe('heavy-model candidate generation (27B, 16.1 GiB, 16 GB VRAM)', () => {
     expect(short.gpuLayers).toBeGreaterThan(target.gpuLayers) // fewer layers fit once the target ctx's KV is on the GPU
     expect(target.ctxSteps.at(-1)).toBe(8192) // Maximum Quality target
     expect(nkvo).toMatchObject({ kvOffload: false, id: expect.stringMatching(/\|nkvo$/) })
-    expect(nkvo.ctxSteps.at(-1)).toBeGreaterThan(target.ctxSteps.at(-1)!) // KV in RAM: reaches past the target ctx
+    expect(nkvo.ctxSteps.at(-1)).toBe(32768) // long target (declared 32K): KV in RAM reaches it
+    expect(nkvo.degradedReason).toMatch(/KV on CPU: slower decode than dropping ~5 layers at short ctx; useful only for long context$/)
     expect(cpu).toMatchObject({ gpuLayers: 0, device: null })
     expect(target.degradedReason).toMatch(/^weights 16\.1 GiB > VRAM budget 13\.7 GiB; \d+\/64 layers on GPU$/)
-    expect(nkvo.degradedReason).toMatch(/KV cache in system RAM \(-nkvo\)$/)
+    expect(nkvo.degradedReason).toMatch(/KV cache in system RAM \(-nkvo\); /)
   })
 
   it('heavy RAM check uses the resident part + a 4 GiB reserve (never below 4 GiB)', () => {
@@ -119,5 +124,24 @@ describe('heavy-model calibration: Qwen3.8-27B 55/65 layers vs Llama-3.1-8B full
     const rec = recommend(withQ(1, 0.6), MH, 'fast_assistant')
     expect(rec.best?.configId).toBe(L8)
     expect(rec.ranked.find((s) => s.configId === Q)!.gateFailures.join(' ')).toMatch(/decode 1[23]\.\d t\/s .* below the 30 t\/s minimum/)
+  })
+})
+
+describe('heavy 2K rows (real run 09:39): -nkvo is dominated at short ctx; MoE partial offload is much cheaper', () => {
+  const fh = load('calib-heavy-qwen38-rx9070.json')
+  const dec = (id: string) => fh.runs.find((r) => r.configId === id && r.ctx === 2048)!.decodeTps!
+  it('-nkvo decodes slower than simply dropping ~5 layers, in both families', () => {
+    expect(dec('qwen38|ngl=57|nkvo')).toBeLessThan(dec('qwen38|ngl=50'))
+    expect(dec('gemma4|ngl=26|nkvo')).toBeLessThan(dec('gemma4|ngl=21'))
+  })
+  it('the MoE (Gemma-4-26B-A4B) decodes ≥ 3.5× the dense 27B at a similar layer share', () => {
+    expect(dec('gemma4|ngl=21') / dec('qwen38|ngl=50')).toBeGreaterThan(3.5) // 21/30 = 70 % vs 50/65 = 77 %
+  })
+  it('heavy candidates for a MoE carry the note; -nkvo (when generated) is last before the CPU baseline', () => {
+    const g = fh.models.find((m) => m.id.startsWith('gemma4'))!
+    const cs = generateCandidates(M, g, { backend: 'vulkan' }, WORKLOADS.long_context_coding, heavy).candidates
+    expect(cs.every((c) => c.notes.some((n) => n.startsWith('MoE (128 experts, 8 active per token)')))).toBe(true)
+    const nk = cs.findIndex((c) => c.kvOffload === false)
+    if (nk >= 0) expect(cs.slice(nk + 1).every((c) => c.gpuLayers === 0)).toBe(true)
   })
 })

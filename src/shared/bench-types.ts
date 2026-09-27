@@ -88,6 +88,9 @@ export interface ModelMeta {
   valueLengthSwa?: number | null
   /** Chat template supports a reasoning toggle ("enable_thinking"); quality then runs with thinking disabled. */
   supportsThinking?: boolean
+  /** MoE: `<arch>.expert_count` / `<arch>.expert_used_count` (gemma4: 128 / 8). Absent or 0 = dense. */
+  expertCount?: number | null
+  expertUsedCount?: number | null
 }
 
 export type KvType = 'f16' | 'q8_0'

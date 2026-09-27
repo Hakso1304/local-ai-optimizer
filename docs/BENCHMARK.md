@@ -204,7 +204,9 @@ Estimates are `kind:'estimated'`, prune only, and never rank.
   2. ngl=all q8_0 KV, when targetContext ≥ 32K and declared ≥ 32K.
   3. If (1) is rejected: **normal mode generates nothing more.** The rejection says "full GPU offload does not fit — enable heavy-model mode". **Heavy mode** (`SessionRequest.heavyMode`) generates up to 4 partial configs, all `expectDegraded` with a `degradedReason`:
      - the max ngl that fits at the target ctx, and that ngl − 4 (so an edge spill still leaves a clean config);
-     - the max ngl with KV in RAM (`kvOffload:false` → `-nkvo`, verified in b11208 `--help`);
+     - the KV-in-RAM (`-nkvo`) rung is generated **only when the target ctx's KV costs ≥ 8 layers** vs the smallest ctx (`nkvoMinLayerGain`), and it runs after the KV-on-GPU rungs. Measured at 2K: 57-nkvo 7.4 t/s vs 50 layers 10.7 (Qwen3.8); 26-nkvo 27.0 vs 21 layers 38.5 (Gemma-4);
+     - MoE models (`expertCount` > 0) get the note that active parameters are much smaller, so partial offload is cheaper (Gemma-4-26B-A4B 38.5 t/s at 21/30 layers vs dense Qwen3.8-27B 10.7 t/s at 50/65). There is no formula change;
+     - the max ngl with KV in RAM (`kvOffload:false` → `-nkvo`, verified in b11208 `--help`), when the rule above allows it;
      - a CPU baseline (ngl 0, `-dev none`).
      Heavy configs load **without mmap** (`-lm none`): with mmap the whole GGUF stayed resident (16.4 GB file → ≈17 GiB less available RAM at 55/65 layers). Their VRAM estimate adds the output projection (n_vocab × n_embd at the file's bits/weight) and vocab-sized logits: ngl 62 of Qwen3.8 spilled 2.31 GiB, which the old estimate had called a fit. A shared spill > 2 GiB on a heavy config is recorded (degraded + spill reason) and the ladder moves to the next config instead of aborting. The RAM floor still aborts.
      The RAM check uses `ramResidentBytes` (non-GPU weights + CPU KV + 0.5 GiB, **+1.5 GiB more at ngl 0**) vs available − 4 GiB. There is no keep-over step.

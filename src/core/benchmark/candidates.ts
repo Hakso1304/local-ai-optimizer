@@ -37,6 +37,10 @@ export const DEFAULT_CANDIDATE_RULES = {
   /** q8_0 KV variant only when both the workload target and the declared ctx reach this. */
   longContextMin: 32768,
   maxPerModel: 4,
+  /** Heavy mode adds the -nkvo rung only when putting the target ctx's KV on the GPU costs ≥ this many layers vs the
+   *  smallest ctx. Measured at 2K: -nkvo lost to simply dropping ~5 layers (Qwen3.8 57-nkvo 7.4 vs 50 layers 10.7
+   *  t/s; Gemma-4 26-nkvo 27.0 vs 21 layers 38.5 t/s) — useful only when the KV itself is what doesn't fit. */
+  nkvoMinLayerGain: 8,
   ubatch: 512
 }
 export type CandidateRules = typeof DEFAULT_CANDIDATE_RULES
@@ -228,7 +232,11 @@ export function generateCandidates(
       ? [[maxNgl(ladder[0], true), true], [maxNgl(ladder[0], false), false], [0, true]]
       // Two rungs at the target ctx (max ngl and max ngl − 4, so a spill at the edge still leaves a clean config the
       // scores can pick), KV-in-RAM, CPU baseline. The old max-ngl@2K probe is dropped to keep ≤ 4 configs.
-      : [[maxNgl(target, true), true], [Math.max(1, maxNgl(target, true) - 4), true], [maxNgl(target, false), false], [0, true]]
+      : [
+          [maxNgl(target, true), true], [Math.max(1, maxNgl(target, true) - 4), true],
+          ...(maxNgl(ladder[0], true) - maxNgl(target, true) >= rules.nkvoMinLayerGain ? [[maxNgl(target, false), false] as [number, boolean]] : []),
+          [0, true]
+        ]
     const seen = new Set<string>()
     const ramTotal = num(machine.ramTotalBytes)
     plans.forEach(([n, kvOnGpu], i) => {
@@ -246,9 +254,10 @@ export function generateCandidates(
       c.mmap = false
       c.notes.push('loaded without mmap (-lm none): host RAM ≈ CPU-side layers + KV')
       c.degradedReason = n === 0 ? `${why}; CPU-only baseline (0/${model.layers} layers on GPU)`
-        : `${why}; ${n}/${model.layers} layers on GPU${kvOnGpu ? '' : ', KV cache in system RAM (-nkvo)'}`
+        : `${why}; ${n}/${model.layers} layers on GPU${kvOnGpu ? '' : ', KV cache in system RAM (-nkvo); KV on CPU: slower decode than dropping ~5 layers at short ctx; useful only for long context'}`
       if (kvUnknown) c.degradedReason += '; KV size unknown'
       c.notes.push(`heavy mode: ${c.degradedReason}`)
+      if (model.expertCount) c.notes.push(`MoE (${model.expertCount} experts, ${model.expertUsedCount ?? '?'} active per token): active parameters are much smaller, so partial offload costs less decode speed than on a dense model (measured: Gemma-4-26B-A4B 38.5 t/s at 21/30 layers vs dense Qwen3.8-27B 10.7 t/s at 50/65)`)
       add(c)
     })
   }

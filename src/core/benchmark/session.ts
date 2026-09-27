@@ -198,8 +198,10 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     // Full-offload configs first (cheapest estimate first). Heavy configs after them, most-offloaded first and CPU
     // baselines last, so quality/recommendation exist even if a later, riskier config aborts.
     const share = (c: CandidateConfig, m: ModelMeta) => (c.gpuLayersAll ? 1 : c.gpuLayers / m.layers)
+    // Within heavy configs: KV-on-GPU rungs by layer share, then -nkvo (dominated at short ctx), then the CPU baseline.
+    const heavyRank = (c: CandidateConfig) => (c.gpuLayers === 0 ? 2 : c.kvOffload === false ? 1 : 0)
     plan.sort((a, b) => Number(!!a.cand.expectDegraded) - Number(!!b.cand.expectDegraded) ||
-      (a.cand.expectDegraded ? share(b.cand, b.model) - share(a.cand, a.model) : 0) ||
+      (a.cand.expectDegraded ? heavyRank(a.cand) - heavyRank(b.cand) || share(b.cand, b.model) - share(a.cand, a.model) : 0) ||
       est(a.cand) - est(b.cand) || (a.cand.id < b.cand.id ? -1 : 1))
     send({ type: 'session:started', workload: req.workload, modelIds: req.modelIds, resumed: !!req.resumeSessionId, candidates: plan.length })
 
