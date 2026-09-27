@@ -1,4 +1,6 @@
 // Types shared between main, preload and renderer. No runtime code here.
+import type { BenchmarkRunResult, CandidateConfig, CliffReport, ModelMeta, QualityResult, Recommendation, WorkloadId, WorkloadProfile, WorkloadScore } from './bench-types'
+import type { SessionEvent, SessionRequest } from './bench-events'
 
 export type Status = 'available' | 'unavailable' | 'unsupported'
 
@@ -116,10 +118,68 @@ export interface SmokeResult {
   prompt: PromptResult
 }
 
+/** userData/settings.json */
+export interface AppSettings {
+  workload?: WorkloadId
+  modelDirs?: string[]
+}
+
+export type StartResult = { ok: true; sessionId: string } | { ok: false; error: string }
+
 /** API exposed to the renderer by preload (window.api). */
 export interface RendererApi {
+  getSettings(): Promise<AppSettings>
+  setWorkload(w: WorkloadId): Promise<AppSettings>
+  listWorkloads(): Promise<WorkloadProfile[]>
+  listSessions(): Promise<SessionSummary[]>
+  getSession(id: number): Promise<SessionDetail | null>
+  latestRecommendation(w: WorkloadId): Promise<{ sessionId: number; recommendation: Recommendation } | null>
+  startBench(req: SessionRequest): Promise<StartResult>
+  cancelBench(): Promise<{ ok: boolean; error?: string }>
+  /** Subscribe to bench:event; returns an unsubscribe function. */
+  onBenchEvent(cb: (e: SessionEvent) => void): () => void
   scanSystem(): Promise<SystemProfile>
   detectRuntimes(): Promise<RuntimeDetection[]>
   listModels(): Promise<ModelInfo[]>
   benchSmoke(modelPath: string): Promise<SmokeResult>
+}
+
+// ---- Stored sessions (read side). Payload contract for benchmark_session / benchmark_run / recommendation rows. ----
+
+/** benchmark_session.payload */
+export interface SessionPayload {
+  workload: WorkloadId
+  /** DEMO data (LAO_SEED_DEMO): must be flagged in every view and never used as a real recommendation. */
+  demo?: boolean
+  label?: string
+  /** Declared VRAM of the bench GPU, for cliff/spill rules. */
+  vramBytes: number | null
+  candidates: { config: CandidateConfig; model: ModelMeta }[]
+}
+
+export interface SessionSummary {
+  id: number
+  createdAt: string
+  status: string
+  workload: WorkloadId
+  demo: boolean
+  label: string | null
+  candidateCount: number
+  bestConfigId: string | null
+}
+
+export interface SessionCandidate {
+  config: CandidateConfig
+  model: ModelMeta
+  runs: BenchmarkRunResult[]
+  /** Recomputed from the stored runs on read (pure scoring code), not stored. */
+  cliff: CliffReport
+  score: WorkloadScore | null
+  quality: QualityResult[]
+}
+
+export interface SessionDetail {
+  session: SessionSummary
+  candidates: SessionCandidate[]
+  recommendation: Recommendation | null
 }
