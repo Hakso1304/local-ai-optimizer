@@ -84,7 +84,7 @@ function wrap(b: LlamaCppBackend): SessionBackend {
 }
 
 const servers = () =>
-  execFileSync('tasklist', ['/FI', 'IMAGENAME eq llama-server.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8' }).split('\n').filter((l) => /^"llama-server\.exe"/i.test(l)).length
+  execFileSync('tasklist', ['/FI', 'IMAGENAME eq llama-server.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true }).split('\n').filter((l) => /^"llama-server\.exe"/i.test(l)).length
 
 async function main(): Promise<void> {
   for (let i = 0; servers() > 0; i++) {
@@ -139,7 +139,7 @@ async function main(): Promise<void> {
   const pidFile = join(tmpdir(), `lao-session-${scenario}.pid`)
   // --db <optimizer.db>: persist through the app's own storage (makeSessionStorage + planFor, as main.ts does), so the
   // session shows up in the app (Results / Dashboard) and resume/read-time reinterpretation work on it.
-  const git = (args: string[]) => { try { return execFileSync('git', args, { encoding: 'utf8' }).trim() } catch { return null } }
+  const git = (args: string[]) => { try { return execFileSync('git', args, { encoding: 'utf8', windowsHide: true }).trim() } catch { return null } }
   const gitState = { head: git(['rev-parse', 'HEAD']), dirty: (git(['status', '--porcelain']) ?? '').split('\n').filter(Boolean) }
   const planFor: PlanFor = (r) => {
     const mach = machineFromProfile(machine, dev?.id ?? null)

@@ -11,7 +11,7 @@ import { buildQualityPrompts, defaultTestSet, evaluateAsync, qualityScore, type 
 const MODELS = ['D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf', 'D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf']
 const ctx = Number(process.argv[2] ?? 16384)
 const servers = () =>
-  execFileSync('tasklist', ['/FI', 'IMAGENAME eq llama-server.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8' }).split('\n').filter((l) => /^"llama-server\.exe"/i.test(l)).length
+  execFileSync('tasklist', ['/FI', 'IMAGENAME eq llama-server.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true }).split('\n').filter((l) => /^"llama-server\.exe"/i.test(l)).length
 
 async function main(): Promise<void> {
   const b = new LlamaCppBackend(join('vendor', 'llama.cpp'))

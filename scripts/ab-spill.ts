@@ -28,13 +28,13 @@ const baseArgv = (ctx: number, extra: string[] = [], dev = 'Vulkan0') => ['-m', 
 
 /** Backend's own view (llama-server --list-devices): total/free MiB per device. */
 function listDevices(exe = EXE): string[] {
-  try { return execFileSync(exe, ['--list-devices'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).split(/\r?\n/).filter((l) => /MiB/.test(l)).map((l) => l.trim()) } catch (e) { return [`error: ${(e as Error).message.slice(0, 120)}`] }
+  try { return execFileSync(exe, ['--list-devices'], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).split(/\r?\n/).filter((l) => /MiB/.test(l)).map((l) => l.trim()) } catch (e) { return [`error: ${(e as Error).message.slice(0, 120)}`] }
 }
 function vulkanHeaps(): string {
-  try { return execFileSync('vulkaninfo', ['--summary'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).split(/\r?\n/).filter((l) => /heap|MEMORY_HEAP|size\s*=/i.test(l)).slice(0, 30).join('\n') } catch { return 'vulkaninfo not available (skipped)' }
+  try { return execFileSync('vulkaninfo', ['--summary'], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).split(/\r?\n/).filter((l) => /heap|MEMORY_HEAP|size\s*=/i.test(l)).slice(0, 30).join('\n') } catch { return 'vulkaninfo not available (skipped)' }
 }
 
-const servers = () => execFileSync('tasklist', ['/FI', 'IMAGENAME eq llama-server.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8' }).split('\n').filter((l) => /^"llama-server\.exe"/i.test(l)).length
+const servers = () => execFileSync('tasklist', ['/FI', 'IMAGENAME eq llama-server.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true }).split('\n').filter((l) => /^"llama-server\.exe"/i.test(l)).length
 
 interface Row { t: number; pidDed: number | null; pidShr: number | null; adapterDed: Record<string, number>; adapterShr: Record<string, number> }
 function sampler(pid: number) {

@@ -75,7 +75,7 @@ function typeperf(pid: number | null, count?: number) {
 }
 
 function llamaServers(): number {
-  const o = execFileSync('tasklist', ['/FI', 'IMAGENAME eq llama-server.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8' })
+  const o = execFileSync('tasklist', ['/FI', 'IMAGENAME eq llama-server.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true })
   return o.split('\n').filter((l) => /^"llama-server\.exe"/i.test(l)).length
 }
 async function waitNoServer(): Promise<void> {
