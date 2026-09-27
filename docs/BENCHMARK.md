@@ -34,8 +34,12 @@ A step is one candidate config at one context size. The server is started with `
 | `warm` | true when the size-matched warmup succeeded before the measured reps (X13) | — |
 | `versions` | `{benchmark: BENCHMARK_VERSION ('bench-1.0.0'), prompts: PROMPT_VERSION ('ladder-1'), quality: 'qb-1.0.0', runtime: SessionDeps.runtimeVersion}` (X17) | declared |
 
-- Telemetry: `startSampler({pid})` (`src/core/telemetry/sampler.ts`) runs `typeperf -si 1`. It starts after load (on the new pid), so the load-phase CPU spike is outside the averages, and it runs through warmup and reps.
-- When a step collects **0 samples** (typeperf needs ~2 s before its first row), every telemetry field is `unavailable` rather than 0.
+- Telemetry: `startSampler({pid})` (`src/core/telemetry/sampler.ts`) runs `typeperf -si 1`.
+  - It starts **during load**, as soon as the new server pid exists, and runs through warmup and reps.
+  - Peaks (`peak*Bytes`) use every sample; memory stays allocated after load.
+  - Averages (`avgGpuUtil`, `avgCpuUtil`) use only the warmup+measure window, so the load CPU spike is excluded (X10).
+- Short steps: typeperf needs ~2 s for its first row, and a 0.5B step can finish in ~1.5 s. After the reps the runner waits up to `firstSampleWaitMs` = 3 s (from sampler start) for one real row. If there are still **0 samples**, every telemetry field is `unavailable` rather than 0.
+- PDH glitch rows (an impossible percentage, with garbage in the other cells) are dropped whole by the sampler.
 
 ## 3. Context ladder, warmup, reps
 
@@ -45,10 +49,10 @@ A step is one candidate config at one context size. The server is started with `
 - Reps: `reps = 2` measured prompts. The first failing rep fails the step.
 - Timeouts: prompt `60 s + 10 ms × ctx`; load 120 s (inside the backend); quality 180 s per test.
 - Pre-check before each step: est. RAM (`estimateMemory`) > live available − floor, where floor = max(2 GiB, 8 % of RAM) → `fail / skipped_memory`, and the model is not loaded.
-- In-step guard (1 s poll of new samples): RAM available < floor, or per-PID shared > 2 GiB → `backend.cancel()` → `fail / guard_abort`.
+- In-step guard (1 s poll of new samples): RAM available < floor, or per-PID shared > 2 GiB → `backend.cancel()` → `fail / guard_abort`. The guard reason is recorded, not the "cancelled" error its own cancel caused.
 
 ### Stop rules (per candidate)
-1. The first **FAIL** verdict (§6): oom, device_lost, crash, load_fail, load_timeout, req_timeout, request_error, guard_abort, skipped_memory, cancelled.
+1. The first **FAIL** verdict (§6): oom, device_lost, crash, load_fail, load_timeout, config_drift, req_timeout, request_error, guard_abort, skipped_memory, cancelled.
 2. **2 consecutive DEGRADED** steps (`maxConsecutiveDegraded`). The step right after a cliff therefore still runs.
 3. Cancel, or a lost device. `device_lost` also skips every later GPU candidate in the session.
 
@@ -60,6 +64,7 @@ A step is one candidate config at one context size. The server is started with `
 |---|---|
 | `oom` / `device_lost` / `crash` | from `lastExit.reason` (`classifyExit` on the stderr tail: allocation failure → oom; DeviceLost → device_lost; otherwise crash) |
 | `load_fail` / `load_timeout` | loadModel threw without an exit, or with "did not become healthy within 120s" |
+| `config_drift` | loadModel threw `ConfigDriftError`: `/props` n_ctx ≠ the requested `-c` (e.g. 48K requested, 32K served = ctx_train) |
 | `req_timeout` | `PromptResult.timedOut` |
 | `request_error` | a request error with the server still alive |
 | `guard_abort` / `skipped_memory` | the safety guards in §3 |
@@ -193,13 +198,13 @@ Estimates are `kind:'estimated'`, prune only, and never rank.
   - VRAM total unavailable → no VRAM pruning (with a note).
   - SWA/hybrid/recurrent archs prune on weights only.
 
-## 10. Known limitations
-- **GPU util outliers:** the calibration shows GPU util samples of ~1e13 % (the 8B @ 32K/64K run1 rows). The sampler does not clamp `gpuUtilPct` to 0–100, so `avgGpuUtil` can be poisoned. GPU util is not used by scoring or cliff rules today, but it is displayed.
-- **One GPU:** the thresholds and profiles are calibrated on one GPU (RX 9070 XT, WDDM) with two models (8B and 14B). NVIDIA/WDDM spill points may differ.
-- **No `ignore_eos`:** `runPrompt` doesn't send it, so short generations make decode TPS noisier. No CV-based extra reps are taken (DESIGN §3.4 is not implemented).
-- **Thinking models:** the ×4 quality token boost is off (`ModelMeta` has no `supportsThinking`).
-- **Sticky degraded verdict:** a real ≥ 40 % transient dip that recovers still ends the practical ceiling.
-- **Prompt sizing:** assumes ≈ 4 chars/token (0.75 fill as slack). Real prompt_n was ≈ 0.75·ctx on the calibration models (e.g. 12289 at 16K).
-- **Hardcoded load timeout:** the 120 s load timeout is not configurable.
-- **No cross-session comparison:** results from different sessions are not compared. Within a session, mixed `versions` only produce a warning reason.
-- **Runner not wired to the UI:** see ARCHITECTURE §8.
+## 10. Export (`src/core/export/config.ts`)
+- `exportConfigFrom(rec, cand, model, sessionId)` takes the winner at `recommendedCtx`.
+- `toLlamaServerArgs/Command` reproduce the measured launch: `-dev`, `-fit off`, `-c`, `-ngl 999|n`, `-t`, `-b 2048 -ub 512`, `-fa`, `-ctk/-ctv` for q8_0, `--parallel 1`.
+- `toOllamaModelfile(c, {from})` emits FROM plus num_ctx / num_gpu / num_thread / num_batch, with flash attention and KV type as env-var comments.
+- `toLmStudioSettings` uses lmstudio-js keys.
+- `toJson` bundles every format, and `provenanceNote(rec)` says which inputs were measured, estimated or unavailable.
+- The Ollama and LM Studio outputs are unverified, because neither app is installed.
+
+## 11. Known limitations
+See `docs/LIMITATIONS.md`.
