@@ -27,8 +27,9 @@ nothing is guessed silently.
    - **Required context** (Auto / 32K / 64K / 128K): Auto uses the workload's default. A fixed value extends the
      context ladder to that size and only recommends configurations that reach it; the workload's TTFT tolerance
      then becomes advisory (a long prompt is allowed to take long).
-   - **Min decode t/s**: your own usability floor for generation speed (blank = the workload's gate); 20–30 t/s is
-     fine for large-scale work.
+   - **Min decode t/s**: your preferred generation speed (blank = the workload's gate). It gates the recommendation,
+     except with a fixed Required context: if nothing reaching it is fast enough, the fastest one that reaches it is
+     recommended and marked "meets required context; below preferred speed". 20–30 t/s is fine for large-scale work.
    - Any selection can be benchmarked regardless of these gates; they only decide what gets recommended.
 4. Results page: recommendation, charts, per-run telemetry, and the *Export* menu.
 
@@ -100,11 +101,11 @@ counters. A rung is flagged degraded or failed on crashes, OOM, sharp speed drop
 memory; the last clean rung is the *practical context ceiling*.
 
 After the ladder, the quality suite (17 deterministic tests: instruction following, reasoning, code, structured
-output, extraction, long-context recall) runs once per model at a context that passed. Scores for quality, speed,
+output, extraction, long-context recall) runs once per model on a context rung that passed (a CPU / KV-in-RAM config only if nothing else passed); thinking-capable models are also run with thinking on at low and medium effort. Scores for quality, speed,
 prefill, latency, memory headroom, stability and context are weighted per workload; candidates failing a
-workload's gates (quality floor, minimum context, stability) are not recommended. The Results page shows the
-comparison, context/memory scaling charts with the cliff marked, the reasons verbatim, and an export of the exact
-llama-server command.
+workload's gates (measured quality for quality-weighted workloads, quality floor, minimum context, latency, stability) are not recommended; every reason cites its interpretation rule (docs/INTERPRETATION.md). The Results page shows the
+comparison, context/memory scaling charts with the cliff marked, the reasons verbatim, and an export of the
+benchmarked llama-server parameters.
 
 ## Current limitations
 
@@ -114,7 +115,7 @@ The full, code-checked list is in [docs/LIMITATIONS.md](docs/LIMITATIONS.md). Hi
   nvidia-smi is fixture-tested only
 - Telemetry uses English performance-counter names; on localized Windows those fields show unavailable
 - 1 s telemetry granularity: very short steps may have no samples (shown as unavailable, never 0)
-- Calibrated on one GPU (RX 9070 XT 16 GB) and two model families; the CUDA runtime path is untested on NVIDIA hardware
+- Calibrated on one GPU (RX 9070 XT 16 GB): Llama-3.1-8B, Qwen2.5-1.5B/14B full offload; Qwen3.8-27B and Gemma-4-26B-A4B partial offload. The CUDA runtime path is untested on NVIDIA hardware
 - The quality suite is small (17 tests): a relative signal, not a leaderboard
 - Windows only; packaged builds are unsigned (SmartScreen will warn)
 

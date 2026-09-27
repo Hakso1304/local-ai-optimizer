@@ -56,7 +56,7 @@ Events go to every window on `bench:event`, and the renderer folds them in `benc
 - At startup, `markInterrupted` turns sessions left `running` by a killed app into `interrupted`; those are resumable too.
 
 **Results.** `sessions:list`, `sessions:get` and `recommendation:latest` read `core/storage/sessions.ts`. `getSession` recomputes `detectCliffs` from the stored runs, so cliff verdicts always reflect the current code.
-- **Export** (wired in e31dc64): `ExportMenu.tsx` uses `core/export/config.ts`. It offers the llama-server command (mirrors the measured launch exactly), an Ollama Modelfile, LM Studio settings (unverified keys), JSON and the provenance note, saved via `file:save`.
+- **Export** (wired in e31dc64): `ExportMenu.tsx` uses `core/export/config.ts`. It offers the llama-server command (the benchmarked inference parameters), an Ollama Modelfile, LM Studio settings (unverified keys), JSON and the provenance note, saved via `file:save`.
 - **Per-run telemetry:** `telemetry:run(runId)` → `TelemetryChart.tsx`, showing GPU/CPU % and per-PID VRAM/shared/private GiB over time, with gaps for null readings.
 
 **Hugging Face download** (`core/hub/hf.ts`, `main/hub.ts`, `preload/hub.ts`, `HubPage.tsx`, wired in fa491b0):
@@ -124,14 +124,14 @@ Integrated in acbd169:
 
 Flow:
 1. `createSession`, or reuse `req.resumeSessionId` → status `running` → `session:started`.
-2. For each requested model, `generateCandidates(machineFromProfile(...), model, ...)`. Rejections are logged. All candidates across models are sorted by estimated VRAM+RAM ascending, then by id.
+2. For each requested model, `generateCandidates(machineFromProfile(...), model, ...)`. Rejections are logged. Order: full-offload configs first, then heavy configs (KV-on-GPU by offload share, then -nkvo, then CPU baselines), then estimated VRAM+RAM ascending, then id (D26).
 3. For each candidate (`candidate:started`):
    - If the GPU was lost earlier in the session, a GPU candidate is skipped.
    - For each ctx in `cand.ctxSteps` (2K…128K ∩ declared ctx ∩ VRAM estimate, ∩ `req.ladder`): a step already stored for this session is reused. Otherwise `runStep`:
      - Unload the previous step's server (and wait for exit), then the live RAM pre-check: resident estimate > available − floor → `fail/skipped_memory` without loading.
      - `loadModel` (with the session `signal`, so a cancel kills a loading server at once) with `-c ctx`, `-ngl 999|n`, `--device`, `-t`, `-b 2048`, `-ub 512`, `-fa on`, plus `-ctk/-ctv q8_0` for q8 candidates. The KV cache is allocated at load, so each step restarts the server.
        - A 50 ms poll starts the sampler once `backend.pid` changes, so typeperf's ~2 s start-up overlaps the load.
-       - Load errors map to failure kinds: `ConfigDriftError` (`/props` n_ctx ≠ requested) → `config_drift`; exit reasons → `oom|device_lost|crash`; "healthy within" → `load_timeout`; otherwise `load_fail`.
+       - Load errors map to failure kinds: `ConfigDriftError` (`/props` n_ctx < requested; larger/absent n_ctx and GPU layers/device are not compared, D17) → `config_drift`; exit reasons → `oom|device_lost|crash`; "healthy within" → `load_timeout`; otherwise `load_fail`.
      - A guard timer (1 s; 250 ms for heavy configs), running from the start of load, emits `telemetry` and trips `guard_abort` (kill during load, else `backend.cancel()`) if RAM available + mmap credit < floor or per-PID shared GPU memory > 2 GiB (heavy configs: spill recorded, next config). RAM is read from the OS on every poll, independent of typeperf; 3 polls with no reading at all trip it too (fail-safe).
        - The request error that this cancel causes is attributed to the guard: the guard reason wins over "cancelled".
      - One size-matched warmup (sets `warm`), then `reps` measured prompts (median). Each rep emits `token-rate`.
@@ -165,9 +165,9 @@ Every method may be sync or async. For the event list see `src/shared/bench-even
 
 | Guard | Where | Rule |
 |---|---|---|
-| Explicit config | `llamacpp.loadModel` | `-fit off`, explicit `-c`, `-ngl` and `--device`, and `--parallel 1`, so llama-server never silently changes the config. `/props` n_ctx ≠ requested → `ConfigDriftError` (e.g. Qwen2.5 served 32K when 48K was requested). |
+| Explicit config | `llamacpp.loadModel` | `-fit off`, explicit `-c`, `-ngl` and `--device`, and `--parallel 1`, so llama-server does not fit-adjust the config. `/props` n_ctx smaller than requested → `ConfigDriftError` (e.g. Qwen2.5 served 32K when 48K was requested). |
 | Discrete device only | `pickDiscreteDevice`, `machineFromProfile` | iGPU names are excluded, and the largest non-integrated GPU supplies the VRAM total. |
-| Memory pre-pruning | `candidates.ts` | RAM est (whole mmap'd file) > available − 4 GiB → step skipped (never kept). VRAM est > total − in-use − 1 GiB → the first such step is kept once if ≤ 1.15× the budget; the rest are skipped. |
+| Memory pre-pruning | `candidates.ts` | RAM est (resident part: non-GPU weights + CPU KV + 0.5 GiB, +1.5 GiB at ngl 0) > available − 4 GiB → step skipped (never kept). VRAM est > total − in-use − 1 GiB → the first such step is kept once if ≤ 1.15× the budget; the rest are skipped. |
 | Live RAM floor | `session.ts` | Before each step and the quality load: est RAM > live available − max(4 GiB, 8 % RAM) → `skipped_memory`. From the start of load (250 ms poll for heavy configs): OS RAM available (else the telemetry row) + mmap credit < floor → kill (during load) or cancel → `guard_abort`. 3 blind polls → `guard_abort` (fail-safe). |
 | Spill abort | `session.ts` | Per-PID shared GPU memory > 2 GiB → cancel, `guard_abort` (the guard reason takes precedence over the resulting "cancelled"). Heavy configs record it and move on. |
 | Telemetry glitches | `sampler.ts` | Percentages in (100, 1000] are clamped to 100; rows with a negative or > 1000 value (e.g. 1.3e13 % GPU util) are dropped whole, and the drop counts go to `samplerErrors`. |
@@ -179,7 +179,7 @@ Every method may be sync or async. For the event list see `src/shared/bench-even
 | Model code | `quality/sandbox.ts` | Runs in a child process (`ELECTRON_RUN_AS_NODE`, `--permission`, `--max-old-space-size`, fresh vm context, timeout, 64 KB stdout cap). Not in a worker, because a heap blow-up there aborts the host. Strict host code, `Error` frozen in the context, thrown values never read through getters/`toString`. RSS cap: the child checks its arrayBuffers/RSS after the run and the parent polls its working set every 250 ms (kill > 1.5× cap + 48 MiB); a burst shorter than one poll can briefly exceed it (no Job Object). |
 | Demo data isolation | `main/index.ts` | `LAO_SEED_DEMO=1` uses a separate `optimizer-demo.db`, and demo sessions are excluded from `latestRecommendation`. |
 | Request validation | `main/validate.ts` | Renderer requests are sanitized: whitelisted rule keys, reps and ladder clamped, model paths resolved and checked to be inside a root. |
-| Uninstall | `build/installer.nsh` | The NSIS uninstall kills only the llama-server whose pid is in the app's pid file. userData is kept on purpose. |
+| Uninstall | `build/installer.nsh` | The NSIS uninstall kills the llama-server in the app's pid file only after verifying its exe path and start time (a process it cannot verify is left alone). userData is kept on purpose. |
 
 ## 6. Persistence (`src/core/storage/db.ts`)
 
@@ -203,7 +203,7 @@ Every method may be sync or async. For the event list see `src/shared/bench-even
 
 ## 7. Tests
 
-`npm test` (vitest, `tests/**/*.test.ts`) needs no GPU, network or real inference. It covers:
+`npm test` (vitest, `tests/**/*.test.ts`) needs no GPU, internet or real model inference; some tests bind local loopback sockets (hub, llama-server lifecycle). It covers:
 - **Scanner:** a real captured PowerShell JSON.
 - **llama.cpp:** lifecycle tests with a fake child process and `parse.ts`.
 - **GGUF:** synthetic buffers.

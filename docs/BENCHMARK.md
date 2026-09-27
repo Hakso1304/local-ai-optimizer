@@ -1,13 +1,13 @@
 # Benchmark methodology — Local AI Optimizer
 
 This document describes what the code measures and how it scores, as implemented. Constants are quoted from code, and the file paths are authoritative when this document and the code disagree.
-- Scoring config: `DEFAULT_SCORING_CONFIG` (`src/core/scoring/workloads.ts`, version `scoring-1.0.0`).
+- Scoring config: `DEFAULT_SCORING_CONFIG` (`src/core/scoring/workloads.ts`, version `scoring-1.1.0`). Every decision is a rule in `src/core/interpret/rules.v1.json` (`interp-1`, from `docs/INTERPRETATION.md`); reasons cite the rule id.
 - Session config: `DEFAULT_SESSION_CONFIG` (`src/core/benchmark/session.ts`).
 - Candidate rules: `DEFAULT_CANDIDATE_RULES` (`src/core/benchmark/candidates.ts`).
 
 ## 1. Provenance
 
-Every reported number is a `Metric { value, kind, source?, reason? }` (`src/shared/bench-types.ts`). `value === null` iff `kind === 'unavailable'`, and unknown is never 0.
+Every measured/estimated metric field is a `Metric { value, kind, source?, reason? }` (`src/shared/bench-types.ts`); plain numbers such as `ctx`, `promptTokens`, scores and weights are not (D26). `value === null` iff `kind === 'unavailable'`, and unknown is never 0.
 
 | kind | Meaning | Examples |
 |---|---|---|
@@ -27,7 +27,9 @@ A step is one candidate config at one context size. The server is started with `
 | `prefillTps`, `decodeTps` | `timings` `prompt_n/prompt_ms`, `predicted_n/predicted_ms` (`parse.ts` `toPromptResult`) | measured. Without timings: `promptTokens/TTFT` and `decodeTokens/(total−TTFT)`, estimated (A12) |
 | `totalMs` | client wall clock | measured |
 | `peakVramBytes` | max per-PID `GPU Process Memory\Dedicated Usage` | measured |
-| `peakSharedGpuBytes` | max per-PID `GPU Process Memory\Shared Usage` (spill signal, never adapter totals) | measured |
+| `peakSharedGpuBytes` | **adjusted spill**: max per-PID `GPU Process Memory\Shared Usage` − host-pinned buffers − the config's unsaturated first-step level, counted only while dedicated ≥ 80 % (never adapter totals) | measured |
+| `peakSharedGpuRawBytes`, `hostPinnedBytes` | raw per-PID shared peak; host-side buffers from the load log | measured / declared |
+| `repDecodeTps`, `minRamAvailBytes` | decode of each rep (rep-variance rule I-6.1); lowest RAM available seen by the guard (I-4.3) | measured |
 | `peakRamBytes` | max `Process V2(llama-server:<pid>)\Working Set - Private` (excludes the mmap file cache) | measured |
 | `avgGpuUtil`, `avgCpuUtil` | mean over samples: GPU = max over the PID's 3D/Compute engine groups; CPU = `Processor(_Total)` | measured |
 | `status`, `failureKind` | see §4 | — |
@@ -44,7 +46,7 @@ A step is one candidate config at one context size. The server is started with `
 ## 3. Context ladder, warmup, reps
 
 - Ladder: `[2048, 4096, 8192, 16384, 32768, 65536, 131072]` ∩ ≤ declared `ctxTrain` (unknown → cap 8192). Steps above that are listed in `skippedSteps` with a reason. `SessionRequest.ladder` can restrict the list further.
-- Prompt: `ladderPrompt(ctx)` (`src/core/benchmark/prompts.ts`) = `generateFiller(floor(0.75·ctx), seed = ctx)` + "Continue the story in the same style:". It is deterministic per ctx. The request uses `n_predict = 128`, `temperature 0`, `seed 1` and `cache_prompt false`. There is no `ignore_eos`, so `decodeTokens` may be < 128.
+- Prompt: `ladderPrompt(ctx)` (`src/core/benchmark/prompts.ts`) = `generateFiller(floor(0.75·ctx), seed = ctx)` + "Continue the story in the same style:". It is deterministic per ctx. The filler is sized by characters (≈ 4 chars/token), not tokenized: the measured fill is ≈ 57 % of ctx at 2K on Llama (1167 tokens), below the calibration script's tokenized 75 % (D08). The request uses `n_predict = 128`, `temperature 0`, `seed 1` and `cache_prompt false`. There is no `ignore_eos`, so `decodeTokens` may be < 128.
 - Warmup: one discarded request with the **same prompt** (`backend.warmup(prompt)`, 8 tokens). This compiles the Vulkan pipelines for that batch shape (DESIGN F7). A warmup failure fails the step.
 - Reps: `reps = 2` measured prompts. The first failing rep fails the step.
 - Timeouts: prompt `60 s + 10 ms × ctx`; load 120 s (inside the backend); quality 180 s per test.
@@ -79,15 +81,15 @@ ACCEPTANCE A11 mapping: ok → pass; failed / oom / device_lost / crashed → fa
 ## 5. Quality suite (`qb-1.1.0`, file `tests.v1.json`)
 
 - Files: `src/core/quality/tests.v1.json` (17 tests), `checkers.ts`, `index.ts`.
-- Categories: instruction IF-01..03, reasoning RS-01..04 (since qb-1.1.0: step-by-step reasoning allowed, ending in a final `Answer: X` line; the `finalAnswer` checker takes the last Answer line, tolerating case, bold and backticks, and applies the inner exact/number check), coding CD-01..03 (`jsCode` cases `{expr, expected}`, compared as canonical JSON), structured SO-01..02, extraction EX-01..02, context CR-10/50/90 (needle at 10/50/90 % depth in seeded filler).
+- Categories: instruction IF-01..03, reasoning RS-01..04 (since qb-1.1.0: step-by-step reasoning allowed, ending in a final `Answer: X` line; the `finalAnswer` checker takes the last Answer line, tolerating case, bold and backticks, and applies the inner exact/number check), coding CD-01..03 (`jsCode` cases `{expr, expected}`, compared as the JSON string of the value — order-sensitive for object keys, D18), structured SO-01..02, extraction EX-01..02, context CR-10/50/90 (needle at 10/50/90 % depth in seeded filler).
 - Runner (`session.ts` `runQuality`): runs once per **model**, after all ladders, on the model's **best-offload** usable candidate: most GPU layers, then fastest measured decode. It is never run on a CPU baseline or `-nkvo` probe just because that ran first.
   - It loads at ctx = min(profile.targetContext, practical ceiling) with filler `min(3000, 0.6·ctx)` tokens.
   - The load is guarded like a ladder step (`guardedLoad`): previous server unloaded, live RAM pre-check, abortable load, the RAM-floor guard with fail-safe, checked between prompts. A trip discards the suite.
   - Each prompt goes `applyTemplate(messages)` → `runPrompt` (temp 0, seed 1) → `evaluateAsync` (`jsCode` runs in the child-process sandbox).
-- **Thinking models** (`ModelMeta.supportsThinking`, from a chat template with `enable_thinking`): the template is applied with `enable_thinking=false`, so results are deterministic and fast and the suite's `max_tokens` fit. The recommendation says "Quality measured with thinking disabled". The ×4 token boost is kept for a future thinking-on option.
+- **Generation configs** (`src/core/benchmark/gen.ts`): the baseline is thinking off, T=0 (controlled settings: fixed seed, temperature and token limits; not a proof of deterministic, fast or complete answers — a template may ignore the flag, D19). Thinking-capable models (`ModelMeta.genKnobs`, else `supportsThinking`) also run thinking at the lowest and the middle effort level at the model card's sampling (else T=1.0), max 3 configs, all on ONE guarded load; thinking prompts get maxTokens ×4 (≥ 1024) and 2× timeout. Stochastic configs (T > 0) run 3 seeded samples per test in Thorough mode (`qualityMode`), 1 in Quick. Rows carry genId, sample, answer/reasoning tokens and totalMs. Scoring picks per workload the config with the best quality whose time-to-answer is within tolerance [I-8.1]; thinking configs are priced as effective decode = decode × answer/(answer + reasoning) and time-to-answer = TTFT + reasoning/decode (estimated) [I-3.2].
 - A failed request counts as `pass:false` with the error in `detail`. An incomplete suite (cancel/crash/guard) is **discarded**, not stored as partial. A suite is saved in one transaction with its version and expected test count; on resume only a complete suite of the current version is reused.
-- Q = 100 · Σ_c W_c · passRate_c / Σ_c W_c over the categories that have results, where passRate_c = Σ weight·pass / Σ weight. W = instruction .2, reasoning .25, coding .25, structured .1, extraction .1, context .1. Scoring restricts c to the profile's `promptSetIds`.
-- With no results, the scorer uses the prior `min(90, 35 + 15·log2(params/1e9)) × {bpw ≥ 6: 1, ≥ 4.5: .97, ≥ 3.5: .9, else .75}`, labelled **estimated** in the breakdown and the reasons.
+- Q = 100 · Σ_c W_c · passRate_c / Σ_c W_c over the categories that have results, where passRate_c = Σ weight·pass / Σ weight. **Band** (`qualityStats`): per category an Agresti–Coull interval with Kish effective n (samples count as items), combined with the normalized category weights; `± ci95` with n graded items is reported [I-5.1]. Quality-weighted workloads (`qualityFirst`: coding, large_coding, reasoning, document_analysis, max_quality) let a candidate whose band lies entirely above the leader's win regardless of speed; within the band the score decides [I-5.2, I-7.3]. W = instruction .2, reasoning .25, coding .25, structured .1, extraction .1, context .1. Scoring restricts c to the profile's `promptSetIds`.
+- With no results (D07): quality-weighted workloads make the candidate ineligible [I-5.9]; others use the prior, capped at the lowest measured quality in the set and marked provisional [I-1.1, I-5.5]. The prior is `min(90, 35 + 15·log2(params/1e9)) × {bpw ≥ 6: 1, ≥ 4.5: .97, ≥ 3.5: .9, else .75}`, labelled **estimated** in the breakdown and the reasons.
 
 ## 6. Cliff detection (`src/core/scoring/cliff.ts` `detectCliffs(steps, vramTotalBytes)`)
 
@@ -118,7 +120,7 @@ Steps are sorted by ctx. A step is **usable** iff its status is `pass|degraded` 
   - Prefill was 2943 → 1514 t/s. The worst per-doubling ratio is .74, above 0.5.
   - Per-PID shared Δ was ≤ 0.12 GiB (< 256 MiB), and dedicated peaked at 14.6 GiB (≈ 92 % < 95 %).
   - Result: no false positives on a real smooth sweep.
-  - Do not lower `decodeDropRatio` below ~0.65: a 25–30 % threshold would fire at 64K.
+  - Do not raise `decodeDropRatio` into ~0.70–0.75: the healthy 32K→64K ratio is 0.73, so gradual decay would be flagged as a cliff (D26).
 - **Real cliff observed** on Qwen2.5-14B Q4_K_M, full offload (`calib-14b-rx9070.json`):
   - The run went 2K/8K/16K/32K: decode 61.6 / 57.1 / 51.2 / **26.4** t/s, per-PID shared 0.02 → **1.05 GiB** at 32K, TTFT 22.6 s.
   - `decode_drop` fired (ratio 0.516 ≤ 0.60), and so did `shared_spill` (1.05 GiB > 256 MiB).
@@ -133,7 +135,7 @@ Steps are sorted by ctx. A step is **usable** iff its status is `pass|degraded` 
 
 ## 7. Component scores (`src/core/scoring/components.ts`)
 
-All components are 0–100 with **absolute** normalization: fixed floors and targets per profile, no min-max or rank across candidates. A single candidate therefore scores normally, and adding a candidate never reorders the others. An **unavailable input scores `norm.unknownScore` = 50 (neutral)** and its note starts with "unknown (…)". It is never 0 (that would punish missing telemetry) and never 100, and weights are not renormalized. Calibration: requests under ~1 s get 0 typeperf samples. A step with no usable run still scores 0 (it is excluded anyway).
+All components are 0–100 with **absolute** normalization: fixed floors and targets per profile, no min-max or rank across candidates. A single candidate therefore scores normally, and components never depend on other candidates. Eligibility can (D15): a usable full offload makes the same model's partial configs ineligible, and measured quality caps other candidates' priors. An **unavailable input scores `norm.unknownScore` = 50 (neutral)** and its note starts with "unknown (…)". It is never 0 (that would punish missing telemetry) and never 100, and weights are not renormalized. Calibration: requests under ~1 s get 0 typeperf samples. A step with no usable run still scores 0 (it is excluded anyway).
 
 Two steps are picked per candidate (`referenceStep`):
 - **Scoring step** (`referenceCtx`): the largest PASS step ≤ targetContext, else the smallest PASS step, else the smallest usable step. Speed, latency and memory are read here, so candidates are compared at the same workload need.
@@ -163,11 +165,11 @@ Total = Σ wᵢ · scoreᵢ. Breakdown rows `{component, input: Metric, score, w
 | max_quality | .70 | .05 | 0 | 0 | .05 | .15 | .05 | 8K | 16K | 15 | 500 | 20 s | 0 | all |
 | **large_coding** | .40 | .10 | .10 | 0 | .05 | .15 | .20 | 64K | 128K | 30 | 1000 | 180 s (advisory) | 50 | coding, instr, struct, context |
 
-**Long-context tolerances:** a full 64K prefill costs ~21–32 s on the 8B, but it is a one-off per session (follow-ups reuse the prompt cache), hence 90 s / 120 s.
+**Long-context tolerances:** a full 64K prefill costs ~21–32 s on the 8B, but it is a one-off per session (follow-ups reuse the prompt cache), hence 90 s / 120 s — a rationale for a deployed chat with prompt caching; this benchmark always sends `cache_prompt:false` and measures a full prefill each time (D26).
 
 **`large_coding`** ("bigger model, slower is fine"):
 - Latency is advisory: TTFT is reported but never gates, and its weight is 0. The decode gate is 8 t/s.
-- The UI applies heavyMode + requiredContext 64K when this profile is selected.
+- The Dashboard "large-scale coding" preset applies heavyMode + requiredContext 64K; choosing the workload in the Benchmark dropdown does not (D10).
 - Calibrated (`required.test.ts`): a 27B partial offload at 12 t/s with measured Q 100 beats the 8B at ~100 t/s with Q 60 when both reach 64K. Plain Coding still picks the 8B.
 
 Calibrated on the 8B full offload (TTFT 0.5 s @ 2K, 1.1 s @ 4K, 2.2 s @ 8K, 4.9 s @ 16K, 12.0 s @ 32K, 32.4 s @ 64K). The recommended contexts are asserted in `calibration.test.ts`: fast_assistant 4K; general_chat, reasoning and max_quality 16K; coding 32K; long_context_coding and document_analysis 64K. genTarget values are near full-offload speed on this GPU class (52–109 t/s), so partial offload is clearly behind. These are calibrated on one machine and one model, so they are still [A] elsewhere.
@@ -177,7 +179,7 @@ Calibrated on the 8B full offload (TTFT 0.5 s @ 2K, 1.1 s @ 4K, 2.2 s @ 8K, 4.9 
 - **Excluded**: candidates with no usable step, listed with their step reasons (A17).
 - **Gates** (the candidate is still ranked, but `eligible:false`): practical ceiling < 0.5 · targetContext; stability < 50; quality < minQuality (an estimated quality also gates, and the reason says "estimated"); **TTFT at the scoring step > latencyToleranceMs**; **decode at the scoring step < `minDecodeTps`** (fast 30, chat/coding 10, reasoning/long-ctx 5, doc 3, max quality 2 t/s).
 - **Partial-offload gate**: on a GPU machine, a partial config (ngl < all, including ngl 0) is ineligible whenever a full-offload config of the **same model** has any usable step, even one that is gated or degraded by a spill. Calibration: ngl 20 decodes −83 % (8B), a spilled 14B full offload beat ngl 30 by 4.7×, and ngl 0 still uses the GPU.
-- **Ranking / tie-break**: eligible first → total rounded to 1e-6, descending → lower peak VRAM (CPU-only counts as 0) → lower peak RAM → `configId` ascending (code-unit order). Unknown values sort last. Output is deep-equal for any input order.
+- **Ranking / tie-break**: eligible first → total rounded to 1e-6, descending → lower peak VRAM (CPU-only counts as 0) → lower peak RAM → `configId` ascending (code-unit order). Unknown values sort last. The winner and ranking are independent of input order; auxiliary reason lists (unplanned models, RAM-skip messages) keep the caller's order (D15).
 - **Best** = the first eligible candidate, with `practicalContext` (measured) and `declaredContext` (declared) reported separately.
 - **Alternatives**, among eligible candidates, each with a configId tie-break:
   - `fastest`: decode TPS at the reference step.
@@ -227,7 +229,7 @@ Estimates are `kind:'estimated'`, prune only, and never rank.
   - Threads = physical cores.
   - fa = on.
   - VRAM total unavailable → no VRAM pruning (with a note).
-  - SWA/hybrid/recurrent archs prune on weights only.
+  - SWA/hybrid archs prune with the per-layer KV layout (`kvLayout`); missing head metadata gives KV 0 flagged unknown (D02, D13).
 
 ### Required context (`SessionRequest.requiredContext`: 32K / 64K / 128K; Auto = the workload default)
 - **Effective profile** (`effectiveProfile`): targetContext = required, maxContext ≥ required, latency **advisory**. The runner, the quality ctx and `recommend()` all use it; `recommendForWorkload(data, workload, request)` recomputes any workload from stored data.
@@ -242,7 +244,7 @@ Estimates are `kind:'estimated'`, prune only, and never rank.
 ### Heavy-model mode (summary)
 - **What it is:** opt-in (`SessionRequest.heavyMode`, the "Include heavy models" checkbox). A model whose full GPU offload does not fit gets up to 4 partial-offload probes (§9, all `expectDegraded` with a reason) instead of being rejected.
 - **RAM:** the check uses the resident part with a 4 GiB reserve (the same floor as normal mode). The in-step floor credits the mmap pages of GPU-offloaded weights. The guard polls every 250 ms from the start of load for heavy configs.
-- **Order:** full-offload configs run first, then heavy configs most-offloaded first, with CPU baselines last. So quality and a recommendation exist even if a later, riskier config aborts.
+- **Order:** full-offload configs run first, then heavy configs most-offloaded first (KV-on-GPU rungs, then -nkvo), CPU baselines last. Each model's quality runs as soon as its last config finished, followed by a saved provisional recommendation, so a later cancel/abort still leaves one (D05). A fatal ServerStuckError stops before any further save.
 - **Unplanned models:** a model with no candidates is named in the recommendation reasons, e.g. "Not benchmarked: X — … full GPU offload does not fit — enable heavy-model mode".
 - **Gates:**
   - `minDecodeTps` per workload (fast 30, chat/coding 10, reasoning/long-ctx 5, doc 3, max quality 2 t/s) keeps slow partial configs out of interactive workloads.
@@ -259,7 +261,7 @@ Estimates are `kind:'estimated'`, prune only, and never rank.
 
 ## 10. Export (`src/core/export/config.ts`)
 - `exportConfigFrom(rec, cand, model, sessionId)` takes the winner at `recommendedCtx`.
-- `toLlamaServerArgs/Command` reproduce the measured launch: `-dev`, `-fit off`, `-c`, `-ngl 999|n`, `-t`, `-b 2048 -ub 512`, `-fa`, `-ctk/-ctv` for q8_0, `--parallel 1`.
+- `toLlamaServerArgs/Command` reproduce the benchmarked inference parameters (not the operational host/port/log/metrics flags or the executable path, D16): `-dev`, `-fit off`, `-c`, `-ngl 999|n`, `-t`, `-b 2048 -ub 512`, `-fa`, `-ctk/-ctv` for q8_0, `--parallel 1`.
 - `toOllamaModelfile(c, {from})` emits FROM plus num_ctx / num_gpu / num_thread / num_batch, with flash attention and KV type as env-var comments.
 - `toLmStudioSettings` uses lmstudio-js keys.
 - `toJson` bundles every format, and `provenanceNote(rec)` says which inputs were measured, estimated or unavailable.
