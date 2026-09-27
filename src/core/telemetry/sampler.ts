@@ -75,6 +75,9 @@ export class TypeperfParser {
   droppedRows = 0
   /** Why rows were dropped (for RunDetail.samplerErrors): misaligned vs glitch. */
   readonly dropped = { misaligned: 0, glitch: 0 }
+  /** Misaligned rows in a row since the last good one: >= 3 means the instance set changed under typeperf (a GPU
+   *  engine instance seen at start vanished, so every row is one cell short) and only a fresh typeperf helps. */
+  consecutiveMisaligned = 0
 
   constructor(private o: SamplerOpts) {
     this.luid = o.gpuLuid?.toLowerCase() ?? null
@@ -93,7 +96,8 @@ export class TypeperfParser {
     // of the header but still emit a "-1" cell at their position; ours is last, so it shows up as a trailing extra.
     // Any other length mismatch means the row doesn't line up with the header: drop it rather than mis-assign cells.
     const extra = cells.slice(this.cols.length)
-    if (cells.length < this.cols.length || extra.some((x) => x.replace(/"/g, '').trim() !== '-1')) { this.droppedRows++; this.dropped.misaligned++; return null }
+    if (cells.length < this.cols.length || extra.some((x) => x.replace(/"/g, '').trim() !== '-1')) { this.droppedRows++; this.dropped.misaligned++; this.consecutiveMisaligned++; return null }
+    this.consecutiveMisaligned = 0
     const vals = new Map<Col, number>()
     let glitch = false
     this.cols.forEach((c, i) => {
@@ -232,6 +236,8 @@ export function startSampler(o: SamplerOpts = {}): Sampler {
   const si = String(Math.max(1, Math.round((o.intervalMs ?? 1000) / 1000)))
   let stopped = false
   let parser = new TypeperfParser(o)
+  let realigns = 0
+  let misalignedBefore = 0 // misaligned rows of replaced typeperf processes, for the final drop note
   let child: ChildProcess
 
   const spawnOne = () => {
@@ -246,6 +252,15 @@ export function startSampler(o: SamplerOpts = {}): Sampler {
     createInterface({ input: c.stdout! }).on('line', (l) => {
       const s = p.line(l)
       if (s) samples.push(s)
+      // H7: whole steps lost every row as misaligned (20/20, 45/45 in #3's heavy runs). Re-snapshot the instance set.
+      if (p.consecutiveMisaligned >= 3 && child === c && !stopped && realigns < 5) {
+        realigns++
+        misalignedBefore += p.dropped.misaligned
+        errors.push(`typeperf rows no longer match the header (instance set changed); restarted (${realigns})`)
+        spawnOne()
+        c.kill()
+        return
+      }
       else if (l.trim() && !l.startsWith('"')) tail.push(l.trim())
     })
     c.stderr?.on('data', (d: Buffer) => tail.push(d.toString().trim()))
@@ -274,7 +289,8 @@ export function startSampler(o: SamplerOpts = {}): Sampler {
     stop() {
       stopped = true
       child.kill()
-      const { misaligned, glitch } = parser.dropped
+      const misaligned = parser.dropped.misaligned + misalignedBefore
+      const { glitch } = parser.dropped
       if (misaligned + glitch) errors.push(`typeperf rows dropped: ${misaligned} misaligned with the header, ${glitch} with impossible values (${samples.length} kept)`)
       return samples
     }

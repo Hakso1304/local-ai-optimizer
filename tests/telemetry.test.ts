@@ -121,4 +121,18 @@ describe('typeperf parser', () => {
     expect(w.samples[0]).toBe(w.samples[0])
     expect(w.samples[0].tempC).toBe(60)
   })
+
+  it('H7 shape: every row one cell short of the header (an instance vanished) is counted as misaligned in a row', () => {
+    // Real shape from #3's heavy runs: samplerErrors "rows dropped: 20 misaligned … (0 kept)".
+    const lines = fx('llama-pid.csv')
+    const p = new TypeperfParser({ pid: 26768 })
+    p.line(lines[0])
+    const short = (l: string) => l.split('","').slice(0, -1).join('","') + '"'
+    for (const l of lines.slice(1, 4)) expect(p.line(short(l))).toBeNull()
+    expect(p.consecutiveMisaligned).toBe(3) // the sampler restarts typeperf at 3
+    expect(p.dropped.misaligned).toBe(3)
+    expect(p.line(lines[4])).not.toBeNull() // a good row resets the streak
+    expect(p.consecutiveMisaligned).toBe(0)
+  })
 })
+
