@@ -351,17 +351,29 @@ export function withNvidia(pdh: Sampler, nv: { readonly samples: NvidiaSample[];
 
 /** One-shot dedicated VRAM in use on the busiest adapter (= the discrete GPU; iGPUs hold ~0 dedicated), measured
  *  before a session so planning can subtract what other apps already use. null when typeperf fails — never guessed. */
-export function readVramInUse(timeoutMs = 20_000): Promise<{ bytes: number; luid: string } | null> {
+export function readVramInUse(timeoutMs = 20_000, signal?: AbortSignal): Promise<{ bytes: number; luid: string } | null> {
+  if (signal?.aborted) return Promise.resolve(null)
   return new Promise((done) => {
     const parser = new TypeperfParser({})
     const child = spawn('typeperf', ['\\GPU Adapter Memory(*)\\Dedicated Usage', '-sc', '1'], { windowsHide: true })
     let result: { bytes: number; luid: string } | null = null
-    const timer = setTimeout(() => child.kill(), timeoutMs)
-    createInterface({ input: child.stdout! }).on('line', (l) => {
+    let cancelled = false, settled = false
+    const stop = () => { cancelled = true; child.kill() }
+    const timer = setTimeout(stop, timeoutMs)
+    const finish = (value: { bytes: number; luid: string } | null) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', stop)
+      done(value)
+    }
+    signal?.addEventListener('abort', stop, { once: true })
+    if (signal?.aborted) stop()
+    child.stdout && createInterface({ input: child.stdout }).on('line', (l) => {
       const s = parser.line(l)
       if (s?.vramDedicatedBytes != null && parser.luid) result = { bytes: s.vramDedicatedBytes, luid: parser.luid }
     })
-    child.on('error', () => { clearTimeout(timer); done(null) })
-    child.on('close', () => { clearTimeout(timer); done(result) })
+    child.on('error', () => finish(null))
+    child.on('close', () => finish(cancelled ? null : result))
   })
 }
