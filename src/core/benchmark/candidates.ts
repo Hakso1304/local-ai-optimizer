@@ -4,6 +4,7 @@ import type {
   CandidateConfig, CandidateSet, KvType, MachineLimits, Metric, ModelMeta, RejectedCandidate, WorkloadProfile
 } from '../../shared/bench-types'
 import type { SystemProfile } from '../../shared/types'
+import type { SessionRequest } from '../../shared/bench-events'
 
 const MiB = 1024 ** 2
 const GiB = 1024 ** 3
@@ -20,10 +21,15 @@ export const DEFAULT_CANDIDATE_RULES = {
   keepOverVramMaxRatio: 1.15,
   /** A25: RAM kept free for the OS; configs whose RAM estimate exceeds available − reserve are skipped. */
   ramReserveBytes: 4 * GiB,
-  partialFractions: [0.75, 0.5, 0.25],
+  /** Heavy-model mode (opt-in, SessionRequest.heavyMode): when full offload does not fit at all, benchmark a
+   *  partial-offload ladder instead of rejecting the model. Off = full offload only (+ CPU-only without a GPU):
+   *  calibration showed partial offload decodes -83 % (8B ngl 20), so it is never offered unasked. */
+  heavyMode: false,
+  /** Heavy mode checks RAM against the resident part (non-GPU weights + CPU KV) with this smaller reserve (>= 2 GiB). */
+  heavyRamReserveBytes: 2 * GiB,
   /** ngl=0 reference config for models this small even when full offload fits. 0 = off: calibration showed ngl 0 on
    *  the Vulkan build still offloads prefill matmuls (1.1K t/s, 1.8 GiB VRAM), so it is partial, not CPU-only.
-   *  ngl=0 is still generated when there is no GPU or when no GPU config fits. */
+   *  ngl=0 is still generated when there is no GPU. */
   cpuOnlyMaxParams: 0,
   /** q8_0 KV variant only when both the workload target and the declared ctx reach this. */
   longContextMin: 32768,
@@ -31,6 +37,11 @@ export const DEFAULT_CANDIDATE_RULES = {
   ubatch: 512
 }
 export type CandidateRules = typeof DEFAULT_CANDIDATE_RULES
+
+/** The rules a session request implies. The runner and anything re-planning a session (main's planFor) must use this
+ *  so both produce identical configIds. */
+export const rulesForRequest = (req: Pick<SessionRequest, 'candidateRules' | 'heavyMode'>): CandidateRules =>
+  ({ ...DEFAULT_CANDIDATE_RULES, ...req.candidateRules, heavyMode: req.heavyMode ?? false })
 
 // Sliding-window / hybrid / recurrent: KV formula is wrong for them, so KV is not used for pruning.
 const LOW_CONFIDENCE_ARCHS = new Set(['gemma2', 'gemma3', 'gemma3n', 'qwen3next', 'mamba', 'rwkv6', 'rwkv7', 'jamba', 'granitehybrid', 'lfm2'])
@@ -43,9 +54,11 @@ const est = (value: number, source: string): Metric => ({ value, kind: 'estimate
 
 export const isLowConfidence = (m: ModelMeta) => m.slidingWindow !== null || LOW_CONFIDENCE_ARCHS.has(m.arch)
 
-/** DESIGN §2.7. gpuLayers ≥ layers means full offload. RAM counts the whole mmap'd file (calibration: available RAM
- *  fell ≈ file size even at ngl 99), so the A25 pre-check is conservative; spill detection never uses it. */
-export function estimateMemory(m: ModelMeta, gpuLayers: number, ctx: number, kv: KvType, ubatch = DEFAULT_CANDIDATE_RULES.ubatch) {
+/** DESIGN §2.7. gpuLayers ≥ layers means full offload. KV follows its layers (calibration, 8B ngl 20/33 @8K:
+ *  KV CPU 416 + Vulkan0 608 MiB) unless kvOnGpu=false (-nkvo: all KV in RAM).
+ *  ramBytes counts the whole mmap'd file (available RAM fell ≈ file size even at ngl 99) → conservative A25 check.
+ *  ramResidentBytes counts only what must stay in RAM (non-GPU weights + CPU KV) → heavy mode. */
+export function estimateMemory(m: ModelMeta, gpuLayers: number, ctx: number, kv: KvType, ubatch = DEFAULT_CANDIDATE_RULES.ubatch, kvOnGpu = true) {
   const dk = m.keyLength ?? m.nEmbd / m.heads
   const dv = m.valueLength ?? dk
   const kvBytes = ctx * m.layers * m.headsKv * (dk + dv) * KV_BYTES[kv]
@@ -55,9 +68,12 @@ export function estimateMemory(m: ModelMeta, gpuLayers: number, ctx: number, kv:
   // 32 MiB + ubatch·n_embd·32 B + 1 KiB/ctx token. The unexplained residual (0.2–0.9 GiB) is covered by
   // rules.vramMarginBytes in the budget, not here, so small models aren't over-estimated.
   const compute = 32 * MiB + ubatch * m.nEmbd * 32 + ctx * 1024
+  const kvGpu = kvOnGpu ? (kvBytes * onGpu) / m.layers : 0
+  const kvCpu = kvBytes - kvGpu
   return {
-    vramBytes: onGpu > 0 ? wGpu + kvBytes + compute : 0,
-    ramBytes: m.fileBytes + (onGpu === 0 ? kvBytes : 0) + 512 * MiB,
+    vramBytes: onGpu > 0 ? wGpu + kvGpu + compute : 0,
+    ramBytes: m.fileBytes + kvCpu + 512 * MiB,
+    ramResidentBytes: m.fileBytes - wGpu + kvCpu + 512 * MiB,
     kvBytes
   }
 }
@@ -96,31 +112,35 @@ export function generateCandidates(
   const gpuBudget = vram === null ? null : vram - (num(machine.vramInUseBytes) ?? 0) - rules.vramMarginBytes
   const ramBase = num(machine.ramAvailableBytes) ?? num(machine.ramTotalBytes)
   const ramBudget = ramBase === null ? null : ramBase - rules.ramReserveBytes
+  const heavyRamBudget = ramBase === null ? null : ramBase - Math.max(2 * GiB, rules.heavyRamReserveBytes)
   const lowConf = isLowConfidence(model)
   const rejected: RejectedCandidate[] = []
   const candidates: CandidateConfig[] = []
 
-  const idOf = (ngl: number, kv: KvType) => `${model.id}|ngl=${ngl >= model.layers ? 'all' : ngl}|kv=${kv}|t=${threads}`
+  const idOf = (ngl: number, kv: KvType, kvOnGpu = true) => `${model.id}|ngl=${ngl >= model.layers ? 'all' : ngl}|kv=${kv}|t=${threads}${kvOnGpu ? '' : '|nkvo'}`
 
-  /** Returns the candidate, or null after recording the rejection. */
-  const build = (ngl: number, kv: KvType): CandidateConfig | null => {
-    const id = idOf(ngl, kv)
+  /** Returns the candidate, or null after recording the rejection. heavy: resident-RAM check, no keep-over step. */
+  const build = (ngl: number, kv: KvType, heavy?: { kvOnGpu: boolean }): CandidateConfig | null => {
+    const kvOnGpu = heavy?.kvOnGpu ?? true
+    const id = idOf(ngl, kv, kvOnGpu)
     if (!ladder.length) { rejected.push({ id, modelId: model.id, reason: `declared context ${maxCtx} is below the smallest step ${ctxK(rules.ctxLadder[0])}` }); return null }
     const steps: number[] = []
     const skipped = [...aboveDeclared]
     const notes: string[] = []
     let overVramKept = false
     for (const ctx of ladder) {
-      const e = estimateMemory(model, ngl, ctx, kv, rules.ubatch)
+      const e = estimateMemory(model, ngl, ctx, kv, rules.ubatch, kvOnGpu)
       const vramNeed = lowConf ? e.vramBytes - e.kvBytes : e.vramBytes
-      const ramNeed = lowConf && ngl === 0 ? e.ramBytes - e.kvBytes : e.ramBytes
-      if (ramBudget !== null && ramNeed > ramBudget) {
-        skipped.push({ ctx, reason: `skipped_memory: est. RAM ${gib(ramNeed)} > available − reserve ${gib(ramBudget)}` })
+      const ramRaw = heavy ? e.ramResidentBytes : e.ramBytes
+      const ramNeed = lowConf && ngl === 0 ? ramRaw - e.kvBytes : ramRaw
+      const rb = heavy ? heavyRamBudget : ramBudget
+      if (rb !== null && ramNeed > rb) {
+        skipped.push({ ctx, reason: `skipped_memory: est. RAM ${gib(ramNeed)} > available − reserve ${gib(rb)}` })
         continue
       }
       if (ngl > 0 && gpuBudget !== null && vramNeed > gpuBudget) {
         // Keep the first step over the VRAM estimate once: the cliff detector needs to see it, guards contain it.
-        if (steps.length && !overVramKept && vramNeed <= gpuBudget * rules.keepOverVramMaxRatio) {
+        if (!heavy && steps.length && !overVramKept && vramNeed <= gpuBudget * rules.keepOverVramMaxRatio) {
           overVramKept = true; steps.push(ctx); notes.push(`${ctxK(ctx)} is above the VRAM estimate; kept to observe the cliff`); continue
         }
         overVramKept = true // never skip a step and then run a larger one
@@ -130,7 +150,7 @@ export function generateCandidates(
       steps.push(ctx)
     }
     if (!steps.length) { rejected.push({ id, modelId: model.id, reason: skipped.find((s) => s.ctx === ladder[0])!.reason + ` at ${ctxK(ladder[0])}` }); return null }
-    const e0 = estimateMemory(model, ngl, steps[0], kv, rules.ubatch)
+    const e0 = estimateMemory(model, ngl, steps[0], kv, rules.ubatch, kvOnGpu)
     if (lowConf) notes.push('memory estimate is low-confidence for this architecture; KV not used for pruning')
     if (ngl > 0 && gpuBudget === null) notes.push('VRAM size unknown; not pruned by VRAM, runtime guards apply')
     if (ramBudget === null) notes.push('RAM size unknown; not pruned by RAM, runtime guards apply')
@@ -138,8 +158,37 @@ export function generateCandidates(
     return {
       id, modelId: model.id, device: ngl > 0 ? machine.gpuDevice : null, gpuLayers: Math.min(ngl, model.layers), gpuLayersAll: ngl >= model.layers,
       kvType: kv, flashAttn: true, threads, ctxSteps: steps, skippedSteps: skipped.sort((a, b) => a.ctx - b.ctx),
-      estVramBytes: est(e0.vramBytes, src), estRamBytes: est(e0.ramBytes, src), notes
+      estVramBytes: est(e0.vramBytes, src), estRamBytes: est(heavy ? e0.ramResidentBytes : e0.ramBytes, src), notes,
+      ...(kvOnGpu ? {} : { kvOffload: false })
     }
+  }
+
+  /** Heavy mode: the largest ngl whose est. VRAM (weights share + KV share + compute) fits the budget at ctx. */
+  const maxNgl = (ctx: number, kvOnGpu: boolean) => {
+    for (let n = model.layers - 1; n >= 1; n--) if (estimateMemory(model, n, ctx, 'f16', rules.ubatch, kvOnGpu).vramBytes <= gpuBudget!) return n
+    return 0
+  }
+  const heavyLadder = () => {
+    if (gpuBudget === null || !ladder.length) { rejected.push({ id: idOf(0, 'f16'), modelId: model.id, reason: 'heavy mode needs a known VRAM size' }); return }
+    const target = ladder.filter((c) => c <= workload.targetContext).at(-1) ?? ladder[0]
+    const why = model.fileBytes > gpuBudget ? `weights ${gib(model.fileBytes)} > VRAM budget ${gib(gpuBudget)}` : `weights + KV > VRAM budget ${gib(gpuBudget)}`
+    // ponytail: 4 fixed probes (most layers at the smallest ctx, at the target ctx, KV in RAM, CPU baseline);
+    // a finer ngl sweep only if measurements show it matters.
+    const plans: [number, boolean][] = [[maxNgl(ladder[0], true), true], [maxNgl(target, true), true], [maxNgl(target, false), false], [0, true]]
+    const seen = new Set<string>()
+    plans.forEach(([n, kvOnGpu], i) => {
+      if (n === 0 && i < 3) return // nothing fits on the GPU for this probe; the CPU baseline covers ngl 0
+      const key = `${n}|${kvOnGpu}`
+      if (seen.has(key)) return
+      seen.add(key)
+      const c = build(n, 'f16', { kvOnGpu })
+      if (!c) return
+      c.expectDegraded = true
+      c.degradedReason = n === 0 ? `${why}; CPU-only baseline (0/${model.layers} layers on GPU)`
+        : `${why}; ${n}/${model.layers} layers on GPU${kvOnGpu ? '' : ', KV cache in system RAM (-nkvo)'}`
+      c.notes.push(`heavy mode: ${c.degradedReason}`)
+      add(c)
+    })
   }
   const add = (c: CandidateConfig | null) => { if (c) candidates.push(c) }
 
@@ -147,21 +196,13 @@ export function generateCandidates(
     const full = build(model.layers, 'f16')
     add(full)
     if (full && workload.targetContext >= rules.longContextMin && maxCtx >= rules.longContextMin) add(build(model.layers, 'q8_0'))
-    if (!full) {
-      // Partial ladder: the largest fraction that fits, plus the next lower one.
-      let kept = 0
-      for (const f of rules.partialFractions) {
-        if (kept === 2) break
-        const c = build(Math.max(1, Math.floor(model.layers * f)), 'f16')
-        if (c) { add(c); kept++ } else if (kept) break
-      }
+    if (!full && rules.heavyMode) heavyLadder()
+    else if (!full) {
+      const r = rejected.find((x) => x.id === idOf(model.layers, 'f16'))
+      if (r) r.reason += '; full GPU offload does not fit — enable heavy-model mode to benchmark partial offload'
     }
   }
-  if (!hasGpu || !candidates.length || (model.paramCount !== null && model.paramCount <= rules.cpuOnlyMaxParams)) {
-    const c = build(0, 'f16')
-    if (c && hasGpu) c.notes.push('ngl=0 on a GPU build still offloads prefill to the GPU (measured); treated as partial offload')
-    add(c)
-  }
+  if (!hasGpu || (candidates.length > 0 && !rules.heavyMode && model.paramCount !== null && model.paramCount <= rules.cpuOnlyMaxParams)) add(build(0, 'f16'))
 
   for (const c of candidates.splice(rules.maxPerModel)) rejected.push({ id: c.id, modelId: model.id, reason: `over the per-model cap of ${rules.maxPerModel}` })
   return { candidates, rejected }

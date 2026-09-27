@@ -51,7 +51,8 @@ This is the single consolidated list, and every item is checked against the code
 - **DONE-WITH-CAVEAT: absolute normalization.** Scores are comparable across sessions only while `scoring-1.0.0` constants are unchanged, and the version is stored.
 - **DONE-WITH-CAVEAT: unavailable inputs score a neutral 50.** They are flagged "unknown", never counted as 0 or as a pass.
 - **DONE-WITH-CAVEAT: scoring vs recommended ctx.** Scores are taken at the workload's target ctx, while the recommended `-c` is the largest passing step within the TTFT tolerance. The reasons show both.
-- **DONE-WITH-CAVEAT: partial offload is ineligible** whenever the same model's full offload has a usable step (calibration: −83 % decode; a spilled full offload still beat ngl 30 by 4.7×). A model that only fits partially is still recommended partially.
+- **DONE-WITH-CAVEAT: partial offload is ineligible** whenever the same model's full offload has a usable step (calibration: −83 % decode; a spilled full offload still beat ngl 30 by 4.7×).
+- **PARTIAL: heavy-model mode** (partial offload for models that don't fit) is opt-in. It is tested with a synthetic 27B only; no real >16 GB model has been benchmarked. `-nkvo` is verified in `--help` only. A decode gate (`minDecodeTps`) keeps such models out of Fast Assistant, Chat and Coding.
 
 ## Export
 - **PARTIAL: the core generators exist** (`export/config.ts`: llama-server, Ollama Modelfile, LM Studio, JSON, provenance note). The Results page still uses its own simpler llama-server text.

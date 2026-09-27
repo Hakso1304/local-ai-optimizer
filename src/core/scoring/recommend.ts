@@ -68,6 +68,10 @@ export function recommend(
     const q = cs.components.quality
     if (q.score < profile.minQuality) gateFailures.push(`${q.input.kind === 'estimated' ? 'estimated ' : ''}quality ${q.score.toFixed(0)} < ${profile.minQuality}`)
     const ref = input.runs.find((r) => r.ctx === cs.referenceCtx)
+    const refDecode = val(ref?.decodeTps, true)
+    if (profile.minDecodeTps !== undefined && refDecode !== null && refDecode < profile.minDecodeTps) {
+      gateFailures.push(`decode ${refDecode.toFixed(1)} t/s at ${fmtCtx(ref!.ctx)} is below the ${profile.minDecodeTps} t/s minimum`)
+    }
     const refTtft = val(ref?.ttftMs, true)
     if (refTtft !== null && refTtft > profile.latencyToleranceMs) {
       gateFailures.push(`TTFT ${(refTtft / 1000).toFixed(1)} s at ${fmtCtx(ref!.ctx)} exceeds the ${(profile.latencyToleranceMs / 1000).toFixed(0)} s tolerance`)
@@ -138,6 +142,11 @@ export function recommend(
     const leaders = [...top.score.breakdown].sort((a, b) => b.contribution - a.contribution || (a.component < b.component ? -1 : 1)).slice(0, 2)
     reasons.push(`Largest contributions: ${leaders.map((r) => `${LABEL[r.component]} ${r.contribution.toFixed(1)}`).join(', ')}`)
     const pc = val(cliff.practicalContextCeiling)!
+    const cfgTop = top.input.config
+    if (!cfgTop.gpuLayersAll && machine.gpuDevice !== null) {
+      reasons.push(`Partial GPU offload (${cfgTop.gpuLayers}/${top.input.model.layers} layers${cfgTop.kvOffload === false ? ', KV cache in RAM' : ''}) — ` +
+        `degraded speed expected: decode ${top.decode!.toFixed(1)} t/s${cfgTop.degradedReason ? ` (${cfgTop.degradedReason})` : ''}`)
+    }
     const rc = top.input.runs.find((r) => r.ctx === top.score.recommendedCtx)
     // Speed/latency are scored at the workload target (referenceCtx); say so when that differs from the recommended -c.
     const sc = top.input.runs.find((r) => r.ctx === top.score.referenceCtx)

@@ -194,6 +194,17 @@ describe('runSession', () => {
     expect(ctxOf(again.backend)).toEqual([2048])
   })
 
+  it('heavy mode: a 16 GiB model gets a partial-offload ladder; -nkvo reaches the launch args', async () => {
+    const m27 = { ...model, id: 'C:/models/q27b.gguf', fileBytes: Math.round(16.1 * GiB), layers: 64, nEmbd: 5120, heads: 40, headsKv: 8, keyLength: 128, valueLength: 128, nVocab: 152064 }
+    const normal = await run(() => ({}), { workload: 'max_quality', modelIds: [m27.id], ladder: [2048] }, { models: [m27] })
+    expect(normal.backend.calls.loads).toEqual([]) // does not fit → nothing to run
+    const h = await run(() => ({}), { workload: 'max_quality', modelIds: [m27.id], ladder: [2048], heavyMode: true }, { models: [m27] })
+    const args = h.backend.calls.loads.map((l) => `${l.gpuLayers} ${l.device} ${(l.extraArgs ?? []).join(' ')}`)
+    expect(args.some((a) => a.endsWith('-nkvo'))).toBe(true)
+    expect(h.backend.calls.loads.every((l) => l.gpuLayers < 64)).toBe(true)
+    expect(h.backend.calls.loads.some((l) => l.gpuLayers === 0 && l.device === 'none')).toBe(true)
+  })
+
   it('emits events in order', async () => {
     const { events } = await run((ctx) => (ctx > 4096 ? { load: 'oom' } : {}), { ladder: [2048, 4096, 8192] })
     const types = events.map((e) => (e.type === 'phase' ? `phase:${e.phase}` : e.type)).filter((t) => t !== 'telemetry' && t !== 'log')
@@ -237,12 +248,25 @@ describe('runSession', () => {
     expect(rec?.excluded[0].reasons[0]).toMatch(/^2K: run fail \(skipped_memory\): est\. RAM/)
   })
   it('guard reason wins over the "cancelled" error its own cancel() causes (guard_abort, not request_error)', async () => {
-    const low = { ...sample(2048), ramAvailBytes: 1 * GiB }
+    const spill = { ...sample(2048), procVramSharedBytes: 3 * GiB }
     const { s } = await run(() => ({ warmupBlocks: true }), { ladder: [2048] }, {
-      startSampler: () => ({ samples: [low], unavailable: {}, stop: () => [low] }), config: { guardPollMs: 5 }
+      startSampler: () => ({ samples: [spill], unavailable: {}, stop: () => [spill] }), config: { guardPollMs: 5 }
     })
     expect(s.runs[0]).toMatchObject({ status: 'fail', failureKind: 'guard_abort' })
-    expect(s.details[0].reason).toBe('RAM available 1.0 GiB fell below the floor')
+    expect(s.details[0].reason).toBe('shared GPU memory spill 3.0 GiB exceeded the abort limit')
+  })
+
+  it('RAM floor credits mmap pages of GPU-offloaded weights (not pressure); trips when no credit applies', async () => {
+    const low = { ...sample(2048), ramAvailBytes: 1 * GiB }
+    const deps = { startSampler: () => ({ samples: [low], unavailable: {}, stop: () => [low] }), config: { guardPollMs: 5 } }
+    // Full offload of the 4.6 GiB 8B: 1 GiB available + 4.6 GiB reclaimable file pages > 2.5 GiB floor → no abort.
+    const full = await run(() => ({ warmupBlocks: true }), { ladder: [2048] }, deps)
+    expect(full.s.runs[0].status).toBe('pass')
+    // A tiny model gets no meaningful credit → the same 1 GiB trips the floor.
+    const tiny = { ...model, fileBytes: 100 * 1024 ** 2 }
+    const t = await run(() => ({ warmupBlocks: true }), { ladder: [2048] }, { ...deps, models: [tiny] })
+    expect(t.s.runs[0]).toMatchObject({ status: 'fail', failureKind: 'guard_abort' })
+    expect(t.s.details[0].reason).toBe('RAM available 1.0 GiB fell below the floor')
   })
 
   it('ConfigDriftError from loadModel → fail/config_drift', async () => {

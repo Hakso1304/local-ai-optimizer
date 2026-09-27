@@ -36,6 +36,8 @@ export interface WorkloadProfile {
   prefillTargetTps: number
   /** Quality gate (0–100). */
   minQuality: number
+  /** Decode gate (t/s at the scoring step): below this the workload is unusable, whatever else scores. */
+  minDecodeTps?: number
   /** Quality-suite categories that count for this profile. */
   promptSetIds: QualityCategory[]
 }
@@ -91,6 +93,11 @@ export interface CandidateConfig {
   estVramBytes: Metric
   estRamBytes: Metric
   notes: string[]
+  /** false = KV cache in system RAM (llama-server -nkvo). Absent = true. */
+  kvOffload?: boolean
+  /** Heavy-model mode: partial offload chosen on purpose; slow decode is expected, with the reason. */
+  expectDegraded?: boolean
+  degradedReason?: string
 }
 
 export interface RejectedCandidate {

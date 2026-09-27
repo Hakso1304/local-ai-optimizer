@@ -16,6 +16,9 @@ export interface SessionRequest {
   reps?: number
   /** Default true. */
   runQuality?: boolean
+  /** Heavy-model mode: models whose full GPU offload does not fit get a partial-offload ladder instead of being
+   *  rejected (slow, flagged expectDegraded). Default false. */
+  heavyMode?: boolean
   /** Continue this session: (configId, ctx) steps and quality already persisted are skipped. */
   resumeSessionId?: string
 }

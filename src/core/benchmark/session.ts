@@ -13,7 +13,7 @@ import { buildQualityPrompts, defaultTestSet, evaluateAsync } from '../quality'
 import { detectCliffs, isUsable, val } from '../scoring/cliff'
 import { recommend } from '../scoring/recommend'
 import { DEFAULT_SCORING_CONFIG } from '../scoring/workloads'
-import { DEFAULT_CANDIDATE_RULES, estimateMemory, generateCandidates, machineFromProfile } from './candidates'
+import { estimateMemory, generateCandidates, machineFromProfile, rulesForRequest } from './candidates'
 import { LADDER_PREDICT, PROMPT_VERSION, ladderPrompt } from './prompts'
 
 /** Bump when the runner's measurement procedure changes (warmup, reps, reduction, timeouts). */
@@ -115,13 +115,14 @@ const failKind = (exit: ExitInfo | null): FailureKind | null =>
 
 export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (e: SessionEvent) => void): Promise<Recommendation | null> {
   const cfg = { ...DEFAULT_SESSION_CONFIG, ...deps.config }
-  const rules = { ...DEFAULT_CANDIDATE_RULES, ...req.candidateRules }
+  const rules = rulesForRequest(req)
   const profile = DEFAULT_SCORING_CONFIG.profiles[req.workload]
   const { storage, clock, signal } = deps
   const machine = machineFromProfile(deps.machine, deps.gpuDevice)
   const vramTotal = val(machine.vramBytes, true)
   const ramTotal = val(machine.ramTotalBytes, true)
-  const ramFloor = Math.max(cfg.ramFloorMinBytes, (ramTotal ?? 0) * cfg.ramFloorFraction)
+  // Heavy mode runs close to the RAM limit on purpose: floor = the 2 GiB minimum, never lower.
+  const ramFloor = req.heavyMode ? cfg.ramFloorMinBytes : Math.max(cfg.ramFloorMinBytes, (ramTotal ?? 0) * cfg.ramFloorFraction)
   const evaluate = deps.evaluate ?? evaluateAsync
 
   let sessionId = req.resumeSessionId ?? ''
@@ -238,7 +239,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     return {
       modelPath: model.id, contextSize: ctx, gpuLayers: cand.gpuLayersAll ? 999 : cand.gpuLayers, device: cand.device ?? 'none',
       threads: cand.threads, batchSize: 2048,
-      extraArgs: ['-ub', String(rules.ubatch), '-fa', cand.flashAttn ? 'on' : 'off', ...(cand.kvType === 'f16' ? [] : ['-ctk', cand.kvType, '-ctv', cand.kvType])]
+      extraArgs: ['-ub', String(rules.ubatch), '-fa', cand.flashAttn ? 'on' : 'off', ...(cand.kvType === 'f16' ? [] : ['-ctk', cand.kvType, '-ctv', cand.kvType]),
+        ...(cand.kvOffload === false ? ['-nkvo'] : [])] // -nkvo / --no-kv-offload: KV cache in RAM (b11208 --help)
     }
   }
 
@@ -259,7 +261,11 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
 
     // A25 pre-check against live RAM (other apps come and go, F10).
     const avail = deps.readRamAvailableBytes?.() ?? val(machine.ramAvailableBytes)
-    const need = estimateMemory(model, cand.gpuLayersAll ? model.layers : cand.gpuLayers, ctx, cand.kvType, rules.ubatch).ramBytes
+    const e = estimateMemory(model, cand.gpuLayersAll ? model.layers : cand.gpuLayers, ctx, cand.kvType, rules.ubatch, cand.kvOffload !== false)
+    const need = req.heavyMode ? e.ramResidentBytes : e.ramBytes
+    // mmap'd weights already uploaded to the GPU are clean file pages the OS can drop: they lower 'available RAM'
+    // (calibration: ≈ file size) without being memory pressure. Credit them in the in-step floor check.
+    const mmapCredit = (model.fileBytes * Math.min(cand.gpuLayersAll ? model.layers : cand.gpuLayers, model.layers)) / model.layers
     if (avail !== null && need > avail - ramFloor) {
       return result('fail', 'skipped_memory', `est. RAM ${(need / GiB).toFixed(1)} GiB > available ${(avail / GiB).toFixed(1)} GiB − floor ${(ramFloor / GiB).toFixed(1)} GiB`)
     }
@@ -298,7 +304,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       for (; emitted < xs.length; emitted++) {
         const s = xs[emitted]
         send({ type: 'telemetry', configId: cand.id, ctx, sample: s })
-        if (!guard && s.ramAvailBytes != null && s.ramAvailBytes < ramFloor) guard = `RAM available ${(s.ramAvailBytes / GiB).toFixed(1)} GiB fell below the floor`
+        if (!guard && s.ramAvailBytes != null && s.ramAvailBytes + mmapCredit < ramFloor) guard = `RAM available ${(s.ramAvailBytes / GiB).toFixed(1)} GiB fell below the floor`
         if (!guard && s.procVramSharedBytes != null && s.procVramSharedBytes > cfg.sharedSpillAbortBytes) guard = `shared GPU memory spill ${(s.procVramSharedBytes / GiB).toFixed(1)} GiB exceeded the abort limit`
         if (guard) void backend.cancel()
       }

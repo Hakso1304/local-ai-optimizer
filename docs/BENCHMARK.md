@@ -49,7 +49,9 @@ A step is one candidate config at one context size. The server is started with `
 - Reps: `reps = 2` measured prompts. The first failing rep fails the step.
 - Timeouts: prompt `60 s + 10 ms × ctx`; load 120 s (inside the backend); quality 180 s per test.
 - Pre-check before each step: est. RAM (`estimateMemory`) > live available − floor, where floor = max(2 GiB, 8 % of RAM) → `fail / skipped_memory`, and the model is not loaded.
-- In-step guard (1 s poll of new samples): RAM available < floor, or per-PID shared > 2 GiB → `backend.cancel()` → `fail / guard_abort`. The guard reason is recorded, not the "cancelled" error its own cancel caused.
+- In-step guard (1 s poll of new samples): RAM available **+ mmap credit** < floor, or per-PID shared > 2 GiB → `backend.cancel()` → `fail / guard_abort`. The guard reason is recorded, not the "cancelled" error its own cancel caused.
+  - mmap credit = file × GPU layers / all layers. The weights already uploaded to the GPU are clean file pages the OS can drop. Calibration showed available RAM falls by ≈ the file size, so without the credit a 16 GiB model would falsely trip the floor.
+  - Heavy mode lowers the floor to the 2 GiB minimum and pre-checks the resident RAM only.
 
 ### Stop rules (per candidate)
 1. The first **FAIL** verdict (§6): oom, device_lost, crash, load_fail, load_timeout, config_drift, req_timeout, request_error, guard_abort, skipped_memory, cancelled.
@@ -158,7 +160,7 @@ Calibrated on the 8B full offload (TTFT 0.5 s @ 2K, 1.1 s @ 4K, 2.2 s @ 8K, 4.9 
 ## 8. Recommendation (`src/core/scoring/recommend.ts` `recommend(inputs, machine, workload)`)
 
 - **Excluded**: candidates with no usable step, listed with their step reasons (A17).
-- **Gates** (the candidate is still ranked, but `eligible:false`): practical ceiling < 0.5 · targetContext; stability < 50; quality < minQuality (an estimated quality also gates, and the reason says "estimated"); **TTFT at the scoring step > latencyToleranceMs**.
+- **Gates** (the candidate is still ranked, but `eligible:false`): practical ceiling < 0.5 · targetContext; stability < 50; quality < minQuality (an estimated quality also gates, and the reason says "estimated"); **TTFT at the scoring step > latencyToleranceMs**; **decode at the scoring step < `minDecodeTps`** (fast 30, chat/coding 10, reasoning/long-ctx 5, doc 3, max quality 2 t/s).
 - **Partial-offload gate**: on a GPU machine, a partial config (ngl < all, including ngl 0) is ineligible whenever a full-offload config of the **same model** has any usable step, even one that is gated or degraded by a spill. Calibration: ngl 20 decodes −83 % (8B), a spilled 14B full offload beat ngl 30 by 4.7×, and ngl 0 still uses the GPU.
 - **Ranking / tie-break**: eligible first → total rounded to 1e-6, descending → lower peak VRAM (CPU-only counts as 0) → lower peak RAM → `configId` ascending (code-unit order). Unknown values sort last. Output is deep-equal for any input order.
 - **Best** = the first eligible candidate, with `practicalContext` (measured) and `declaredContext` (declared) reported separately.
@@ -189,8 +191,14 @@ Estimates are `kind:'estimated'`, prune only, and never rank.
 - **Order:**
   1. ngl=all f16.
   2. ngl=all q8_0 KV, when targetContext ≥ 32K and declared ≥ 32K.
-  3. If (1) is rejected: partial ngl = ⌊L·f⌋ for f ∈ .75/.5/.25, keeping the largest that fits plus the next lower one.
-  4. ngl=0 only when there is no GPU, or no GPU config fits (`cpuOnlyMaxParams` = 0 = off). On a GPU machine it carries the note "treated as partial offload".
+  3. If (1) is rejected: **normal mode generates nothing more.** The rejection says "full GPU offload does not fit — enable heavy-model mode". **Heavy mode** (`SessionRequest.heavyMode`) generates up to 4 partial configs, all `expectDegraded` with a `degradedReason`:
+     - the max ngl that fits at the smallest rung;
+     - the max ngl that fits at the target ctx;
+     - the max ngl with KV in RAM (`kvOffload:false` → `-nkvo`, verified in b11208 `--help`);
+     - a CPU baseline (ngl 0, `-dev none`).
+     The RAM check uses `ramResidentBytes` (non-GPU weights + CPU KV) vs available − 2 GiB. There is no keep-over step.
+  4. ngl=0 only when there is no GPU (`cpuOnlyMaxParams` = 0 = off).
+  - `estimateMemory` splits KV by layer share (8B ngl 20/33: KV CPU 416 + Vulkan 608 MiB). `rulesForRequest(req)` gives the runner and any re-planner the same rules → the same configIds.
 - **Other rules:**
   - Max 4 per model.
   - Threads = physical cores.
