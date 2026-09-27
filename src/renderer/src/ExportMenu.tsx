@@ -24,12 +24,12 @@ export function ExportMenu({ rec, cand, sessionId, ctx }: { rec: Recommendation;
   ].filter(Boolean).join(' ') : ''
   // The measured backend's own llama-server (a HIP config on the Vulkan exe would not find ROCm0).
   const exe = exes[cfg.backend] ?? null
-  const missing = cfg.backend !== 'vulkan' && !exe
+  const missing = !exe
   const command = () => [
     ...(missing ? [`# measured on the llama.cpp ${cfg.backend === 'hip' ? 'ROCm (HIP)' : cfg.backend.toUpperCase()} build, which is not installed: install it on the System page (or use that build's llama-server)`] : []),
     [toLlamaServerCommand(cfg, exe ?? 'llama-server'), genArgs].filter(Boolean).join(' ')
   ].join('\n')
-  const json = () => gen ? JSON.stringify({ ...JSON.parse(toJson(cfg)), generation: { ...gen, templateKwargs: kwargs ?? null } }, null, 2) : toJson(cfg)
+  const json = () => gen ? JSON.stringify({ ...JSON.parse(toJson(cfg, exe)), generation: { ...gen, templateKwargs: kwargs ?? null } }, null, 2) : toJson(cfg, exe)
   const copy = async (label: string, text: string) => { await navigator.clipboard.writeText(text); setDone(`${label} copied`) }
   const save = async (label: string, name: string, text: string) => {
     const r = await window.api.saveFile(name, text)
@@ -38,12 +38,12 @@ export function ExportMenu({ rec, cand, sessionId, ctx }: { rec: Recommendation;
   return (
     <div className="export">
       <div className="bar">
-        <button onClick={() => void copy('llama-server command', command())}>Copy llama-server command</button>
+        <button disabled={missing} onClick={() => void copy('llama-server command', command())}>Copy llama-server command</button>
         <button onClick={() => void copy('Ollama Modelfile', modelfile())}>Copy Ollama Modelfile</button>
         <button onClick={() => void copy('LM Studio settings', JSON.stringify(toLmStudioSettings(cfg), null, 2))} title="Key names not verified against a real LM Studio install">Copy LM Studio settings (unverified)</button>
-        <button onClick={() => void copy('JSON', json())}>Copy JSON</button>
+        <button disabled={missing} onClick={() => void copy('JSON', json())}>Copy JSON</button>
         <button onClick={() => void save('Modelfile', 'Modelfile', modelfile())}>Save Modelfile…</button>
-        <button onClick={() => void save('JSON', `lao-config-${sessionId}.json`, json())}>Save JSON…</button>
+        <button disabled={missing} onClick={() => void save('JSON', `lao-config-${sessionId}.json`, json())}>Save JSON…</button>
       </div>
       {done && <p className="muted">{done}</p>}
       <pre className="log">{provenanceNote(rec)}</pre>

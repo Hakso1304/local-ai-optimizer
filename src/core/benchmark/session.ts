@@ -217,7 +217,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       runtime: b.runtimeVersion === null ? null : `${b.kind}:${b.runtimeVersion}` }
   }))
   let cur = states[0]
-  const stateOf = (c: CandidateConfig) => states.find((s) => s.kind === (c.backend ?? 'vulkan')) ?? states[0]
+  const stateOf = (c: CandidateConfig) => states.find((s) => s.kind === (c.backend ?? 'vulkan'))
   const machine = states[0].machine // adapter/RAM facts are backend-independent; budget + device come from `cur`
   const vramTotal = val(machine.vramBytes, true)
   /** Per-PID shared − host-pinned − the config's unsaturated baseline (not the saturation-gated spill metric). */
@@ -264,11 +264,13 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   /** Run `c` on its own backend build: unload the current server first when switching. */
   const backendFor = async (c: CandidateConfig) => {
     const s = stateOf(c)
-    if (s === cur) return
+    if (!s) return false
+    if (s === cur) return true
     await unload((e) => log('warn', `unload before switching to ${s.kind}: ${(e as Error).message}`))
     cur = s
     backend = s.instance()
     log('info', `backend: ${s.kind}${s.runtimeVersion ? ` ${s.runtimeVersion}` : ''} (${s.exePath || 'default'})`)
+    return true
   }
   // The session's prompt procedure: tokenized ladder-2 only when the backend can tokenize (else character-sized ladder-1).
   const sessionPromptVersion = backend.tokenize ? PROMPT_VERSION : CHARACTER_PROMPT_VERSION
@@ -389,7 +391,10 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         if (reach) {
           const r = await runLongNeedle(reach.config, reach.model, required)
           await unload()
-          if (r) for (const g of perGen) g.results.push({ ...r, genId: g.gen.id, sample: 1 } as GenRow)
+          if (r) {
+            const baseline = perGen.find((g) => g.gen.id === BASELINE_GEN.id)
+            baseline?.results.push({ ...r, genId: BASELINE_GEN.id, sample: 1, configId: reach.config.id, backend: reach.config.backend ?? 'vulkan', ctx: required } as GenRow)
+          }
         } else {
           longNotes.push(`[I-2.5] Long-context needle CR-04-long at ${fmtCtx(required)} skipped for ${best.model.name}: practical context ${fmtCtx(val(cliff.practicalContextCeiling) ?? 0)} < ${fmtCtx(required)}`)
         }
@@ -413,7 +418,12 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       checkStuck()
       if (signal?.aborted || paused()) break
       send({ type: 'candidate:started', configId: cand.id, model: model.id, gpuLayers: cand.gpuLayers, ctxSteps: cand.ctxSteps })
-      await backendFor(cand)
+      if (!await backendFor(cand)) {
+        const reason = `required ${cand.backend ?? 'vulkan'} backend is unavailable; candidate was not run (I-1.1, I-3.9)`
+        log('warn', `${cand.id}: ${reason}`)
+        send({ type: 'candidate:done', configId: cand.id, status: 'skipped', reason })
+        continue
+      }
       checkStuck()
       if (gpuLost && cand.gpuLayers > 0) {
         send({ type: 'candidate:done', configId: cand.id, status: 'skipped', reason: 'GPU device was lost earlier in this session' })
@@ -440,6 +450,16 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         } else {
           let out = await runStep(cand, model, ctx, spillBase)
           checkStuck()
+          // Establish a benign first-rung baseline before retry, verdict, or budget learning.
+          // The first step is the only place a config can define this baseline (I-4.0).
+          if (runs.length === 0) {
+            const raw = val(out.run.peakSharedGpuRawBytes)
+            const pin = val(out.run.hostPinnedBytes) ?? 0
+            if (raw !== null && raw - pin < DEFAULT_SCORING_CONFIG.cliff.rawSharedGrowthBytes) {
+              spillBase = Math.max(0, raw - pin)
+              out.run.peakSharedGpuBytes = { value: 0, kind: 'measured', source: `per-PID shared − host-pinned − benign first-rung baseline ${(spillBase / GiB).toFixed(2)} GiB (I-4.0)` }
+            }
+          }
           // I-2.8 evidence step: shared residency (per-PID shared − pinned − baseline, not the saturation-gated metric)
           // after a successful measured request → restart the server once and re-measure BEFORE any spill verdict or
           // learning. No budget decides this: the retry is how placement and capacity are told apart.
@@ -507,7 +527,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
           if (out.detail.reason) log(run.status === 'pass' ? 'warn' : 'error', `${cand.id} @${ctx}: ${out.detail.reason}`)
         }
         runs.push(run)
-        if (runs.length === 1) {
+        if (runs.length === 1 && spillBase === 0) {
           const raw = val(run.peakSharedGpuRawBytes) ?? val(run.peakSharedGpuBytes), pin = val(run.hostPinnedBytes) ?? 0, ded = val(run.peakVramBytes)
           // Benign baseline: the config's first-rung residual when it is below the raw-growth threshold (budget-independent).
           void ded
@@ -911,6 +931,10 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   /** CR-04-long: needle at 50 % depth of a prompt filling ~0.75 × ctx. null when the load itself failed. */
   async function runLongNeedle(cand: CandidateConfig, model: ModelMeta, ctx: number): Promise<QualityResult | null> {
     send({ type: 'phase', configId: cand.id, ctx, phase: 'quality' })
+    if (!await backendFor(cand)) {
+      log('warn', `${cand.id}: required ${cand.backend ?? 'vulkan'} backend unavailable for long-context needle (I-3.9)`)
+      return null
+    }
     const needle = 'OBSIDIAN-42'
     const test: QualityTest = {
       id: 'CR-04-long', category: 'context', weight: 1, maxTokens: 24, template: 'needle',

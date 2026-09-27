@@ -11,6 +11,7 @@ import { openDb } from '../core/storage/db'
 import { sessionInputs, getSession, getSessionResume, latestRecommendation, listSessions, listVramBudget, makeSessionStorage, markInterrupted, seedDemoSession, telemetryForRun, type PlanFor } from '../core/storage/sessions'
 import { REQUIRED_CTX, insideSomeRoot, isWorkloadId, rowId, sanitizeRequest } from './validate'
 import { registerHubIpc } from './hub'
+import { modelSuggestions } from './suggestions'
 import { WORKLOADS } from '../core/scoring/workloads'
 import { val } from '../core/scoring/cliff'
 import { runSession, type InstalledBackend, type SessionStorage } from '../core/benchmark/session'
@@ -102,6 +103,7 @@ const modelRoots = () => [...modelDirs(), ...defaultLmStudioDirs(), join(default
 const llama = new LlamaCppBackend(llamaDir(), { pidFile: join(app.getPath('userData'), 'llama-server.pid') })
 const llamaHip = new LlamaCppBackend(hipDir(), { pidFile: join(app.getPath('userData'), 'llama-server-hip.pid') })
 const markerOf = (dir: string): string | null => { try { return readFileSync(join(dir, 'release-tag.txt'), 'utf8').trim() } catch { return null } }
+const primaryBackendKind = (): 'cuda' | 'vulkan' => /\bcuda-/.test(markerOf(llamaDir()) ?? '') ? 'cuda' : 'vulkan'
 
 /** Each installed llama.cpp backend, detected on its own (a HIP build that fails --version never hides Vulkan). */
 async function installedBackends(): Promise<InstalledRuntime[]> {
@@ -110,7 +112,7 @@ async function installedBackends(): Promise<InstalledRuntime[]> {
     return { kind, vendorDir: dir, exePath: b.exePath, build: d.status === 'available' ? d.version ?? null : null, status: d.status, ...(d.error ? { error: d.error } : {}) }
   }
   // the primary dir holds a CUDA build when the installer chose one (marker "<tag> cuda-X.Y")
-  const primaryKind: GpuBackendKind = /\bcuda-/.test(markerOf(llamaDir()) ?? '') ? 'cuda' : 'vulkan'
+  const primaryKind = primaryBackendKind()
   return Promise.all([one(llama, llamaDir(), primaryKind), one(llamaHip, hipDir(), 'hip')])
 }
 let smokeBusy = false
@@ -155,17 +157,18 @@ ipcMain.handle('models:fit', async (_e, w: WorkloadId): Promise<ModelFit> => {
   const devices = await llama.listDevices().catch(() => null)
   if (!devices) return { reasons: Object.fromEntries(infos.map((m) => [m.id, 'llama.cpp runtime not installed (System page)'])), vramInUseBytes: null, vramTotalBytes: null }
   const device = pickDiscreteDevice(devices)?.id ?? null
-  const bk = vramBudgetKey(profileCache, device ? 'vulkan' : 'cpu', (await llama.detect()).version)
+  const kind = device ? primaryBackendKind() : 'cpu'
+  const bk = vramBudgetKey(profileCache, kind, (await llama.detect()).version)
   const machine = machineFromProfile(await withVramInUse(profileCache), device, undefined, bk ? applicableObservations(bk, listVramBudget(needDb(), bk.key)) : [])
   const vramInUseBytes = machine.vramInUseBytes.kind === 'measured' ? machine.vramInUseBytes.value : null
   const out: Record<string, string | null> = {}
   for (const info of infos) {
     const mm = toModelMeta(info)
     if (!mm.meta) { out[info.id] = mm.reason; continue }
-    const set = generateCandidates(machine, mm.meta, { backend: device ? 'vulkan' : 'cpu' }, WORKLOADS[w], rulesForRequest({ heavyMode: false }))
+    const set = generateCandidates(machine, mm.meta, { backend: kind }, WORKLOADS[w], rulesForRequest({ heavyMode: false }))
     out[info.id] = set.candidates.length ? null : set.rejected.map((r) => r.reason).join('; ') || 'no candidate configuration'
   }
-  return { reasons: out, vramInUseBytes, vramTotalBytes: machine.vramBytes.value }
+  return { reasons: out, vramInUseBytes, vramTotalBytes: machine.vramBytes.value, suggestions: modelSuggestions(machine, infos, WORKLOADS[w]) }
 })
 let installing: Promise<unknown> | null = null
 ipcMain.handle('runtime:install', async () => {
@@ -317,10 +320,11 @@ async function startSession(req: SessionRequest, storedMachine?: SystemProfile, 
       else sendBenchEvent({ sessionId: '', type: 'log', level: 'warn', msg: `${id}: ${mm.reason}; skipped` })
     }
     if (!models.length) throw new Error('none of the selected models can be benchmarked')
-    const backendKind = device ? 'vulkan' as const : 'cpu' as const
+    const primaryGpuKind = primaryBackendKind()
+    const backendKind = device ? primaryGpuKind : 'cpu' as const
     // Installed backends, each with its OWN device id (Vulkan0 / ROCm0) from its own --list-devices. The opt-in HIP
     // build joins only when it runs and enumerates the GPU; otherwise the session is Vulkan-only and says why.
-    const backends: InstalledBackend[] = [{ kind: 'vulkan', backend: () => llama, runtimeVersion: runtime.version ?? null, exePath: llama.exePath, device }]
+    const backends: InstalledBackend[] = [{ kind: primaryGpuKind, backend: () => llama, runtimeVersion: runtime.version ?? null, exePath: llama.exePath, device }]
     const hipRt = await llamaHip.detect()
     if (hipRt.status === 'available' && req.compareBackends !== false) {
       const hipDev = pickDiscreteDevice(await llamaHip.listDevices().catch(() => []))?.id ?? null

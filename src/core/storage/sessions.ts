@@ -266,7 +266,7 @@ export function makeSessionStorage(db: DatabaseSync, planFor: PlanFor): SessionS
     },
     // The runner sets `suite` (v1 or v2); only rows from callers that don't are labelled with the v1 default.
     saveQuality: (id, modelId, configId, ctx, results) =>
-      saveQualityResults(db, sid(id), modelId, results.map((r) => ({ ...r, configId, ctx, suite: (r as { suite?: string }).suite ?? defaultTestSet.suite, expected: results.length }))),
+      saveQualityResults(db, sid(id), modelId, results.map((r) => ({ configId, ctx, ...r, suite: (r as { suite?: string }).suite ?? defaultTestSet.suite, expected: results.length }))),
     saveRecommendation: (id, rec) => { saveRecommendation(db, sid(id), rec, rec.best ? modelOf(id, rec.best.configId) : null) },
     listVramBudget: (key) => listVramBudget(db, key),
     saveVramBudgetObservation: (key, o) => saveVramBudgetObservation(db, key, o)

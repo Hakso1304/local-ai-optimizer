@@ -138,8 +138,12 @@ export function interpret(v: Verdicts): Insight[] {
     // (adapterFreeAtSharedPeakBytes — required; no budget fallback). Cleared after a fresh restart → placement (note);
     // not re-measured → cause unconfirmed (warn, restart-runtime); persisted after the restart → capacity-suspect,
     // carried by the reconciled spill metric / cliff / run reason, never "not a capacity limit" here.
-    // resident shared = per-PID shared − host-pinned (the saturation-gated spill is 0 exactly when dedicated was free)
-    const resident = (x: { peakSharedGpuRawBytes?: Metric; peakSharedGpuBytes: Metric }, pin: number) => { const raw = x.peakSharedGpuRawBytes ? val(x.peakSharedGpuRawBytes) : null; return raw === null ? val(x.peakSharedGpuBytes) : Math.max(0, raw - pin) }
+    // Use the same benign first-rung baseline as the runner before judging placement (I-4.0).
+    const firstRung = c.input.runs[0]
+    const firstRaw = firstRung?.peakSharedGpuRawBytes ? val(firstRung.peakSharedGpuRawBytes) : null
+    const firstPin = firstRung?.hostPinnedBytes ? val(firstRung.hostPinnedBytes) ?? 0 : 0
+    const baseline = firstRaw !== null && firstRaw - firstPin < v.cfg.cliff.rawSharedGrowthBytes ? Math.max(0, firstRaw - firstPin) : 0
+    const resident = (x: { peakSharedGpuRawBytes?: Metric; peakSharedGpuBytes: Metric }, pin: number) => { const raw = x.peakSharedGpuRawBytes ? val(x.peakSharedGpuRawBytes) : null; return raw === null ? val(x.peakSharedGpuBytes) : Math.max(0, raw - pin - baseline) }
     const over = (x: number | null) => x !== null && x > v.cfg.cliff.sharedSpillBytes
     for (const r of c.input.runs) {
       const pin = val(r.hostPinnedBytes) ?? 0
@@ -398,7 +402,7 @@ export function interpret(v: Verdicts): Insight[] {
   // G12: the gate verdicts themselves, as insights with their catalog action.
   for (const c of everyone) for (const f of c.failures) {
     const key = f.ruleId === rule('gate.context-floor').id ? 'gate.context-floor' : f.ruleId === rule('gate.quality-min').id ? 'gate.quality-min' : f.ruleId === rule('gate.stability').id ? 'gate.stability' : null
-    if (key) push(key, f.text, [], { configId: id(c) })
+    if (key) push(key, `${id(c)}: ${f.text}`, [], { configId: id(c) })
   }
 
   // §6 eligibility and stability — failures from ALL persisted runs (I-6.3)
@@ -423,7 +427,10 @@ export function interpret(v: Verdicts): Insight[] {
   }
   const runs = [...allInputs.flatMap((c) => c.runs), ...(data.allRuns ?? [])]
   const verSet = (f: (x: NonNullable<(typeof runs)[number]['versions']>) => string | undefined) => [...new Set(runs.map((r) => (r.versions ? f(r.versions) : undefined)).filter((x): x is string => !!x))].sort()
-  for (const [what, set] of [['runtime/benchmark/prompt', verSet((x) => `${x.runtime ?? '?'}/${x.benchmark}/${x.prompts}`)], ['quality suite', verSet((x) => x.quality)], ['rules', verSet((x) => x.rules)]] as const) {
+  // Pre-backend-axis rows stored bare build tags. They denote the primary Vulkan
+  // build; compare them as Vulkan without rewriting the historical row (I-6.2).
+  const runtimeLabel = (value: string | null | undefined) => !value ? '?' : /^(vulkan|cuda|hip|cpu):/.test(value) ? value : `vulkan:${value}`
+  for (const [what, set] of [['runtime/benchmark/prompt', verSet((x) => `${runtimeLabel(x.runtime)}/${x.benchmark}/${x.prompts}`)], ['quality suite', verSet((x) => x.quality)], ['rules', verSet((x) => x.rules)]] as const) {
     if (set.length > 1) add('stab.versions', { what, versions: set.join(', ') }, [])
   }
 

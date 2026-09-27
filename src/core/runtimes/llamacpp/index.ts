@@ -88,7 +88,10 @@ type SpawnFn = (cmd: string, args: string[], opts: SpawnOptions) => ChildProcess
 /** The child's environment: the parent's minus GGML_CUDA_ENABLE_UNIFIED_MEMORY. Managed memory lets a CUDA/HIP
  *  build oversubscribe VRAM into system RAM, which would make "fits in VRAM" unmeasurable (docs/HIP-BACKEND.md). */
 export function serverEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const { GGML_CUDA_ENABLE_UNIFIED_MEMORY: _um, ...env } = base
+  // Windows environment names are case-insensitive. Delete every spelling so a
+  // lowercase inherited key cannot re-enable managed-memory oversubscription.
+  const env = { ...base }
+  for (const key of Object.keys(env)) if (key.toUpperCase() === 'GGML_CUDA_ENABLE_UNIFIED_MEMORY') delete env[key]
   return env
 }
 

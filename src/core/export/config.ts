@@ -138,11 +138,17 @@ export function toLmStudioSettings(c: ExportConfig): Record<string, unknown> {
   }
 }
 
-export function toJson(c: ExportConfig): string {
+export function toJson(c: ExportConfig, exePath?: string | null): string {
+  if ((c.backend === 'hip' || c.backend === 'cuda') && !exePath) throw new Error(`llama.cpp ${c.backend} executable unavailable; cannot export a runnable command (I-3.9)`)
+  const executable = exePath ?? 'llama-server'
   return JSON.stringify({
     format: 'local-ai-optimizer/export-1',
     ...c,
-    llamaServer: { args: toLlamaServerArgs(c), command: toLlamaServerCommand(c), request: toLlamaServerRequest(c) },
+    llamaServer: {
+      executable, args: toLlamaServerArgs(c), command: toLlamaServerCommand(c, executable), request: toLlamaServerRequest(c),
+      environment: { GGML_CUDA_ENABLE_UNIFIED_MEMORY: null },
+      environmentPolicy: 'remove GGML_CUDA_ENABLE_UNIFIED_MEMORY case-insensitively before launch on Windows'
+    },
     lmStudio: toLmStudioSettings(c)
   }, null, 2)
 }
