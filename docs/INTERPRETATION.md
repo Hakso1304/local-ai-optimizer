@@ -119,7 +119,9 @@ window ⇒ "<n> GiB of this process is resident in shared memory although <x> Gi
 dedicated VRAM was free — driver placement after a previous large load, not a capacity
 limit". Action `restart-runtime` (unload, fresh server, re-measure the rung once; the
 runner does this automatically once per rung and records `placementRetry` with both
-observations). Not evaluable without a same-window adapter-free reading.
+observations). Not evaluable without a same-window adapter-free reading — there is no
+fallback to budget − peak. A retry that still shows residency is classified
+capacity-suspect (degraded), never "not a capacity limit".
 Rule I-2.6 (`ctx.recovered-dip`, note, thresholds = cliff engine's 0.60 ratio and 2 t/s
 absolute, origin policy): "decode dipped at <ctx> and recovered on the next tested rung;
 cause unverified". Missing rungs between are disclosed.
@@ -191,8 +193,15 @@ the GPU, driver, backend build and allocation pattern — observed here 13.3 GiB
 The planner therefore uses `vramEffectiveBudgetBytes` learned from this machine's own
 observations (ceiling at spill onset, with model, KV bytes and largest single buffer;
 keyed by GPU identity + driver + backend build; the most conservative comparable
-observation wins, MEASURED). Observations are recorded only from spills that survive
-the I-2.8 placement retry — a placement event is not a budget. With no observation the
+observation wins, MEASURED). Observations are recorded only from rungs with a successful MEASURED
+request whose residency was reproduced by the I-2.8 placement retry (originating run,
+status and retry linkage persisted); a placement event, a failed/timed-out request or an
+estimate is never a budget. Until an observation is qualified it is ADVISORY (shown,
+not used for pruning). Non-comparable observations (different largest runtime buffer
+or backend build) are estimates for this allocation and never prune; an allocation
+observed clean at X cannot be pruned by an observation below X. Observations are keyed
+by the selected adapter's stable identity + verified driver + backend build; unknown
+identity ⇒ advisory only. With no observation the
 0.80 × total figure is DISCLOSED as an estimate ("no measured budget on this machine
 yet; assuming 80 % (some GPUs/backends allow 100 %)") but is NOT used to prune
 candidates: an estimate may never remove a configuration that measurement could show
