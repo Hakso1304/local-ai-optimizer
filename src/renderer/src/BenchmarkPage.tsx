@@ -47,6 +47,8 @@ export function BenchmarkPage({ live, preset, onDownload }: { live: LiveState; p
       setWorkload(w)
       setReqCtx(p ? p.requiredContext ?? 0 : s.requiredContext ?? 0)
       if (p) { beforePreset.current = { heavy: false, reqCtx: s.requiredContext ?? 0 }; setHeavy(p.heavyMode) }
+      if (preset?.qualityMode) setQualityMode(preset.qualityMode)
+      if (preset?.genSearch !== undefined) setGenSearch(preset.genSearch)
     })
     window.api.listModels().then(setModels, (e: Error) => setMsg(e.message))
   }, [])

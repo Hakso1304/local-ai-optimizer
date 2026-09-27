@@ -45,7 +45,7 @@ function App() {
         {section === 'Benchmark' && <BenchmarkPage key={preset ? 'preset' : 'plain'} live={live} preset={preset} onDownload={() => go('Download')} />}
         {section === 'Models' && <ModelsPage />}
         {section === 'Download' && <HubPage />}
-        {section === 'Results' && <ResultsPage key={sessionId ?? 'none'} sessionId={sessionId} />}
+        {section === 'Results' && <ResultsPage key={sessionId ?? 'none'} sessionId={sessionId} go={go} />}
         {section === 'System' && <SystemPage />}
       </main>
     </div>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { WorkloadId, WorkloadProfile } from '../../shared/bench-types'
 import type { SessionDetail, SystemProfile } from '../../shared/types'
+import { Reason, cardInsights, insightsOf } from './InterpretPanel'
 import { LARGE, LARGE_PRESET, LargeCodingCard, presetFor, type BenchPreset } from './LargeCodingCard'
 import { COMPONENT_LABEL, CtxPick, DemoBanner, M, ScoreBar, fmtCtx, gib } from './ui'
 
@@ -31,7 +32,7 @@ function RecommendedCard({ d, go }: { d: SessionDetail; go: Go }) {
       {d.session.demo && <DemoBanner what={`DEMO DATA (workload ${d.session.workload})`} />}
       <h2>Recommended configuration</h2>
       {!rec?.best || !c ? (
-        <><p>No candidate met this workload's requirements.</p><ul>{rec?.reasons.map((r) => <li key={r}>{r}</li>)}</ul></>
+        <><p>No candidate met this workload's requirements.</p><ul>{rec?.reasons.map((r) => <li key={r}><Reason text={r} /></li>)}</ul></>
       ) : (
         <>
           <table className="kv">
@@ -47,6 +48,18 @@ function RecommendedCard({ d, go }: { d: SessionDetail; go: Go }) {
               <tr><td>Score</td><td>{rec.best.score.total.toFixed(1)} / 100{rec.best.fallback && <span className="pill warn-pill">{rec.best.fallback}</span>}</td></tr>
             </tbody>
           </table>
+          {(() => {
+            const ci = cardInsights(insightsOf(rec))
+            const q = rec.best.score.breakdown.find((b) => b.component === 'quality') as ({ score: number; n?: number; ci95?: number; input: { kind: string } } | undefined)
+            return (
+              <div className="card-insights">
+                {ci.ceiling && <p><Reason text={ci.ceiling.text} /></p>}
+                {q && <p>Quality {q.score.toFixed(0)}{q.ci95 != null ? ` ± ${q.ci95.toFixed(0)}` : ''}{q.n != null ? ` (n ${q.n})` : ''} <span className="muted">({q.input.kind})</span></p>}
+                {ci.decode && <p><Reason text={ci.decode.text} /></p>}
+                {ci.alerts.map((i, k) => <p key={k} className={`sev-${i.severity}`}><span className={`sev sev-${i.severity}`}>{i.severity}</span> <Reason text={i.text} /></p>)}
+              </div>
+            )
+          })()}
           {rec.best.score.breakdown.map((b) => (
             <ScoreBar key={b.component} label={COMPONENT_LABEL[b.component]} score={b.score} kind={b.input.kind} weight={b.weight} />
           ))}

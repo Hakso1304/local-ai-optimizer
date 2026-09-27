@@ -6,6 +6,8 @@ import type { TelemetrySample } from '../../shared/bench-events'
 import { WORKLOADS } from '../../core/scoring/workloads'
 import { genLabel } from '../../core/benchmark/gen'
 import { ExportMenu } from './ExportMenu'
+import { InterpretPanel, Reason, insightsOf, type InsightActions } from './InterpretPanel'
+import type { BenchPreset } from './LargeCodingCard'
 import { LineChart, type Band } from './LineChart'
 import { ParetoChart } from './ParetoChart'
 import { SloFilter, type SloCheck } from './SloFilter'
@@ -53,7 +55,16 @@ function GenTable({ d, chosen, tag }: { d: SessionDetail; chosen: string | null;
   )
 }
 
-function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) => void }) {
+function Detail({ d, onRerun, go }: { d: SessionDetail; onRerun: (configId: string) => void; go: Go }) {
+  const [exportCtx, setExportCtx] = useState<number | null>(null)
+  const preset = (extra: Partial<BenchPreset>): BenchPreset => ({ workload: d.session.workload, heavyMode: d.session.heavyMode, requiredContext: d.session.requiredContext, ...extra })
+  const actions: InsightActions = {
+    enableHeavyMode: () => go('Benchmark', undefined, preset({ heavyMode: true })),
+    runThoroughQuality: () => go('Benchmark', undefined, preset({ qualityMode: 'thorough' })),
+    tryThinkingConfig: () => go('Benchmark', undefined, preset({ genSearch: true })),
+    download: () => go('Download'),
+    useContext: (ctx) => setExportCtx(ctx)
+  }
   const rec = d.recommendation
   const xs = [...new Set(d.candidates.flatMap((c) => c.runs.map((r) => r.ctx)))].sort((a, b) => a - b)
   const at = (c: SessionCandidate, f: (r: SessionCandidate['runs'][number]) => number | null) => xs.map((x) => { const r = c.runs.find((q) => q.ctx === x); return r ? f(r) : null })
@@ -77,6 +88,7 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
   return (
     <>
       {d.session.demo && <DemoBanner />}
+      {insightsOf(rec).length > 0 && <InterpretPanel insights={insightsOf(rec)} actions={actions} tag={tag} />}
       <h2>Comparison — {d.session.workload}{tag}</h2>
       <SloFilter session={d.session} candidates={d.candidates} onChange={onSlo} />
       <table>
@@ -174,7 +186,7 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
             const def = WORKLOADS[d.session.workload].minDecodeTps
             return own != null ? <p>Decode gate: {num(own)} t/s (yours)</p> : def != null ? <p className="muted">Decode gate: {num(def)} t/s (workload default)</p> : null
           })()}
-          <ul>{rec.reasons.map((r) => <li key={r}>{r}</li>)}</ul>
+          <ul>{rec.reasons.map((r) => <li key={r}><Reason text={r} /></li>)}</ul>
           <table>
             <tbody>
               <tr><td>Fastest</td><td>{name(rec.alternatives.fastest)}</td></tr>
@@ -184,14 +196,16 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
             </tbody>
           </table>
           {rec.excluded.map((e) => <p key={e.configId} className="err">Excluded {e.configId}: {e.reasons.join('; ')}</p>)}
-          {!d.session.demo && <><h3>Export</h3><ExportMenu rec={rec} cand={d.candidates.find((c) => c.config.id === rec.best?.configId)} sessionId={d.session.id} /></>}
+          {!d.session.demo && <><h3>Export</h3><ExportMenu rec={rec} cand={d.candidates.find((c) => c.config.id === rec.best?.configId)} sessionId={d.session.id} ctx={exportCtx} />{exportCtx && <p className="muted">Export uses -c {exportCtx} (from an interpretation action). <button className="mini" onClick={() => setExportCtx(null)}>reset</button></p>}</>}
         </div>
       ) : <p className="muted">No recommendation stored for this session.</p>}
     </>
   )
 }
 
-export function ResultsPage({ sessionId }: { sessionId?: number }) {
+type Go = (section: 'Benchmark' | 'Download', sessionId?: number, preset?: BenchPreset) => void
+
+export function ResultsPage({ sessionId, go }: { sessionId?: number; go: Go }) {
   const [list, setList] = useState<SessionSummary[] | null>(null)
   const [sel, setSel] = useState<number | undefined>(sessionId)
   const [detail, setDetail] = useState<SessionDetail | null>(null)
@@ -265,7 +279,7 @@ export function ResultsPage({ sessionId }: { sessionId?: number }) {
           {computed && <span className="pill warn-pill">{computed.label} — not the session's own recommendation</span>}
         </div>
       )}
-      {shown && <Detail d={shown} onRerun={(configId) => act(window.api.resumeBench(shown.session.id, { rerunConfigIds: [configId] }))} />}
+      {shown && <Detail d={shown} go={go} onRerun={(configId) => act(window.api.resumeBench(shown.session.id, { rerunConfigIds: [configId] }))} />}
     </section>
   )
 }

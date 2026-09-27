@@ -2,9 +2,14 @@ import { useEffect, useState } from 'react'
 import type { WorkloadId } from '../../shared/bench-types'
 import type { ComputedRecommendation, SessionDetail } from '../../shared/types'
 import { COMPONENT_LABEL, CtxPick, ScoreBar, num } from './ui'
+import { Reason } from './InterpretPanel'
 
 export const LARGE: WorkloadId = 'large_coding'
-export interface BenchPreset { workload: WorkloadId; heavyMode: boolean; requiredContext: number | null }
+export interface BenchPreset {
+  workload: WorkloadId; heavyMode: boolean; requiredContext: number | null
+  /** Optional, set by interpretation actions (run-thorough-quality / try-thinking-config). */
+  qualityMode?: 'quick' | 'thorough'; genSearch?: boolean
+}
 export const LARGE_PRESET: BenchPreset = { workload: LARGE, heavyMode: true, requiredContext: 65536 }
 
 /** The one place that says which workload implies which Benchmark settings (Dashboard button and the Benchmark
@@ -41,7 +46,7 @@ export function LargeCodingCard({ fastDecode, onBenchmark, onDetails }: { fastDe
         : !state ? <p>No benchmark session reached 32K context yet.</p>
         : !best || !c ? (
           <><p>No configuration in session #{state.r.sessionId} meets the large-scale coding requirements.</p>
-            <ul>{state.r.recommendation.reasons.slice(0, 4).map((x) => <li key={x}>{x}</li>)}</ul></>
+            <ul>{state.r.recommendation.reasons.slice(0, 4).map((x) => <li key={x}><Reason text={x} /></li>)}</ul></>
         ) : (
           <>
             <p className="muted">{state.r.label}</p>

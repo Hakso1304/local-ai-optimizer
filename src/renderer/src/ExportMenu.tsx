@@ -6,9 +6,11 @@ import type { SessionCandidate } from '../../shared/types'
 
 /** Export of the recommended config. The llama-server command reproduces the measured launch exactly; Ollama and
  *  LM Studio outputs are translations (LM Studio keys unverified). */
-export function ExportMenu({ rec, cand, sessionId }: { rec: Recommendation; cand: SessionCandidate | undefined; sessionId: number }) {
+export function ExportMenu({ rec, cand, sessionId, ctx }: { rec: Recommendation; cand: SessionCandidate | undefined; sessionId: number; ctx?: number | null }) {
   const [done, setDone] = useState<string | null>(null)
-  const cfg = cand ? exportConfigFrom(rec, cand.config, cand.model, String(sessionId)) : null
+  const base = cand ? exportConfigFrom(rec, cand.config, cand.model, String(sessionId)) : null
+  // An interpretation "use-context" action can pin -c (e.g. the last clean rung); otherwise recommendedCtx.
+  const cfg = base && ctx ? { ...base, ctx } : base
   if (!cfg) return <p className="muted">Nothing to export: {rec.best ? 'no recommended context' : 'no recommendation'}.</p>
   const modelfile = () => toOllamaModelfile(cfg, { from: cfg.modelPath })
   // Chosen generation config → llama-server sampling defaults + chat-template kwargs (thinking / effort).
