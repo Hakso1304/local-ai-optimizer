@@ -1,0 +1,99 @@
+{
+ "when": "2026-09-27T16:55:57.840Z",
+ "model": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+ "vulkaninfoHeaps": "",
+ "results": [
+  {
+   "label": "A1 fresh, 36,572-token prompt",
+   "exe": "vendor/llama.cpp/llama-server.exe",
+   "argv": "-m D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf -c 65536 -ngl 999 -dev Vulkan0 -t 8 -b 2048 -ub 512 -fa on -fit off --parallel 1",
+   "error": null,
+   "ramAbort": null,
+   "loadMs": 6293,
+   "promptTokensRequested": 36572,
+   "promptTokensActual": 36559,
+   "reps": [
+    {
+     "decodeTps": 36.88795762125536,
+     "prefillTps": 1735.0816083959726,
+     "promptN": 36560,
+     "ttftMs": 21071.055
+    },
+    {
+     "decodeTps": 37.43909514128984,
+     "prefillTps": 1743.0224275878113,
+     "promptN": 36560,
+     "ttftMs": 20975.06
+    }
+   ],
+   "samples": 73,
+   "adapterLuid": "0x00000000_0x00016058",
+   "adapterTotalGiB": 15.92,
+   "peakPidDedicatedGiB": 11.6,
+   "peakPidSharedGiB": 1.08,
+   "pidSharedBaselineGiB": 1.08,
+   "peakAdapterDedicatedGiB": 12.76,
+   "spillOnset": null,
+   "buffersMiB": {
+    "model": [],
+    "kv": [],
+    "compute": []
+   },
+   "layersPerDevice": {},
+   "offloadLines": [],
+   "largestBufferMiB": 0,
+   "listDevicesBefore": [
+    "Vulkan0: AMD Radeon RX 9070 XT (16304 MiB, 15416 MiB free)",
+    "Vulkan1: AMD Radeon(TM) Graphics (16187 MiB, 15377 MiB free)"
+   ],
+   "ramAvailBeforeGiB": 17.44,
+   "ramAvailMinGiB": 11.56
+  },
+  {
+   "label": "A2 fresh, 49,152-token prompt (0.75·ctx)",
+   "exe": "vendor/llama.cpp/llama-server.exe",
+   "argv": "-m D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf -c 65536 -ngl 999 -dev Vulkan0 -t 8 -b 2048 -ub 512 -fa on -fit off --parallel 1",
+   "error": null,
+   "ramAbort": null,
+   "loadMs": 4181,
+   "promptTokensRequested": 49152,
+   "promptTokensActual": 49169,
+   "reps": [
+    {
+     "decodeTps": 30.04515526602856,
+     "prefillTps": 1499.1615579974753,
+     "promptN": 49170,
+     "ttftMs": 32798.333
+    },
+    {
+     "decodeTps": 30.032345072117828,
+     "prefillTps": 1480.7334355482087,
+     "promptN": 49170,
+     "ttftMs": 33206.517
+    }
+   ],
+   "samples": 110,
+   "adapterLuid": "0x00000000_0x00016058",
+   "adapterTotalGiB": 15.92,
+   "peakPidDedicatedGiB": 11.6,
+   "peakPidSharedGiB": 1.08,
+   "pidSharedBaselineGiB": 1.08,
+   "peakAdapterDedicatedGiB": 12.75,
+   "spillOnset": null,
+   "buffersMiB": {
+    "model": [],
+    "kv": [],
+    "compute": []
+   },
+   "layersPerDevice": {},
+   "offloadLines": [],
+   "largestBufferMiB": 0,
+   "listDevicesBefore": [
+    "Vulkan0: AMD Radeon RX 9070 XT (16304 MiB, 15416 MiB free)",
+    "Vulkan1: AMD Radeon(TM) Graphics (16187 MiB, 15377 MiB free)"
+   ],
+   "ramAvailBeforeGiB": 17.43,
+   "ramAvailMinGiB": 10.61
+  }
+ ]
+}
