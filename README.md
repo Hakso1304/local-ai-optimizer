@@ -24,6 +24,12 @@ nothing is guessed silently.
    progress, speed and ETA, can be paused and resumed (partial file kept) or cancelled, are checked against the
    repository's sha256 when it publishes one, and appear on the Models page when finished.
 3. Benchmark page: pick a workload and models. **Include heavy models** to also test models whose full GPU offload does not fit (partial offload, slow). Then Start; Pause/Resume and Cancel work mid-run.
+   - **Required context** (Auto / 32K / 64K / 128K): Auto uses the workload's default. A fixed value extends the
+     context ladder to that size and only recommends configurations that reach it; the workload's TTFT tolerance
+     then becomes advisory (a long prompt is allowed to take long).
+   - **Min decode t/s**: your own usability floor for generation speed (blank = the workload's gate); 20–30 t/s is
+     fine for large-scale work.
+   - Any selection can be benchmarked regardless of these gates; they only decide what gets recommended.
 4. Results page: recommendation, charts, per-run telemetry, and the *Export* menu.
 
 ## Prerequisites
