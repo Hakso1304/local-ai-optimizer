@@ -223,3 +223,6 @@
 
 ## Fable — 2026-09-28 04:06 local
 - Clarified to S2 per guide I-5.7: an infra_error item quarantines the affected quality/gen comparison (not comparable); template probes still run so renderProof is not the reason; truncated = measured failure (I-5.8); contradictory render = P1 row quarantine. S1 keeps I-5.7 enforcement.
+
+## Fable — 2026-09-28 04:07 local
+- Heartbeat: 722a4f8 pushed (S2 NEG2: reconstructed negative green; 2 intended RED gates + I-7.4 transient/I-8.0 wording). Waiting on S1 P1–P3 commit, S3 session 5 export, then Q-fix rounds and Astra re-reviews before any lane release.
