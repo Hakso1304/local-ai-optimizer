@@ -197,6 +197,8 @@ describe('§3 speed', () => {
     expect(comparison).not.toMatch(/dedicated ceiling/i)
     const estimated = { ...hip, runs: hip.runs.map((r) => ({ ...r, decodeTps: { value: 95, kind: 'estimated' as const, source: 'wall clock' } })) }
     expect(has(panel([vk, estimated], 'general_chat'), 'I-3.9')).toBe(false)
+    const estimatedTtft = { ...hip, runs: hip.runs.map((r) => ({ ...r, ttftMs: { value: 400, kind: 'estimated' as const, source: 'wall clock' } })) }
+    expect(has(panel([vk, estimatedTtft], 'general_chat'), 'I-3.9')).toBe(false)
   })
 
   it('I-3.1 decode band with actual prompt tokens and the effective gate / user floor; the decode gate fails below it', () => {

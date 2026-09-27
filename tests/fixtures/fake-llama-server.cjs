@@ -1,8 +1,10 @@
 // Stand-in for llama-server.exe in process tests. FAKE_MODE: ok | wrong | die-oom
 const http = require('node:http')
+const { writeFileSync } = require('node:fs')
 const args = process.argv.slice(2)
 const arg = (k) => args[args.indexOf(k) + 1]
 const mode = process.env.FAKE_MODE
+if (process.env.FAKE_PID_FILE) writeFileSync(process.env.FAKE_PID_FILE, String(process.pid))
 
 if (mode === 'die-oom') {
   console.error('ggml_vulkan: Device memory allocation of size 9000000000 failed.')
@@ -31,7 +33,10 @@ http
       res.write('data: {"content":"a","stop":false}\n\ndata: {"content":"b","stop":false}\n\ndata: {"content":"c","stop":false}\n\n')
       return res.end('data: {"content":"","stop":true,"stop_type":"limit"}\n\n')
     }
-    if (req.url === '/completion' && mode === 'hang-completion') return // request timeout must cancel this fetch
+    if (req.url === '/completion' && mode === 'hang-completion') {
+      if (process.env.FAKE_PHASE_FILE) writeFileSync(process.env.FAKE_PHASE_FILE, 'completion')
+      return // request timeout must cancel this fetch
+    }
     if (req.url === '/completion') {
       let body = ''
       req.on('data', (d) => (body += d))

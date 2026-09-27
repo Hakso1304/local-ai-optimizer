@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ChildProcess } from 'node:child_process'
-import { bounded, idle, ramFloor, safeEnv, stopOwned, unifiedMemoryKeys, watchRam } from '../scripts/ab-spill'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { bounded, idle, launch, ramFloor, safeEnv, stopOwned, unifiedMemoryKeys, watchRam, type LaunchProbe } from '../scripts/ab-spill'
 
 const GiB = 1024 ** 3
 
@@ -66,4 +69,56 @@ describe('ab-spill safety helpers (injected fakes; no GPU or executable)', () =>
     await expect(stopOwned(fake(vi.fn()), Promise.resolve(), () => true, vi.fn())).rejects.toThrow(/survived teardown/)
     await expect(stopOwned({ pid: undefined } as ChildProcess, Promise.resolve(), () => false, vi.fn())).rejects.toThrow(/no PID/)
   })
+})
+
+describe('ab-spill launch with a fake Node HTTP child (no GPU)', { timeout: 15_000 }, () => {
+  const fake = join(__dirname, 'fixtures', 'fake-llama-server.cjs')
+  const safeProbe: LaunchProbe = {
+    readRam: () => 5 * GiB, countServers: () => 0, devices: () => [],
+    startSampler: () => ({ rows: [], stop: async () => {} }),
+    requestTimeoutMs: 100, healthTimeoutMs: 50, loadTimeoutMs: 500, watchIntervalMs: 10
+  }
+  const args = [fake, '-m', 'fake.gguf', '-c', '2048']
+  const isGone = (pid: number) => { try { process.kill(pid, 0); return false } catch { return true } }
+  async function withFake(mode: string, work: (pidFile: string, phaseFile: string) => Promise<void>) {
+    const dir = mkdtempSync(join(tmpdir(), 'lao-ab-fake-'))
+    const pidFile = join(dir, 'pid.txt'), phaseFile = join(dir, 'phase.txt')
+    const old = { mode: process.env.FAKE_MODE, pid: process.env.FAKE_PID_FILE, phase: process.env.FAKE_PHASE_FILE }
+    process.env.FAKE_MODE = mode; process.env.FAKE_PID_FILE = pidFile; process.env.FAKE_PHASE_FILE = phaseFile
+    try { await work(pidFile, phaseFile) } finally {
+      for (const [key, value] of [['FAKE_MODE', old.mode], ['FAKE_PID_FILE', old.pid], ['FAKE_PHASE_FILE', old.phase]] as const) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value
+      }
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  it('bounds a never-responding health endpoint and reaps the spawned child', async () => withFake('hang-health', async (pidFile) => {
+    const row = await launch('health hang', args, null, process.execPath, { ...safeProbe, loadTimeoutMs: 300 })
+    expect(row.error).toMatch(/health unavailable|abort|timeout/i)
+    expect(existsSync(pidFile)).toBe(true)
+    expect(isGone(Number(readFileSync(pidFile, 'utf8')))).toBe(true)
+  }))
+
+  it('bounds a never-responding completion request and reaps the child', async () => withFake('hang-completion', async (pidFile, phaseFile) => {
+    const row = await launch('request hang', args, 16, process.execPath, { ...safeProbe, loadTimeoutMs: 2_000 })
+    expect(existsSync(phaseFile)).toBe(true)
+    expect(row.error).toMatch(/timeout|aborted/i)
+    expect(isGone(Number(readFileSync(pidFile, 'utf8')))).toBe(true)
+  }))
+
+  it('RAM watchdog aborts during load and reaps the child', async () => withFake('hang-health', async (pidFile) => {
+    const row = await launch('load RAM', args, null, process.execPath, { ...safeProbe, loadTimeoutMs: 2_000,
+      readRam: () => existsSync(pidFile) ? 3 * GiB : 5 * GiB })
+    expect(row.ramAbort).toMatch(/< 4 GiB/)
+    expect(isGone(Number(readFileSync(pidFile, 'utf8')))).toBe(true)
+  }))
+
+  it('RAM watchdog aborts an active request and reaps the child', async () => withFake('hang-completion', async (pidFile, phaseFile) => {
+    const row = await launch('request RAM', args, 16, process.execPath, { ...safeProbe, requestTimeoutMs: 2_000, loadTimeoutMs: 2_000,
+      readRam: () => existsSync(phaseFile) ? 3 * GiB : 5 * GiB })
+    expect(existsSync(phaseFile)).toBe(true)
+    expect(row.ramAbort).toMatch(/< 4 GiB/)
+    expect(isGone(Number(readFileSync(pidFile, 'utf8')))).toBe(true)
+  }))
 })

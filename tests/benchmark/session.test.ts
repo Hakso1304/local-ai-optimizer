@@ -567,17 +567,31 @@ describe('runSession', () => {
     const plan = [{ ...base, ctxSteps: [2048, 32768] }, { ...base, id: `${base.id}|hip`, backend: 'hip' as const, device: 'ROCm0', ctxSteps: [2048, 32768] }]
     const { s, storage } = memStorage()
     let t = 0
-    await runSession({ workload: 'long_context_coding', modelIds: [model.id], runQuality: true, requiredContext: 32768, ladder: [2048, 32768], qualityMode: 'quick' },
+    const request = { workload: 'long_context_coding' as const, modelIds: [model.id], runQuality: true, requiredContext: 32768, ladder: [2048, 32768], qualityMode: 'quick' as const, qualitySeed: 0 }
+    const evaluate: SessionDeps['evaluate'] = async (test) => ({ testId: test.id, category: test.category, weight: test.weight, pass: test.id !== 'CR-04-long', score: test.id === 'CR-04-long' ? 0 : 1, detail: '' })
+    const live = await runSession(request,
       { backend: () => vk, backends: [
         { kind: 'vulkan', backend: () => vk, runtimeVersion: 'b1', exePath: 'vulkan.exe', device: 'Vulkan0' },
         { kind: 'hip', backend: () => hipBackend, runtimeVersion: 'b1', exePath: 'hip.exe', device: 'ROCm0' }
       ], startSampler: (pid) => { const xs = [sample(pid - 1000)]; return { samples: xs, unavailable: {}, stop: () => xs } },
-      storage, machine, gpuDevice: 'Vulkan0', models: [model], plan, clock: { now: () => t++ }, evaluate: passAll }, () => {})
+      storage, machine, gpuDevice: 'Vulkan0', models: [model], plan, clock: { now: () => t++ }, evaluate }, () => {})
     expect(vk.calls.loads.filter((l) => l.contextSize === 32768)).toHaveLength(1) // failed ladder only
     expect(hipBackend.calls.loads.filter((l) => l.contextSize === 32768).length).toBeGreaterThanOrEqual(2) // ladder + needle
     expect(hipBackend.calls.loads.every((l) => l.device === 'ROCm0')).toBe(true)
     const needle = s.quality.flatMap((q) => q.results).find((r) => r.testId === 'CR-04-long') as QualityResult & { configId?: string; backend?: string; ctx?: number }
     expect(needle).toMatchObject({ configId: plan[1].id, backend: 'hip', ctx: 32768 })
+    const q = (rec: Recommendation | null) => rec?.ranked.find((r) => r.configId === plan[0].id)?.breakdown.find((x) => x.component === 'quality')?.input
+    expect(q(live)).toMatchObject({ kind: 'measured', value: 100 }) // failed HIP needle did not lower Vulkan's live baseline
+    const replay = memStorage(s.runs, s.quality)
+    const templatesBeforeReuse = vk.calls.templates + hipBackend.calls.templates
+    const resumed = await runSession({ ...request, resumeSessionId: 's1' }, {
+      backend: () => vk, backends: [
+        { kind: 'vulkan', backend: () => vk, runtimeVersion: 'b1', exePath: 'vulkan.exe', device: 'Vulkan0' },
+        { kind: 'hip', backend: () => hipBackend, runtimeVersion: 'b1', exePath: 'hip.exe', device: 'ROCm0' }
+      ], startSampler: (pid) => { const xs = [sample(pid - 1000)]; return { samples: xs, unavailable: {}, stop: () => xs } },
+      storage: replay.storage, machine, gpuDevice: 'Vulkan0', models: [model], plan, clock: { now: () => t++ }, evaluate }, () => {})
+    expect(vk.calls.templates + hipBackend.calls.templates).toBe(templatesBeforeReuse)
+    expect(q(resumed)).toMatchObject({ kind: 'measured', value: 100 }) // persisted mixed-scope row is still excluded
   })
 
   it('O5: a CUDA primary has CUDA candidate identity, runtime stamp and device', async () => {
