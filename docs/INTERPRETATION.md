@@ -355,7 +355,12 @@ Scope: row-bound proof is required for generation-config comparisons and for row
 configuration requested template kwargs (thinking-capable models); plain quality rows
 with no requested kwargs keep MEASURED status without it. Reconstructed provenance
 (re-rendered after the fact, no original prompt hash) makes a row non-comparable for
-generation comparisons but does not demote a plain measured row.
+generation comparisons but does not demote a plain measured row. Root provenance is
+immutable: whether the ORIGINAL producer recorded the generation prompt hash is written
+once and can never be set by a replay; a replay of a replay does not create proof, and a
+row with any reconstruction marker or an incoherent provenance record stays unverified.
+Proof requirements apply to every option in a generation comparison, including the OFF
+baseline; only plain standalone quality without requested kwargs is exempt.
 Rule I-8.1 (`gen.best-config`, info): per model: "thinking on (effort low, T=1.0):
 Q +17 [lo, hi] vs off; answers <k>× slower (effective <e> vs <d> t/s)".
 Rule I-8.2 (`gen.stochastic`, note): T > 0 → "sampled (seeded), n=<s> per item".

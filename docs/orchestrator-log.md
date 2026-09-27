@@ -250,3 +250,6 @@
 
 ## Fable — 2026-09-28 04:20 local
 - GPU-QUEUE doc (b013285) approved: two Qwen sessions (3-gen cap), E1 with session 1 seed, E3 to a scratch DB, E5 48K memory-only, E8 ngl45. E7 blocked until S3 adds --backend hip to run-session (routed). Running session 5 (pre-fix producer) is non-evaluable for effort; the doc's "S5/S6" are the new runs.
+
+## Fable — 2026-09-28 04:22 local
+- RECHECK6 committed: P1–P3 closed; R1/R2 HIGH + R3 routed to S1 (after Q1/Q2) and S2 (negatives + session.test.ts:360 signal assertion). Guide I-8.0: immutable root provenance; OFF baseline needs proof in comparisons. STATUS/morning report updated.
