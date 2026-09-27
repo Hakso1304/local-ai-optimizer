@@ -247,3 +247,6 @@
 
 ## Fable — 2026-09-28 04:20 local
 - Pushed 412a9c0 (release-gate script: 3 STOP = WIP tsc, dirty tree, EVIDENCE lacks rules version → S2) and b013285 (GPU queue command lines). Waiting: S1 Q1/Q2 commit; S3 session 5 export; Astra RECHECK6.
+
+## Fable — 2026-09-28 04:20 local
+- GPU-QUEUE doc (b013285) approved: two Qwen sessions (3-gen cap), E1 with session 1 seed, E3 to a scratch DB, E5 48K memory-only, E8 ngl45. E7 blocked until S3 adds --backend hip to run-session (routed). Running session 5 (pre-fix producer) is non-evaluable for effort; the doc's "S5/S6" are the new runs.
