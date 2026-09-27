@@ -58,12 +58,20 @@ export function reserveLoopbackPort(signal?: AbortSignal): Promise<number> {
     })
   })
 }
-/** Read-only owner query; ambiguity or unavailable OS data fails closed. */
-export async function loopbackOwner(port: number, signal?: AbortSignal): Promise<number | null> {
-  const command = `$p=@(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalAddress -in @('127.0.0.1','0.0.0.0','::') } | Select-Object -ExpandProperty OwningProcess -Unique); if($p.Count -eq 1){$p[0]}`
+export type LoopbackOwner = { state: 'none' } | { state: 'owned'; pid: number } | { state: 'ambiguous'; pids: number[] } | { state: 'unavailable'; reason: string }
+export function parseLoopbackOwner(raw: string): LoopbackOwner {
+  const lines = raw.trim().split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+  if (lines.length === 1 && lines[0] === 'NONE') return { state: 'none' }
+  if (!lines.length || lines.some((s) => !/^\d+$/.test(s))) return { state: 'unavailable', reason: `invalid owner query output: ${raw.trim() || '(empty)'}` }
+  const pids = [...new Set(lines.map(Number))]
+  if (pids.some((n) => !Number.isSafeInteger(n) || n <= 0)) return { state: 'unavailable', reason: 'invalid listener PID' }
+  return pids.length === 1 ? { state: 'owned', pid: pids[0] } : { state: 'ambiguous', pids }
+}
+/** Read-only owner query; only an explicit NONE from a successful OS query permits spawn. */
+export async function loopbackOwner(port: number, signal?: AbortSignal): Promise<LoopbackOwner> {
+  const command = `$ErrorActionPreference='Stop'; $p=@(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object { $_.LocalPort -eq ${port} -and $_.LocalAddress -in @('127.0.0.1','0.0.0.0','::','::1') } | Select-Object -ExpandProperty OwningProcess -Unique); if($p.Count -eq 0){'NONE'}else{$p}`
   const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true, timeout: 5_000, signal, env: safeEnv() })
-  const raw = stdout.trim()
-  return /^\d+$/.test(raw) ? Number(raw) : null
+  return parseLoopbackOwner(stdout)
 }
 export function verifyProps(props: unknown, argv: string[]): { modelPath: string; contextSize: number } {
   const args = argv as string[]
@@ -127,7 +135,15 @@ export function bufferExtrema(rows: { dev: string; mib: number }[]): { largestDe
   return { largestDeviceBufferMiB: max(rows.filter((r) => !host(r.dev)).map((r) => r.mib)), largestHostBufferMiB: max(rows.filter((r) => host(r.dev)).map((r) => r.mib)) }
 }
 async function inspectSelectedAdapter(): Promise<SelectedAdapter> {
-  const [profile, vram] = await Promise.all([scanSystem(), readVramInUse()])
+  const signal = experimentController?.signal
+  const profileProbe = scanSystem({
+    powershell: async (script) => {
+      const full = `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n$ProgressPreference = 'SilentlyContinue'\n${script}`
+      return (await osProbe('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(full, 'utf16le').toString('base64')], PROBE_TIMEOUT_MS, signal)).stdout
+    },
+    exec: async (file, args) => (await osProbe(file, args, 8_000, signal)).stdout
+  })
+  const [profile, vram] = await Promise.all([profileProbe, readVramInUse(20_000, signal)])
   experimentController?.signal.throwIfAborted()
   const discrete = profile.gpus.value?.filter((g) => !g.isIntegrated) ?? []
   const gpu = discrete.length === 1 ? discrete[0] : null
@@ -220,7 +236,7 @@ function sampler(pid: number) {
 }
 
 async function prompt(port: number, tokens: number, signal: AbortSignal, timeoutMs = REQUEST_TIMEOUT_MS, beforeRequest: () => Promise<void> = async () => {}): Promise<{ text: string; n: number }> {
-  const tok = async (s: string) => { await beforeRequest(); return ((await (await fetch(`http://127.0.0.1:${port}/tokenize`, { signal: bounded(signal, timeoutMs), method: 'POST', body: JSON.stringify({ content: s }) })).json()) as { tokens: unknown[] }).tokens.length }
+  const tok = async (s: string) => { await beforeRequest(); const result = (await (await fetch(`http://127.0.0.1:${port}/tokenize`, { signal: bounded(signal, timeoutMs), method: 'POST', body: JSON.stringify({ content: s }) })).json()) as { tokens: unknown[] }; signal.throwIfAborted(); await beforeRequest(); return result.tokens.length }
   let est = tokens, text = '', n = 0
   for (let i = 0; i < 6; i++) {
     text = generateFiller(est, 65536).join(' ') + '\n\nContinue the story in the same style:\n'
@@ -244,7 +260,7 @@ export interface LaunchProbe {
   settleMs?: number
   postMs?: number
   reservePort?: (signal: AbortSignal) => Promise<number>
-  ownerOfPort?: (port: number, signal: AbortSignal) => Promise<number | null>
+  ownerOfPort?: (port: number, signal: AbortSignal) => Promise<LoopbackOwner | number | null>
   processTree?: ProcessTree
   selectedAdapter?: SelectedAdapter
 }
@@ -292,7 +308,10 @@ export async function launch(label: string, argv: string[], promptTokens: number
     port = await (probe.reservePort ?? reserveLoopbackPort)(controller.signal)
     if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw new Error(`invalid reserved loopback port: ${String(port)}`)
     // A listener appearing between reservation and spawn is a conflict, never ours.
-    if (await (probe.ownerOfPort ?? loopbackOwner)(port, controller.signal) !== null) throw new Error(`reserved port ${port} acquired by another listener before spawn`)
+    const ownerState = (value: LoopbackOwner | number | null): LoopbackOwner =>
+      value === null ? { state: 'none' } : typeof value === 'number' ? { state: 'owned', pid: value } : value
+    const beforeSpawn = ownerState(await (probe.ownerOfPort ?? loopbackOwner)(port, controller.signal))
+    if (beforeSpawn.state !== 'none') throw new Error(`reserved port ${port} acquired by another listener before spawn (owner query: ${beforeSpawn.state})`)
     p = spawn(exe, [...argv, '--port', String(port), '--host', '127.0.0.1'], { windowsHide: true, env: safeEnv() })
     if (experimentController) activeOwnedChild = p
     ownership = trackOwnedProcess(p, probe.processTree)
@@ -300,11 +319,11 @@ export async function launch(label: string, argv: string[], promptTokens: number
     let serverClosed = false
     const assertOwnedListener = async () => {
       if (serverClosed || !p?.pid) throw new Error('owned server exited before request')
-      const currentOwner = await (probe.ownerOfPort ?? loopbackOwner)(port!, controller.signal)
-      listenerOwnerPid = currentOwner
-      if (currentOwner !== p.pid) throw new Error(`port ${port} listener PID ${String(currentOwner)} is not owned server PID ${p.pid}`)
+      const currentOwner = ownerState(await (probe.ownerOfPort ?? loopbackOwner)(port!, controller.signal))
+      listenerOwnerPid = currentOwner.state === 'owned' ? currentOwner.pid : null
+      if (currentOwner.state !== 'owned' || currentOwner.pid !== p.pid) throw new Error(`port ${port} listener owner ${JSON.stringify(currentOwner)} is not owned server PID ${p.pid}`)
     }
-    closed = new Promise<void>((resolve) => { p!.once('close', () => { serverClosed = true; resolve() }); p!.once('error', () => { serverClosed = true; resolve() }) })
+    closed = new Promise<void>((resolve) => { const onExit = () => { serverClosed = true; if (!controller.signal.aborted) controller.abort(new Error('owned server exited during case')); resolve() }; p!.once('close', onExit); p!.once('error', onExit) })
     await ownership
     p.stdout?.on('data', (d: Buffer) => append('stdout', d))
     p.stderr?.on('data', (d: Buffer) => append('stderr', d))
@@ -337,6 +356,8 @@ export async function launch(label: string, argv: string[], promptTokens: number
         await assertOwnedListener()
         const r0 = Date.now()
         const j = (await (await fetch(`http://127.0.0.1:${port}/completion`, { signal: bounded(controller.signal, requestTimeoutMs), method: 'POST', body: JSON.stringify({ prompt: pr.text, n_predict: phase === 'warmup' ? 8 : 128, temperature: 0, seed: 1, cache_prompt: false }) })).json()) as { timings?: { prompt_n?: number; prompt_per_second?: number; predicted_per_second?: number; prompt_ms?: number } }
+        controller.signal.throwIfAborted()
+        await assertOwnedListener()
         if (phase !== 'warmup') reps.push({ decodeTps: j.timings?.predicted_per_second ?? null, prefillTps: j.timings?.prompt_per_second ?? null, promptN: j.timings?.prompt_n ?? null, prefillMs: j.timings?.prompt_ms ?? null, clientTtftMs: null, requestWallMs: Date.now() - r0 })
       }
     }
