@@ -307,3 +307,6 @@
 
 ## Fable — 2026-09-28 05:39 local
 - SESSION 5 DONE (exit 0, 7542 s, 540 quality rows, 1 rec; RAM min ladder 12.07 / quality 9.86 GiB; promptCacheSeen=false; 1 truncated). Artifacts f0e27ad/dac1330 pushed. Dispatched: #3 data/recommendation audit; S2 contract audit + EVIDENCE; S3 harness round (lane gate). Lane idle but HELD until the harness round + Astra re-review. Next: S1 T-round commit → RECHECK9 → #2 final package on the idle lane.
+
+## Fable — 2026-09-28 05:40 local
+- Session 5 audit (#3): valid collection; thinking scores were an artifact (<think> opened in the prompt) → ec4cb18 fixes stripThinking; offline rescore off 161 / low 175 / medium 176 of 180 (not citable: no row proof); rec chose off with low/medium "skipped (time to answer above tolerance)" and no paired difference computed → #1 checks the gen-choice rule vs I-8.1. Morning report §3 updated.
