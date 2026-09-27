@@ -1,7 +1,8 @@
-import { StrictMode, useCallback, useState } from 'react'
+import { StrictMode, useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { RendererApi } from '../../shared/types'
 import { BenchmarkPage } from './BenchmarkPage'
+import { applyEvent, initialLive } from './benchState'
 import { DashboardPage } from './DashboardPage'
 import { ModelsPage } from './ModelsPage'
 import { ResultsPage } from './ResultsPage'
@@ -19,7 +20,15 @@ function App() {
   const [section, setSection] = useState<Section>('Dashboard')
   const [sessionId, setSessionId] = useState<number | undefined>()
   const go = useCallback((s: Section, id?: number) => { setSection(s); setSessionId(id) }, [])
-  const onDone = useCallback((id: number) => go('Results', id), [go])
+  // Live benchmark state lives here so leaving the Benchmark page mid-run doesn't lose it.
+  const [live, dispatch] = useReducer(applyEvent, initialLive)
+  useEffect(() => window.api.onBenchEvent(dispatch), [])
+  // Open Results only on an observed running → done transition of the session being watched.
+  const prev = useRef(live.status)
+  useEffect(() => {
+    if (prev.current === 'running' && live.status === 'done' && live.sessionId) go('Results', Number(live.sessionId))
+    prev.current = live.status
+  }, [live.status, live.sessionId, go])
   return (
     <div className="app">
       <nav>
@@ -30,7 +39,7 @@ function App() {
       </nav>
       <main>
         {section === 'Dashboard' && <DashboardPage go={go} />}
-        {section === 'Benchmark' && <BenchmarkPage onDone={onDone} />}
+        {section === 'Benchmark' && <BenchmarkPage live={live} />}
         {section === 'Models' && <ModelsPage />}
         {section === 'Results' && <ResultsPage key={sessionId ?? 'none'} sessionId={sessionId} />}
         {section === 'System' && <SystemPage />}

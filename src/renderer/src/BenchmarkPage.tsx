@@ -1,13 +1,13 @@
-import { useEffect, useReducer, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { WorkloadId, WorkloadProfile } from '../../shared/bench-types'
 import type { ModelInfo } from '../../shared/types'
-import { applyEvent, initialLive } from './benchState'
+import type { LiveState } from './benchState'
 import { fmtCtx, gib, num } from './ui'
 
 const v = (x: number | null | undefined, f: (n: number) => string) => (x == null ? '—' : f(x))
 const LADDER = [2048, 4096, 8192, 16384, 32768, 65536, 131072]
 
-export function BenchmarkPage({ onDone }: { onDone: (sessionId: number) => void }) {
+export function BenchmarkPage({ live }: { live: LiveState }) {
   const [workloads, setWorkloads] = useState<WorkloadProfile[]>([])
   const [workload, setWorkload] = useState<WorkloadId | null>(null)
   const [models, setModels] = useState<ModelInfo[] | null>(null)
@@ -15,12 +15,10 @@ export function BenchmarkPage({ onDone }: { onDone: (sessionId: number) => void 
   const [msg, setMsg] = useState<string | null>(null)
   const [maxCtx, setMaxCtx] = useState<number>(0) // 0 = no cap (candidate rules decide)
   const [quality, setQuality] = useState(true)
-  const [live, dispatch] = useReducer(applyEvent, initialLive)
 
   useEffect(() => {
     void Promise.all([window.api.listWorkloads(), window.api.getSettings()]).then(([ws, s]) => { setWorkloads(ws); setWorkload(s.workload ?? ws[0]?.id ?? null) })
     window.api.listModels().then(setModels, (e: Error) => setMsg(e.message))
-    return window.api.onBenchEvent(dispatch)
   }, [])
 
   const toggle = (id: string) => setPicked((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n })
@@ -34,9 +32,6 @@ export function BenchmarkPage({ onDone }: { onDone: (sessionId: number) => void 
   }
   const cancel = async () => { const r = await window.api.cancelBench(); if (!r.ok) setMsg(r.error ?? 'cancel failed') }
   const pause = async () => { const r = await window.api.pauseBench(); if (!r.ok) setMsg(r.error ?? 'pause failed') }
-  useEffect(() => {
-    if (live.status === 'done' && live.sessionId) onDone(Number(live.sessionId))
-  }, [live.status, live.sessionId, onDone])
   const t = live.telemetry
   const running = live.status === 'running'
 
