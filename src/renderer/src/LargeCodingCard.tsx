@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react'
-import { WORKLOADS } from '../../core/scoring/workloads'
 import type { WorkloadId } from '../../shared/bench-types'
 import type { ComputedRecommendation, SessionDetail } from '../../shared/types'
 import { COMPONENT_LABEL, CtxPick, ScoreBar, num } from './ui'
 
-export const LARGE = 'large_coding' as string as WorkloadId // #1's profile; guarded with `LARGE in WORKLOADS`
+export const LARGE: WorkloadId = 'large_coding'
 export interface BenchPreset { workload: WorkloadId; heavyMode: boolean; requiredContext: number | null }
 export const LARGE_PRESET: BenchPreset = { workload: LARGE, heavyMode: true, requiredContext: 65536 }
 
@@ -15,10 +14,7 @@ const decodeOf = (d: SessionDetail, configId: string | undefined, ctx: number | 
  *  (heavy-mode sessions first). fastDecode = decode t/s of the selected workload's pick, for the "N× slower" line. */
 export function LargeCodingCard({ fastDecode, onBenchmark, onDetails }: { fastDecode: number | null; onBenchmark: () => void; onDetails: (id: number) => void }) {
   const [state, setState] = useState<{ d: SessionDetail; r: ComputedRecommendation } | null | undefined>(undefined)
-  const available = LARGE in WORKLOADS
-
   useEffect(() => {
-    if (!available) return setState(null)
     void (async () => {
       const list = (await window.api.listSessions()).filter((s) => !s.demo)
       for (const s of [...list.filter((x) => x.heavyMode), ...list.filter((x) => !x.heavyMode)]) {
@@ -29,7 +25,7 @@ export function LargeCodingCard({ fastDecode, onBenchmark, onDetails }: { fastDe
       }
       setState(null)
     })()
-  }, [available])
+  }, [])
 
   const best = state?.r.recommendation.best
   const c = state && best ? state.d.candidates.find((x) => x.config.id === best.configId) : undefined
@@ -38,7 +34,6 @@ export function LargeCodingCard({ fastDecode, onBenchmark, onDetails }: { fastDe
     <div className="card">
       <h2>Large-scale coding <span className="muted">(bigger model, slower)</span></h2>
       {state === undefined ? <p className="muted">Looking for a long-context session…</p>
-        : !available ? <p className="muted">The large-scale coding profile is not available in this build yet.</p>
         : !state ? <p>No benchmark session reached 32K context yet.</p>
         : !best || !c ? (
           <><p>No configuration in session #{state.r.sessionId} meets the large-scale coding requirements.</p>
@@ -53,7 +48,7 @@ export function LargeCodingCard({ fastDecode, onBenchmark, onDetails }: { fastDe
                 <tr><td>Context</td><td><CtxPick recommended={best.score.recommendedCtx} scored={best.score.referenceCtx} /></td></tr>
                 <tr><td>Decode</td><td>{dec != null ? `${num(dec)} t/s` : '—'}
                   {dec != null && fastDecode != null && dec > 0 && fastDecode > dec && <span className="muted"> — {num(fastDecode / dec)}× slower than the fast pick</span>}</td></tr>
-                <tr><td>Score</td><td>{best.score.total.toFixed(1)} / 100</td></tr>
+                <tr><td>Score</td><td>{best.score.total.toFixed(1)} / 100{best.fallback && <span className="pill warn-pill">{best.fallback}</span>}</td></tr>
               </tbody>
             </table>
             {best.score.breakdown.map((b) => <ScoreBar key={b.component} label={COMPONENT_LABEL[b.component]} score={b.score} kind={b.input.kind} weight={b.weight} />)}

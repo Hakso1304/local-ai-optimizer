@@ -22,7 +22,7 @@ import { probeNvidiaSmi, startNvidiaSampler, type NvidiaProbe } from '../core/te
 import { evaluateAsync } from '../core/quality'
 import type { SessionEvent, SessionRequest } from '../shared/bench-events'
 import type { CandidateConfig, ModelMeta, WorkloadId } from '../shared/bench-types'
-import { recommend } from '../core/scoring/recommend'
+import { recommendForWorkload } from '../core/scoring/recommend'
 import type { AppSettings, ComputedRecommendation, ModelInfo, SmokeResult, StartResult, SystemProfile } from '../shared/types'
 
 // Dev/test runs get their own userData so they never write the installed app's database or settings.
@@ -148,8 +148,8 @@ ipcMain.handle('recommendation:compute', async (_e, id: number, w: WorkloadId): 
   if (!s) return null
   const device = s.inputs.find((i) => i.config.device)?.config.device ?? null
   const machine = machineFromProfile(s.machine ?? (profileCache ??= await scanSystem()), device)
-  // TODO(#1): switch to recommendForWorkload(sessionData, w, request) once it lands (applies requiredContext/minDecodeTps).
-  const recommendation = recommend(s.inputs, machine, w)
+  // The session's own requiredContext / minDecodeTps still apply when viewing it as another workload.
+  const recommendation = recommendForWorkload({ candidates: s.inputs, machine }, w, { requiredContext: s.request?.requiredContext, minDecodeTps: s.request?.minDecodeTps })
   return { sessionId: Number(id), workload: w, recommendation, label: `computed from session #${Number(id)}` }
 })
 ipcMain.handle('recommendation:latest', (_e, w: WorkloadId) => latestRecommendation(needDb(), w))

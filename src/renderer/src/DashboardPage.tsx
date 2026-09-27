@@ -44,7 +44,7 @@ function RecommendedCard({ d, go }: { d: SessionDetail; go: Go }) {
               <tr><td>Backend</td><td>{c.config.device ? `llama.cpp Vulkan (${c.config.device})` : 'llama.cpp CPU'}</td></tr>
               <tr><td>GPU layers</td><td>{c.config.gpuLayersAll ? `all (${c.model.layers})` : c.config.gpuLayers}</td></tr>
               <tr><td>Threads</td><td>{c.config.threads}</td></tr>
-              <tr><td>Score</td><td>{rec.best.score.total.toFixed(1)} / 100</td></tr>
+              <tr><td>Score</td><td>{rec.best.score.total.toFixed(1)} / 100{rec.best.fallback && <span className="pill warn-pill">{rec.best.fallback}</span>}</td></tr>
             </tbody>
           </table>
           {rec.best.score.breakdown.map((b) => (

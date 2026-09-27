@@ -119,7 +119,7 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
       <h2>Recommendation{tag}</h2>
       {rec ? (
         <div className="card">
-          <p><b>{rec.best ? name(rec.best.configId) : 'No recommendation'}</b>{rec.best && <> — {rec.best.score.total.toFixed(1)}/100, context <CtxPick recommended={rec.best.score.recommendedCtx} scored={rec.best.score.referenceCtx} /></>}</p>
+          <p><b>{rec.best ? name(rec.best.configId) : 'No recommendation'}</b>{rec.best?.fallback && <span className="pill warn-pill">{rec.best.fallback}</span>}{rec.best && <> — {rec.best.score.total.toFixed(1)}/100, context <CtxPick recommended={rec.best.score.recommendedCtx} scored={rec.best.score.referenceCtx} /></>}</p>
           {reqLine && <p className={d.candidates.some(meets) ? '' : 'err'}>{reqLine}</p>}
           {(() => {
             const own = d.session.minDecodeTps
