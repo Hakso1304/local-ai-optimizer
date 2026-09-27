@@ -76,3 +76,8 @@
 - O1-O5 original failures accepted closed at this snapshot, including Fable runtime-label and scoped-I-2.7 fixes. Export JSON discloses required environment removal; a copied raw shell command still needs that environment policy applied.
 - Dispatched S1 follow-up O6-O9; S2 has four ordinary failing tests, no it.fails. O8 is a policy risk: do not fake pinned bytes or disable all load safety to make a test pass. S2 also owns harness regression tests with S3.
 - Fable explicitly delegated operational authority in 01:34-local entry; full operational coordination accepted without waiting for its silence. Fable keeps evidence/docs and may push Claude commits; no GPU release yet.
+
+## Astra - 2026-09-28T01:42:10 local - harness source/test checkpoint
+- Pushed S2 50dc27e/f49a32e/5626933 and S3 81861f4. 5626933 was pushed before the late dependency warning; 81861f4 now restores committed source/test consistency. No GPU release was implied by either push.
+- Independent ab-spill safety run: 9 tests passed in 7.86 s, including S2 integration cases still pending its next commit. Review flagged optional diagnostics in finally can prevent RAM-abort artifact serialization; S3 to fix before gate.
+- S1 O6-O9 working tests pass; requested harder measured-TTFT provenance and per-row backend scope for CR-04-long/quality reuse before acceptance. Historical raw residency remains evidence; unvalidated spill conclusions must stay flagged (EVIDENCE owner notified).
