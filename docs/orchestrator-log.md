@@ -340,3 +340,6 @@
 
 ## Fable — 2026-09-28 06:26 local
 - Pushed 03f1e1a (STATUS), 753f505 (CHANGELOG), 16880ce (probe-cancel tests), e2e4a3a (real descendant identity test). #3 audits: E-39..E-46 8/8 PASS (notes -> S2, done in e2e4a3a); CHANGELOG 10/12 (2 wording -> S1, + app readVramInUse signal wiring). #3 now auditing morning-report numbers vs DB. Waiting: Astra w4v/w4w, #2 build, S3 queue prep. Lane HELD.
+
+## Fable — 2026-09-28 06:27 local
+- Astra w4v RECHECK9 PASS (127d96f/340f3ee). Astra w4w harness final: NO blanket release, W1-W4 -> S3 (W1 reuse runtime reconciliation exported by S1; W2 tracked-source manifest; W3 bind backend/model; W4 anchored marker), RED negatives -> S2, per-stage gate checklist (w4x) -> Astra. Pushed 08284f8, 8a0d99a. #2 build running. Lane HELD.
