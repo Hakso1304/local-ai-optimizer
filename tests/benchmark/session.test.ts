@@ -133,6 +133,17 @@ async function run(script: (ctx: number, cfg: LoadConfig) => Step, req: Partial<
 
 const ctxOf = (b: ReturnType<typeof fakeBackend>) => b.calls.loads.map((l) => l.contextSize)
 
+describe('request repetition override', () => {
+  it('uses req.reps=5 over the dependency default for a fake ladder step', async () => {
+    const { backend, s } = await run(() => ({}), { ladder: [2048], reps: 5 }, { config: { reps: 2 } })
+    expect(backend.calls.prompts.filter((p) => p.prompt === ladderPrompt(2048))).toHaveLength(5)
+    expect(s.runs[0].repDecodeTps).toHaveLength(5)
+  })
+  it.each([0, -1, 1.5, 6, Number.NaN])('rejects invalid req.reps=%s before loading', async (reps) => {
+    await expect(run(() => ({}), { ladder: [2048], reps })).rejects.toThrow(/reps must be an integer from 1 to 5/)
+  })
+})
+
 describe('runSession', () => {
   it('runs the full ladder, one server launch per step, with explicit device/ctx args', async () => {
     const { rec, s, backend } = await run(() => ({}))
@@ -357,11 +368,16 @@ describe('runSession', () => {
   it('thinking models: quality templates use enable_thinking=false; others get no kwargs', async () => {
     const thinking = await run(() => ({}), { workload: 'fast_assistant', runQuality: true, ladder: [2048, 4096], genSearch: false }, { models: [{ ...model, supportsThinking: true }] })
     expect(thinking.backend.calls.templateOpts.length).toBe(2 * N)
-    expect(thinking.backend.calls.templateOpts.filter((o) => JSON.stringify(o) === '{"templateKwargs":{"enable_thinking":false}}')).toHaveLength(N)
-    expect(thinking.backend.calls.templateOpts.filter((o) => JSON.stringify(o) === '{"templateKwargs":{"enable_thinking":true}}')).toHaveLength(N) // template-only counterfactual
+    const opts = thinking.backend.calls.templateOpts as { templateKwargs?: Record<string, unknown>; signal?: AbortSignal }[]
+    expect(opts.filter((o) => o.templateKwargs?.enable_thinking === false)).toHaveLength(N)
+    expect(opts.filter((o) => o.templateKwargs?.enable_thinking === true)).toHaveLength(N) // template-only counterfactual
+    expect(opts.every((o) => o.signal instanceof AbortSignal)).toBe(true)
     expect(thinking.rec?.insights?.map((i) => i.text).join('\n')).toMatch(/\[I-5\.4\] .*: quality measured with thinking off \(T=0\)/)
     const plain = await run(() => ({}), { runQuality: true, ladder: [2048] })
-    expect(plain.backend.calls.templateOpts.every((o) => o === undefined)).toBe(true)
+    expect(plain.backend.calls.templateOpts.every((o) => {
+      const opts = o as { templateKwargs?: Record<string, unknown>; signal?: AbortSignal } | undefined
+      return opts?.templateKwargs === undefined && opts?.signal instanceof AbortSignal
+    })).toBe(true)
   })
 
   it('resume with a stored plan uses its configIds verbatim, even if planning would now produce different ones', async () => {
@@ -974,11 +990,14 @@ describe('runSession', () => {
     expect(r.rec?.reasons.some((x) => /^\[I-2\.5\] Long-context needle CR-04-long at 128K skipped for .*: practical context 64K < 128K$/.test(x))).toBe(true)
   })
 
-  it('F2: every loadModel gets the session signal (cancel during load is immediate)', async () => {
+  it('F2: every loadModel gets an abort signal tied to the session (cancel during load is immediate)', async () => {
     const ac = new AbortController()
     const { backend } = await run(() => ({}), { ladder: [2048], runQuality: true }, { signal: ac.signal })
     expect(backend.calls.loads.length).toBeGreaterThan(1) // ladder + quality
-    expect(backend.calls.loads.every((l) => l.signal === ac.signal)).toBe(true)
+    const signals = backend.calls.loads.map((l) => l.signal)
+    expect(signals.every((s) => s instanceof AbortSignal && !s.aborted)).toBe(true)
+    ac.abort()
+    expect(signals.every((s) => s?.aborted)).toBe(true)
   })
 
   it('F3: the RAM guard reads OS free RAM on its own — no typeperf rows needed — and fails safe when blind', async () => {

@@ -98,8 +98,8 @@ describe('loadModel', () => {
     expect(Date.now() - t0).toBeLessThan(3000)
     expect(b.lastExit).toMatchObject({ code: 3, reason })
     expect(b.lastExit!.tail).toEqual(expect.arrayContaining(lines))
-    // The root identity remains until unload so descendants of an exited parent can still be found.
-    expect(existsSync(pidFile)).toBe(true)
+    // The failed load unloads and checks descendants before clearing the owned PID record.
+    expect(existsSync(pidFile)).toBe(false)
   })
 
   it('writes the pid file while running', async () => {

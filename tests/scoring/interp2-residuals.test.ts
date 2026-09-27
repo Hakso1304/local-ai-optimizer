@@ -317,6 +317,43 @@ describe('A/B/C (review-w4l): generation contract strictness', () => {
     c.genQuality[1] = gq('think-low', true, reconstructed)
     expect(V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')).toMatchObject({ comparable: false })
   })
+  it('RECHECK6 R2: OFF variants without row proof cannot compare or credit measured quality', () => {
+    const c = thinkModel(candidate('off-options'))
+    const off = rowsFor('off', { requestedSampling: { temperature: 0, seed: 1 }, acceptedSampling: { temperature: 0, seed: 1 },
+      appliedTemplateKwargs: { enable_thinking: false } })
+    const alt = rowsFor('off-alt', { requestedSampling: { temperature: 0, seed: 1 }, acceptedSampling: { temperature: 0, seed: 1 },
+      appliedTemplateKwargs: { enable_thinking: false } }).map((r) => ({ ...r, pass: true, score: 1 } as QualityResult))
+    c.quality = off
+    c.genQuality = [gq('off', false, off), gq('off-alt', false, alt)]
+    const v = V([c])
+    expect(v.ranked[0].genOptions.every((o) => !o.comparable)).toBe(true)
+    expect(v.ranked[0].genOptions.every((o) => o.cs.components.quality.input.kind !== 'measured')).toBe(true)
+    expect(v.winner?.gen ?? null).toBeNull()
+    const provedOff = bound(rowsFor('off'), { enable_thinking: false })
+    const provedAlt = bound(rowsFor('off-alt'), { enable_thinking: false })
+    c.quality = provedOff
+    c.genQuality = [gq('off', false, provedOff), gq('off-alt', false, provedAlt)]
+    expect(V([c]).ranked[0].genOptions.every((o) => o.comparable)).toBe(true)
+  })
+  it('RECHECK6 R2/R3: reconstructed OFF rows and contradictory provenance cannot compare', () => {
+    const c = thinkModel(candidate('off-provenance'))
+    const off = bound(rowsFor('off'), { enable_thinking: false })
+    const alt = bound(rowsFor('off-alt'), { enable_thinking: false })
+    c.quality = off
+    c.genQuality = [gq('off', false, off), gq('off-alt', false, alt)]
+    expect(V([c]).ranked[0].genOptions.every((o) => o.comparable)).toBe(true)
+    const reconstructed = alt.map((r, i) => i === 1 ? { ...r,
+      proofProvenance: { status: 'reconstructed', originalPromptHashPresent: false },
+      renderProof: { ...renderOf(r), status: 'reconstructed' }
+    } as QualityResult : r)
+    c.genQuality[1] = gq('off-alt', false, reconstructed)
+    expect(V([c]).ranked[0].genOptions.find((o) => o.gq.gen.id === 'off-alt')).toMatchObject({ comparable: false })
+    const inconsistent = alt.map((r, i) => i === 1 ? { ...r,
+      proofProvenance: { status: 'reconstructed', originalPromptHashPresent: true }
+    } as QualityResult : r)
+    c.genQuality[1] = gq('off-alt', false, inconsistent)
+    expect(V([c]).ranked[0].genOptions.find((o) => o.gq.gen.id === 'off-alt')).toMatchObject({ comparable: false })
+  })
   it('I-5.7 excludes an infra error despite valid template proof; I-5.8 keeps a proved truncation comparable', () => {
     const c = thinkModel(candidate('a'))
     c.quality = bound(rowsFor('off'), { enable_thinking: false })
