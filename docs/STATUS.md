@@ -47,7 +47,7 @@ This is the MVP Definition of Done, the later user requirements and the cross-cu
 | VRAM in use before planning | DONE | 960166c (measured before planning) + 4de83cc (`machineFromProfile` reads it; the note says when unavailable); `candidates.test.ts` | — |
 | Sampler pid-column restart | DONE-WITH-CAVEAT | 82670a9 (sampler `hasPidColumns`/`restart`) + 5f8f669 (runner restarts once; `samplerErrors` persisted); session test | Fake sampler only; live behaviour depends on typeperf timing |
 | Responsive layout | DONE | aea9c42: fluid main, auto-fit grids, container-sized charts, min window 960×640; CDP-verified at 1280×720 / 1920×1080 / 2560×1440 | — |
-| GPT reviewer pass (Worker #4, GPT-6-Astra) | PARTIAL | cf05710: 14 findings (5 HIGH), 6 it.fails repros in tests/review-w4; fixes in progress (#1 runner/candidates/cliff, #2 llamacpp/storage/validate, #3 needle checker); second pass (hub/IPC/packaging/renderer/sandbox) running | Flip to DONE when the it.fails markers are removed |
+| GPT reviewer pass (Worker #4, GPT-6-Astra) | DONE-WITH-CAVEAT | Pass 1 cf05710 (14 findings) fixed in ba019cf / 6389ff7 / c71cfc8; pass 2 3781e5e (20 findings) fixed in 4f6ea4c / 1f44374 / 09063eb; all it.fails markers resolved (438/438); pass 3 (docs accuracy + test quality) in progress | Sandbox memory cap is RSS-polled (no Job Object); NTFS link checks are check-then-open |
 | HF download with login | DONE-WITH-CAVEAT | Core 282b3ec + `tests/hub.test.ts` (local servers: resume, redirect/no token leak, sha256, 401/403/404); IPC/page 2a349e7, 09fbf8b; wired fa491b0, 486f958 | No real huggingface.co call in the test suite; not yet verified live |
 
 ## Cross-cutting requirements
