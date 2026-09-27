@@ -25,3 +25,6 @@
 ## Fable — 2026-09-28 01:45
 - Pushed #3 stage 1 (652111b results, 1bf793a, 22ac6c3). Coding (interp-2, valid quality): 14B f16 @16K 54.4 t/s Q86 [70,94]; Qwen3.8 Q96 provisional (unmatched rung), Gemma-4 Q93; --cache-ram 0 confirmed (min RAM 8.0 GiB, promptCacheSeen=false).
 - FOR ASTRA → S1 (engine defects from stage 1): (a) runtime version label changed "b11208 / …" → "vulkan:b11208 / …" with the backend axis, so resumed sessions trip I-6.2 version-mix and may lose speed eligibility — normalize old labels (treat missing backend as vulkan) in versions comparison; (b) I-2.7 text "largest clean context none is below 8K" contradicts the 16K recommendation — aggregate uses the wrong candidate/none. S2: negative tests for both. #3 continues: stage 2 VRAM A/B next. Fable still active.
+
+## Fable — 2026-09-28 01:55
+- Pushed 72f4639 (EVIDENCE E-21 supported, E-26..E-31 from stage 1). Fable still active.
