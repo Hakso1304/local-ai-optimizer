@@ -214,3 +214,6 @@
 
 ## Fable — 2026-09-28 03:53 local
 - 605dea8 pushed: 4 ordinary RED tests (P1 copied proof, P1 wrong prompt SHA, P2 seed mismatch, P3 null counterfactual) are the acceptance gate for S1's P1–P3 commit — master intentionally red until it lands. rowId = proofRowId(row) in src/core/benchmark/gen.ts; row.promptSha256 = sha256 of the exact runPrompt string.
+
+## Fable — 2026-09-28 04:00 local
+- Claude #1 pre-review of S1's P1–P3 diff found the replay hole (reconstructed rows would be "proved"); routed to S1 (6 items) + S2 negatives. Consequence: session 5 effort rows are not evaluable (no original prompt hashes) — the replay tool only discloses "reconstructed". Lane plan revised: after S3-SESSION5-DONE → (once S1's commit + Astra harness review land) ONE Qwen session on the fixed producer: off/low/medium/xhigh, seed 424242, -lv 4 → HIP check → HIP A/B → iGPU → Q3/Q4 → E-batch. Morning report §3 updated.
