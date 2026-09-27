@@ -14,10 +14,13 @@
 //   (-mg places KV only with -sm row, which Vulkan does not implement).
 // Telemetry: typeperf 1 s, per-PID dedicated/shared + adapter dedicated/shared (all LUIDs). At spill onset (per-PID shared
 // > first sample + 256 MiB) records per-PID dedicated, adapter dedicated, adapter free and adapter total.
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:net'
 import { freemem } from 'node:os'
+import { resolve } from 'node:path'
 import { createInterface } from 'node:readline'
+import { promisify } from 'node:util'
 import { generateFiller } from '../src/core/quality'
 import { validateHarnessLimits } from './harness-limits'
 
@@ -31,6 +34,43 @@ const REQUEST_TIMEOUT_MS = limits.requestCapMs
 const RAM_ABORT_BYTES = limits.ramAbortGib * 1024 ** 3
 const LOAD_TIMEOUT_MS = 120_000
 const PROBE_TIMEOUT_MS = 30_000
+const execFileAsync = promisify(execFile)
+/** Free ephemeral loopback port. A later listener check closes the bind race. */
+export function reserveLoopbackPort(signal?: AbortSignal): Promise<number> {
+  return new Promise((done, fail) => {
+    const server = createServer()
+    const timer = setTimeout(() => { server.close(); fail(new Error('loopback port reservation timed out')) }, 5_000)
+    const abort = () => { server.close(); fail(signal?.reason ?? new Error('port reservation aborted')) }
+    const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort) }
+    if (signal?.aborted) { cleanup(); return abort() }
+    signal?.addEventListener('abort', abort, { once: true })
+    server.once('error', (e) => { cleanup(); fail(e) })
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') { cleanup(); server.close(); return fail(new Error('loopback reservation returned no TCP port')) }
+      server.close((e) => { cleanup(); if (e) fail(e); else done(address.port) })
+    })
+  })
+}
+/** Read-only owner query; ambiguity or unavailable OS data fails closed. */
+export async function loopbackOwner(port: number, signal?: AbortSignal): Promise<number | null> {
+  const command = `$p=@(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalAddress -in @('127.0.0.1','0.0.0.0','::') } | Select-Object -ExpandProperty OwningProcess -Unique); if($p.Count -eq 1){$p[0]}`
+  const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true, timeout: 5_000, signal, env: safeEnv() })
+  const raw = stdout.trim()
+  return /^\d+$/.test(raw) ? Number(raw) : null
+}
+export function verifyProps(props: unknown, argv: string[]): { modelPath: string; contextSize: number } {
+  const args = argv as string[]
+  const model = args[args.indexOf('-m') + 1]
+  const ctx = Number(args[args.indexOf('-c') + 1])
+  if (!model || !Number.isSafeInteger(ctx) || ctx <= 0) throw new Error('launch argv lacks valid -m and -c identity')
+  const p = props as { model_path?: unknown; default_generation_settings?: { n_ctx?: unknown } } | null
+  const actual = typeof p?.model_path === 'string' ? p.model_path : null
+  if (!actual || resolve(actual).toLowerCase() !== resolve(model).toLowerCase()) throw new Error(`/props model mismatch: expected ${model}, got ${actual ?? 'missing'}`)
+  const servedCtx = p?.default_generation_settings?.n_ctx
+  if (servedCtx !== ctx) throw new Error(`/props context mismatch: requested ${ctx}, served ${String(servedCtx)}`)
+  return { modelPath: actual, contextSize: ctx }
+}
 /** Windows environment names are case-insensitive. Keep this independent of uncommitted runtime changes. */
 export const unifiedMemoryKeys = (base: NodeJS.ProcessEnv = process.env) => Object.keys(base).filter((k) => k.toUpperCase() === 'GGML_CUDA_ENABLE_UNIFIED_MEMORY')
 export const safeEnv = (base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => Object.fromEntries(Object.entries(base).filter(([k]) => k.toUpperCase() !== 'GGML_CUDA_ENABLE_UNIFIED_MEMORY'))
@@ -180,6 +220,8 @@ export interface LaunchProbe {
   watchIntervalMs?: number
   settleMs?: number
   postMs?: number
+  reservePort?: (signal: AbortSignal) => Promise<number>
+  ownerOfPort?: (port: number, signal: AbortSignal) => Promise<number | null>
 }
 export async function launch(label: string, argv: string[], promptTokens: number | null, exe = EXE, probe: LaunchProbe = {}) {
   const readRam = probe.readRam ?? freemem
@@ -189,7 +231,9 @@ export async function launch(label: string, argv: string[], promptTokens: number
   const healthTimeoutMs = Math.min(probe.healthTimeoutMs ?? 5_000, 5_000)
   const settleMs = Math.min(Math.max(probe.settleMs ?? 2_500, 0), 2_500)
   const postMs = Math.min(Math.max(probe.postMs ?? 1_500, 0), 1_500)
-  const port = 19100 + Math.floor(Math.random() * 500)
+  let port: number | null = null
+  let listenerOwnerPid: number | null = null
+  let servedProps: { modelPath: string; contextSize: number } | null = null
   const t0 = Date.now()
   const ramBefore = readRam()
   let devicesBefore: string[] = []
@@ -214,6 +258,10 @@ export async function launch(label: string, argv: string[], promptTokens: number
     if (countServers() > 0) throw new Error('another llama-server is running')
     devicesBefore = (probe.devices ?? listDevices)(exe)
     ramFloor(readRam)
+    port = await (probe.reservePort ?? reserveLoopbackPort)(controller.signal)
+    if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw new Error(`invalid reserved loopback port: ${String(port)}`)
+    // A listener appearing between reservation and spawn is a conflict, never ours.
+    if (await (probe.ownerOfPort ?? loopbackOwner)(port, controller.signal) !== null) throw new Error(`reserved port ${port} acquired by another listener before spawn`)
     p = spawn(exe, [...argv, '--port', String(port), '--host', '127.0.0.1'], { windowsHide: true, env: safeEnv() })
     let serverClosed = false
     closed = new Promise<void>((resolve) => { p!.once('close', () => { serverClosed = true; resolve() }); p!.once('error', () => { serverClosed = true; resolve() }) })
@@ -230,6 +278,12 @@ export async function launch(label: string, argv: string[], promptTokens: number
       await sleep(250)
     }
     if (!ready) throw new Error(`server health unavailable after ${loadTimeoutMs} ms`)
+    if (serverClosed || !p.pid) throw new Error('server exited before identity verification')
+    listenerOwnerPid = await (probe.ownerOfPort ?? loopbackOwner)(port, controller.signal)
+    if (listenerOwnerPid !== p.pid) throw new Error(`port ${port} listener PID ${String(listenerOwnerPid)} is not owned server PID ${p.pid}`)
+    const props = await (await fetch(`http://127.0.0.1:${port}/props`, { signal: bounded(controller.signal, healthTimeoutMs) })).json()
+    servedProps = verifyProps(props, argv)
+    if (serverClosed || await (probe.ownerOfPort ?? loopbackOwner)(port, controller.signal) !== p.pid) throw new Error(`port ${port} listener changed during /props verification`)
     loadMs = Date.now() - t0
     if (!p.pid) throw new Error('server started without PID')
     s = (probe.startSampler ?? sampler)(p.pid)
@@ -266,7 +320,7 @@ export async function launch(label: string, argv: string[], promptTokens: number
   const bufs = (kind: string) => [...log.matchAll(/(\S+) (model|KV|compute) buffer size\s*=\s*([\d.]+) MiB/g)].filter((m) => m[2] === kind).map((m) => ({ dev: m[1], mib: Number(m[3]) }))
   const bufferRows = [...bufs('model'), ...bufs('KV'), ...bufs('compute')]
   const res = {
-    label, exe, argv: argv.join(' '), error, ramAbort: watchdog.reason(), loadMs, promptTokensRequested: promptTokens, promptTokensActual: promptN, reps,
+    label, exe, argv: argv.join(' '), port, listenerOwnerPid, servedProps, error, ramAbort: watchdog.reason(), loadMs, promptTokensRequested: promptTokens, promptTokensActual: promptN, reps,
     samples: rows.length, adapterLuid: luid, adapterTotalGiB: g(ADAPTER_TOTAL),
     peakPidDedicatedGiB: g(peak((r) => r.pidDed)), peakPidSharedGiB: g(peak((r) => r.pidShr)), pidSharedBaselineGiB: g(base),
     peakAdapterDedicatedGiB: g(peak((r) => (luid ? r.adapterDed[luid] ?? null : null))),
