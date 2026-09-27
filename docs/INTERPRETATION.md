@@ -315,6 +315,17 @@ recommendations show "recommended with rules <v>; reinterpreted with rules <w>".
 
 ---
 
+## 10a. Gate rules added by the engine (origin policy; adopted into the guide)
+
+Rule I-2.7 (`gate.context-floor`, warn): largest clean context below half the
+workload's target → ineligible; action `lower-required-context`.
+Rule I-3.7 (`ctx.recommended`, info): "Recommended -c <ctx>: <why>" — the rung the
+export uses and the reason it was chosen (from the decision trace).
+Rule I-5.10 (`gate.quality-min`, warn): measured quality below the workload minimum →
+ineligible; action `run-thorough-quality`.
+Rule I-6.5 (`gate.stability`, warn, min 50): stability component below 50 →
+ineligible; action `rerun-idle`.
+
 ## 11. Threshold provenance
 
 | Threshold | Value | Origin |
