@@ -10,6 +10,7 @@ export interface FixtureRun {
   promptTokens: number | null; loadMs: number | null; ttftMs: number | null; prefillTps: number | null; decodeTps: number | null
   totalMs: number | null; peakRamBytes: number | null; peakVramBytes: number | null; peakSharedGpuBytes: number | null
   cpuAvgPct: number | null; gpuAvgPct: number | null
+  peakSharedGpuRawBytes?: number | null
 }
 export interface Fixture { vramBytes: number; models: ModelMeta[]; runs: FixtureRun[]; expected?: Record<string, unknown> }
 
@@ -29,7 +30,8 @@ export const toRun = (r: FixtureRun): BenchmarkRunResult => ({
   loadTimeMs: m(r.loadMs), ttftMs: m(r.ttftMs), prefillTps: m(r.prefillTps), decodeTps: m(r.decodeTps), totalMs: m(r.totalMs),
   peakVramBytes: m(r.peakVramBytes), peakSharedGpuBytes: m(r.peakSharedGpuBytes), peakRamBytes: m(r.peakRamBytes),
   avgGpuUtil: m(r.gpuAvgPct), avgCpuUtil: m(r.cpuAvgPct),
-  warm: true // fixture rows are warmed measurements (I-6.0 requires a recorded successful warmup)
+  warm: true, // fixture rows are warmed measurements (I-6.0 requires a recorded successful warmup)
+  ...(r.peakSharedGpuRawBytes !== undefined ? { peakSharedGpuRawBytes: m(r.peakSharedGpuRawBytes) } : {})
 })
 
 export const machine = (vramBytes = 17095983104): MachineLimits => ({

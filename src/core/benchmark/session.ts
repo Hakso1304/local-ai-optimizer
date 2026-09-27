@@ -176,6 +176,9 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   const { storage, clock, signal } = deps
   const machine = machineFromProfile(deps.machine, deps.gpuDevice)
   const vramTotal = val(machine.vramBytes, true)
+  // L1: the saturation share for spill is taken against what this process could get — VRAM total minus what other
+  // processes held at planning (measured), not the adapter total.
+  const vramEffective = vramTotal === null ? null : vramTotal - (val(machine.vramInUseBytes) ?? 0)
   const ramTotal = val(machine.ramTotalBytes, true)
   // Heavy mode runs close to the RAM limit on purpose: floor = the 2 GiB minimum, never lower.
   const ramFloor = Math.max(cfg.ramFloorMinBytes, (ramTotal ?? 0) * cfg.ramFloorFraction)
@@ -319,7 +322,10 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       }
       for (const s of cand.skippedSteps) log('info', `${cand.id} @${s.ctx}: skipped (${s.reason})`)
       // An explicit required context wins over the UI ladder cap: run every rung up to it, nothing above it.
-      const steps = required ? cand.ctxSteps.filter((c) => c <= required) : req.ladder ? cand.ctxSteps.filter((c) => req.ladder!.includes(c)) : cand.ctxSteps
+      // L2: an explicit ladder that reaches the required rung is a rung selection and is honoured; a lower ladder is only
+      // the UI's size cap, which the required context overrides.
+      const explicit = !!req.ladder && (!required || Math.max(...req.ladder) >= required)
+      const steps = cand.ctxSteps.filter((c) => (!required || c <= required) && (!explicit || req.ladder!.includes(c)))
       const runs: BenchmarkRunResult[] = []
       let spillBase = 0 // shared level of the config's first step when VRAM was not saturated (not spill)
       let degradedRun = 0
@@ -343,7 +349,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         runs.push(run)
         if (runs.length === 1) {
           const raw = val(run.peakSharedGpuRawBytes) ?? val(run.peakSharedGpuBytes), pin = val(run.hostPinnedBytes) ?? 0, ded = val(run.peakVramBytes)
-          if (raw !== null && (vramTotal === null || ded === null || ded < vramTotal * DEFAULT_SCORING_CONFIG.cliff.vramSaturation)) spillBase = Math.max(0, raw - pin)
+          if (raw !== null && (vramEffective === null || ded === null || ded < vramEffective * DEFAULT_SCORING_CONFIG.cliff.vramSaturation)) spillBase = Math.max(0, raw - pin)
         }
         const verdict = detectCliffs(runs, vramTotal).steps.find((s) => s.ctx === ctx)!.verdict
         send({ type: 'step:done', configId: cand.id, ctx, result: run, verdict })
@@ -591,9 +597,9 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     const spillMetric = (): Metric => {
       const raw = pk.max.procVramSharedBytes, ded = pk.max.procVramDedicatedBytes
       if (pk.n === 0 || raw == null) return tele(raw, 'procVramSharedBytes')
-      const saturated = vramTotal === null || ded == null || ded >= vramTotal * DEFAULT_SCORING_CONFIG.cliff.vramSaturation
+      const saturated = vramEffective === null || ded == null || ded >= vramEffective * DEFAULT_SCORING_CONFIG.cliff.vramSaturation
       const v = saturated ? Math.max(0, raw - pinned - spillBase) : 0
-      return { value: v, kind: 'measured', source: `per-PID shared ${(raw / GiB).toFixed(2)} GiB − host-pinned ${(pinned / GiB).toFixed(2)} GiB − baseline ${(spillBase / GiB).toFixed(2)} GiB${saturated ? '' : ' (dedicated below saturation: not spill)'}` }
+      return { value: v, kind: 'measured', source: `per-PID shared ${(raw / GiB).toFixed(2)} GiB − host-pinned ${(pinned / GiB).toFixed(2)} GiB − baseline ${(spillBase / GiB).toFixed(2)} GiB${saturated ? '' : ` (dedicated below ${Math.round(DEFAULT_SCORING_CONFIG.cliff.vramSaturation * 100)} % of the effective budget ${vramEffective === null ? '?' : (vramEffective / GiB).toFixed(2)} GiB: not spill)`}` }
     }
     const prefill = median(reps.map((r) => r.prefillTps))
     const decode = median(reps.map((r) => r.decodeTps))

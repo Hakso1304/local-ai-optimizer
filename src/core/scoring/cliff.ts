@@ -94,6 +94,17 @@ export function detectCliffs(
         code: 'shared_spill', metric: 'peakSharedGpuBytes', toCtx: to, to: sh, threshold: cfg.sharedSpillBytes,
         message: `spilled ${fmtGiB(sh)} into shared GPU memory at ${fmtCtx(to)}`
       }))
+    } else if (prev) {
+      // Raw growth vs the previous rung (host-pinned buffers excluded), independent of the dedicated share: other
+      // processes can hold enough VRAM that the saturation condition never holds while allocations move to shared.
+      const raw = (r: BenchmarkRunResult) => { const x = val(r.peakSharedGpuRawBytes); return x === null ? null : x - (val(r.hostPinnedBytes) ?? 0) }
+      const g0 = raw(prev), g1 = raw(s)
+      if (g0 !== null && g1 !== null && g1 - g0 >= cfg.rawSharedGrowthBytes) {
+        reasons.push(reason({
+          code: 'shared_spill', metric: 'peakSharedGpuRawBytes', fromCtx, toCtx: to, from: g0, to: g1 - g0, threshold: cfg.rawSharedGrowthBytes,
+          message: `shared GPU memory grew +${fmtGiB(g1 - g0)} ${span} (raw, host-pinned excluded) while dedicated VRAM was below the saturation share`
+        }))
+      }
     }
     // ponytail: sticky — once past a cliff/failure, larger steps are never "practical". A real ≥40% dip that
     // recovers would still end the ceiling; upstream medians-of-reps are the noise defence.

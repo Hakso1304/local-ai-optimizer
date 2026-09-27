@@ -434,7 +434,7 @@ describe('runSession', () => {
     expect(sat.s.runs[1].peakSharedGpuBytes.value).toBe(Math.round(1.5 * GiB)) // step 1 was saturated → no baseline is subtracted
     const free = await run(() => ({}), { ladder: [2048, 4096] }, { startSampler: (pid) => { const v = at(pid - 1000, 8 * GiB); return { samples: v, unavailable: {}, stop: () => v } } })
     expect(free.s.runs[1].peakSharedGpuBytes.value).toBe(0)
-    expect(free.s.runs[1].peakSharedGpuBytes.source).toMatch(/dedicated below saturation: not spill/)
+    expect(free.s.runs[1].peakSharedGpuBytes.source).toMatch(/dedicated below 80 % of the effective budget [\d.]+ GiB: not spill/)
   })
 
   it('required context: the ladder runs every rung up to it (UI ladder cap ignored), nothing above; CR-04-long added', async () => {
@@ -444,6 +444,13 @@ describe('runSession', () => {
     expect(r.s.runs.filter((x) => x.configId === f16).map((x) => x.ctx)).toEqual([2048, 4096, 8192, 16384, 32768, 65536])
     expect(r.s.quality[0].results.map((x) => x.testId)).toContain('CR-04-long')
     expect(r.backend.calls.loads.some((l) => l.contextSize === 131072)).toBe(false)
+  })
+
+  it('L2: an explicit ladder that reaches the required rung is honoured (no 2K–16K extras)', async () => {
+    const m = { ...model, ctxTrain: 131072 }
+    const r = await run(() => ({}), { workload: 'long_context_coding', requiredContext: 65536, ladder: [32768, 65536] }, { models: [m] })
+    const f16 = `${m.id}|ngl=all|kv=f16|t=8`
+    expect(r.s.runs.filter((x) => x.configId === f16).map((x) => x.ctx)).toEqual([32768, 65536])
   })
 
   it('no CR-04-long without a required context ≥ 32K; skipped (with a reason) when no config reaches it', async () => {

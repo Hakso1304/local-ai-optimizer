@@ -49,7 +49,11 @@ export const DEFAULT_SCORING_CONFIG = {
     // while 1.05 GiB went to shared memory (0.95 could never fire). Corroborates shared_spill; 8B peaked at 81% with
     // flat RAM, so the RAM-growth condition keeps it quiet there.
     vramSaturation: 0.80, // per-PID dedicated ≥ 80% of VRAM ...
-    ramGrowthBytes: 1 * GiB // ... while private RAM grows ≥ 1 GiB vs previous step → spill (never RAM alone, X11)
+    ramGrowthBytes: 1 * GiB, // ... while private RAM grows ≥ 1 GiB vs previous step → spill (never RAM alone, X11)
+    // Long-context calibration (cal-longctx-2026-09-27): with ≈ 2.5 GiB held by other processes, two collapsing rungs
+    // sat at 67–73 % dedicated with 2.0–2.1 GiB raw shared and adjusted spill 0.00. Raw shared growth (host-pinned
+    // excluded) of ≥ 1 GiB vs the previous rung is a spill whatever the dedicated share.
+    rawSharedGrowthBytes: 1 * GiB
   },
   norm: {
     decodeFloorTps: 2, // ≤ this scores 0
