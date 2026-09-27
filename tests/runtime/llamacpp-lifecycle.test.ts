@@ -193,6 +193,44 @@ describe('runPrompt', () => {
 })
 
 describe('unloadModel', () => {
+  it('Q2: reaps an owned descendant even when the server parent exits promptly', async () => {
+    const descendantPid = 424245
+    let descendantAlive = true
+    const calls: number[] = []
+    const processTree = {
+      descendants: (pid: number) => { expect(pid).toBe(child.pid); return [descendantPid] },
+      kill: (pid: number) => { calls.push(pid); if (pid === descendantPid) descendantAlive = false },
+      isAlive: (pid: number) => pid === descendantPid && descendantAlive
+    }
+    b = new LlamaCppBackend('unused', { pidFile, spawnFn: () => child as unknown as ChildProcess, processTree } as ConstructorParameters<typeof LlamaCppBackend>[1])
+    handler = healthy()
+    await load()
+    await b.unloadModel()
+    expect(child.kills).toBeGreaterThan(0)
+    expect(calls).toContain(descendantPid)
+    expect(descendantAlive).toBe(false)
+    expect(existsSync(pidFile)).toBe(false)
+  })
+
+  it('Q2: reports a surviving descendant after parent exit and retains cleanup identity', async () => {
+    const descendantPid = 424245
+    let descendantAlive = true
+    const processTree = {
+      descendants: () => [descendantPid],
+      kill: () => {},
+      isAlive: (pid: number) => pid === descendantPid && descendantAlive
+    }
+    b = new LlamaCppBackend('unused', { pidFile, spawnFn: () => child as unknown as ChildProcess, processTree } as ConstructorParameters<typeof LlamaCppBackend>[1])
+    handler = healthy()
+    await load()
+    try {
+      await expect(b.unloadModel()).rejects.toThrow(/surviv|descendant|still alive/i)
+      expect(existsSync(pidFile)).toBe(true)
+    } finally {
+      descendantAlive = false // fake process is released before the shared cleanup hook
+    }
+  })
+
   it('kills once, resolves when the child exits, clears the pid file; does not report a self-exit', async () => {
     handler = healthy()
     await load()
