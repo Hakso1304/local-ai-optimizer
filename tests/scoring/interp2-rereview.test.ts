@@ -126,8 +126,12 @@ describe('G07 memory and spill wording keep scope', () => {
 })
 
 describe('G08 generation choice is deterministic and needs application proof', () => {
+  const proof = (key: string, requested: unknown) => ({ requested,
+    counterfactual: key === 'enable_thinking' ? !requested : requested === 'low' ? 'high' : 'low',
+    requestedSha256: 'a'.repeat(64), counterfactualSha256: 'b'.repeat(64), status: 'proved' as const })
   const genRows = (id: string, reasoning: number, applied: Record<string, unknown> | undefined) =>
     quality().map((r) => ({ ...r, genId: id, sample: 1, answerTokens: 100, reasoningTokens: reasoning, totalMs: 2000, tokenSource: 'runtime', ...(applied ? { appliedTemplateKwargs: applied } : {}),
+      ...(applied && Object.keys(applied).length ? { templateKwargProof: Object.fromEntries(Object.entries(applied).map(([key, value]) => [key, proof(key, value)])) } : {}),
       templateHash: 't1', runtimeVersion: 'b1', modelFingerprint: 'm1', acceptedSampling: { temperature: 0 } }))
   const gq = (id: string, effort: string, reasoning: number, applied?: Record<string, unknown>): GenQuality => ({
     gen: { id, thinking: true, effort, temperature: 0, source: 'default' }, results: genRows(id, reasoning, applied), samples: 1, stochastic: false,
@@ -137,7 +141,8 @@ describe('G08 generation choice is deterministic and needs application proof', (
   it('equal quality: the lower effort is kept whatever the input order', () => {
     for (const order of [['high', 'low'], ['low', 'high']]) {
       const c = model(candidate('a'))
-      c.quality = c.quality.map((r) => ({ ...r, templateHash: 't1', runtimeVersion: 'b1', modelFingerprint: 'm1' } as QualityResult)) // baseline with the same identities
+      c.quality = c.quality.map((r) => ({ ...r, templateHash: 't1', runtimeVersion: 'b1', modelFingerprint: 'm1',
+        acceptedSampling: { temperature: 0 }, appliedTemplateKwargs: { enable_thinking: false } } as QualityResult)) // full off comparator contract
       c.genQuality = order.map((e) => gq(`think-${e}`, e, e === 'high' ? 100 : 20, { enable_thinking: true, reasoning_effort: e }))
       expect(verdicts({ candidates: [c], machine: machine() }, 'max_quality').winner?.gen?.gq.gen.id, order.join()).toBe('think-low')
     }
