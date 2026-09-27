@@ -165,6 +165,8 @@ export async function readGgufMetadata(path: string): Promise<GgufMetadata> {
         ? { value: declaredParams, kind: 'declared', source: 'general.parameter_count' }
         : splitCount > 1
           ? { value: null, kind: 'unavailable', source: `split file (1 of ${splitCount}); tensor sum would be partial` }
+          // File truth: tied-embedding models whose GGUF stores output.weight and token_embd.weight as separate
+          // tensors count both (qwen2.5-1.5B → 1.78B, matching the converter's size_label "1.8B"), deliberately.
           : { value: params, kind: 'declared', source: 'sum of tensor dims' },
       contextLength: num(a('context_length')),
       blockCount,

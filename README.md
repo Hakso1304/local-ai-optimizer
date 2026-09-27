@@ -17,7 +17,12 @@ nothing is guessed silently.
 ## Usage
 
 1. System page: *Install llama.cpp runtime* (first run).
-2. Models page: check your models. **Download from Hugging Face**: Download page → search → pick a GGUF file → Download (sign in with a read token for gated models). *(Download page wiring pending.)*
+2. Models page: check your models. **Download from Hugging Face** (Download page, or the button on the Benchmark
+   page): search → pick a repository → pick a GGUF file → choose one of your configured model folders → Download.
+   Signing in is optional; public models work without it. Gated models need a read token (*Open token page*, paste
+   it; it is stored encrypted on this PC) and the model's license accepted on huggingface.co. Downloads show
+   progress, speed and ETA, can be paused and resumed (partial file kept) or cancelled, are checked against the
+   repository's sha256 when it publishes one, and appear on the Models page when finished.
 3. Benchmark page: pick a workload and models. **Include heavy models** to also test models whose full GPU offload does not fit (partial offload, slow). Then Start; Pause/Resume and Cancel work mid-run.
 4. Results page: recommendation, charts, per-run telemetry, and the *Export* menu.
 
