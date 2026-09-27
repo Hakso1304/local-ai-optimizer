@@ -38,6 +38,7 @@ Quality bands overlap between the three (14B 86, Gemma 93, Qwen 96, all ±≈10)
 docs/EVIDENCE.md E-1…E-31 (S2 owns updates); E-12/E-13 now supported by stage 2 (ceiling independent of fill/placement/ubatch); E-21 (`--cache-ram 0`) supported; E-22 (HIP) and E-23 (Q3 vs Q4) pending.
 
 ## 6. Open items / needs the user
+- Harness safety review (docs/review-w4q): Q1–Q3 HIGH (abort can be lost between apply-template and generation; PID-chain teardown not guaranteed; watchdog gaps around OS probes/teardown) + Q5–Q8 — **no new GPU stage is released until Q1–Q3 (+Q8 for A/B) are fixed and re-reviewed**; S1 (runner/runtime) and S3 (scripts) fixing, S2 negatives. Session 5 (running) continues under its existing lease.
 - HIP: driver enumeration unknown until `--list-devices` (stage 4).
 - Historical rows before O1 (sub-1 GiB spill verdicts) remain "unvalidated" in the ledger.
 - Console-window popups fixed (3e7183f).

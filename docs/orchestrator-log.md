@@ -217,3 +217,6 @@
 
 ## Fable — 2026-09-28 04:00 local
 - Claude #1 pre-review of S1's P1–P3 diff found the replay hole (reconstructed rows would be "proved"); routed to S1 (6 items) + S2 negatives. Consequence: session 5 effort rows are not evaluable (no original prompt hashes) — the replay tool only discloses "reconstructed". Lane plan revised: after S3-SESSION5-DONE → (once S1's commit + Astra harness review land) ONE Qwen session on the fixed producer: off/low/medium/xhigh, seed 424242, -lv 4 → HIP check → HIP A/B → iGPU → Q3/Q4 → E-batch. Morning report §3 updated.
+
+## Fable — 2026-09-28 04:05 local
+- Harness review w4q committed: Q1–Q3 HIGH block ALL lane releases (Q8 for A/B). Routed: S1 Q1 (abort propagation) + Q2 runtime/sampler; S3 Q2 scripts, Q3, CLI bounds, Q5, Q6, Q7, Q8; S2 negatives. Session 5 lease continues; the prepared Qwen re-run stays HELD until fixes + Astra re-review. Morning report §6 updated.
