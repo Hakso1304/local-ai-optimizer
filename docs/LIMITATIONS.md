@@ -45,6 +45,11 @@ This is the single consolidated list, and every item is checked against the code
 - **DONE-WITH-CAVEAT: model-written JS runs in a child-process sandbox** (`--permission`, memory cap, vm context, timeout). Network is blocked by the vm context, not by `--permission`.
   - The sandbox spawns `process.execPath` with `ELECTRON_RUN_AS_NODE=1` (`quality/sandbox.ts`), so it depends on Electron's **RunAsNode fuse** staying enabled (the electron-builder default).
   - If the fuses are hardened (`electronFuses.runAsNode: false`), the coding-quality tests (CD-01..03) fail as "request failed" instead of running. Keep the fuse on, or ship a separate Node binary for the sandbox.
+  - Memory cap ceiling. `--max-old-space-size` does not cover ArrayBuffer backing stores. Two checks close most of that gap:
+    - the child checks its own `arrayBuffers`/RSS after the run (cap, and 1.5× cap + 48 MiB RSS);
+    - the parent polls the child's working set every 250 ms and kills it above 1.5× cap + 48 MiB.
+    An allocation burst shorter than one poll can briefly exceed the cap before the kill. A hard OS limit (Job Object) would need native code.
+  - The VM context is not a security boundary by itself. The child's host code is strict (so V8 callsites can't hand a host function to a model-installed `Error.prepareStackTrace`), and `Error` is frozen in the context. Thrown values are never read through getters or `toString`. The `--permission` barrier (no fs / child_process / worker) is the backstop if a context escape is found.
 
 ## Scoring and recommendation
 - **DONE-WITH-CAVEAT: absolute normalization.** Scores are comparable across sessions only while `scoring-1.0.0` constants are unchanged, and the version is stored.

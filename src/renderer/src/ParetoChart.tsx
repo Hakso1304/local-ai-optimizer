@@ -20,6 +20,7 @@ export function paretoPoints(cs: SessionCandidate[]): { points: ParetoPoint[]; s
     const f = factsOf(c)
     const q = c.score?.breakdown.find((b) => b.component === 'quality')
     if (f.decodeTps == null) skipped.push({ id: c.config.id, why: 'decode t/s not measured at the scored context' })
+    else if (f.decodeKind !== 'measured') skipped.push({ id: c.config.id, why: `decode t/s is ${String(f.decodeKind ?? 'unknown').toUpperCase()} (wall clock), not measured` })
     else if (!q || q.input.kind !== 'measured') skipped.push({ id: c.config.id, why: q ? `quality is ${q.input.kind.toUpperCase()}, not measured` : 'no quality score' })
     else points.push({ id: c.config.id, x: f.decodeTps, y: q.score, label: `${c.model.name} ${c.model.quant ?? ''} @${f.ctx ? fmtCtx(f.ctx) : '?'}${c.config.gpuLayersAll ? '' : ` ngl ${c.config.gpuLayers}`}` })
   }

@@ -17,7 +17,7 @@ it('blocks prototype and async-function constructor access to the child process'
   expect(({} as any).reviewMarker).toBeUndefined()
 })
 
-it.fails('does not expose host constructors through an error getter and V8 stack callsites', async () => {
+it('does not expose host constructors through an error getter and V8 stack callsites', async () => {
   const r = await runSandboxed(`throw { get message() {
     Error.prepareStackTrace = (_e, frames) => frames.map(f => {
       try { return f.getFunction()?.constructor('return process')()?.versions?.node || 'blocked' }
@@ -29,7 +29,7 @@ it.fails('does not expose host constructors through an error getter and V8 stack
   if (!r.ok) expect(r.error).not.toMatch(/\d+\.\d+\.\d+/)
 })
 
-it.fails('does not let escaped code forge a successful sandbox result', async () => {
+it('does not let escaped code forge a successful sandbox result', async () => {
   const r = await runSandboxed(`throw { get message() {
     Error.prepareStackTrace = (_e, frames) => {
       for (const f of frames) {
@@ -64,7 +64,7 @@ it('keeps the child filesystem and subprocess permission barriers after the VM e
   if (!r.ok) expect(r.error).not.toContain('true')
 })
 
-it.fails('enforces the advertised memory cap on ArrayBuffer backing stores', async () => {
+it('enforces the advertised memory cap on ArrayBuffer backing stores', async () => {
   // Bounded reproduction: touches only 64 MiB in a child configured for 16 MiB old space.
   const r = await runSandboxed('const b = new Uint8Array(64 * 1024 * 1024); b.fill(1); "allocated"', { timeoutMs: 500, memoryMb: 16 })
   expect(r.ok).toBe(false)

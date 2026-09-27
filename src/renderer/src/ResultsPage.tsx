@@ -49,7 +49,7 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
     <>
       {d.session.demo && <DemoBanner />}
       <h2>Comparison — {d.session.workload}{tag}</h2>
-      <SloFilter workload={d.session.workload} requiredContext={d.session.requiredContext} candidates={d.candidates} onChange={onSlo} />
+      <SloFilter session={d.session} candidates={d.candidates} onChange={onSlo} />
       <table>
         <thead><tr><th /><th>Model</th><th>Quant</th><th>Config</th><th>Recommended ctx</th>{req != null && <th>Required {fmtCtx(req)}</th>}<th>Practical ctx</th><th>Quality</th><th>Decode t/s</th><th>Prefill t/s</th><th>Peak VRAM</th><th>Peak RAM</th><th>Stability</th><th /></tr></thead>
         <tbody>
@@ -152,8 +152,11 @@ export function ResultsPage({ sessionId }: { sessionId?: number }) {
   const [computed, setComputed] = useState<ComputedRecommendation | null>(null)
   useEffect(() => { setViewAs(null); setComputed(null) }, [sel])
   useEffect(() => {
-    if (!detail || !viewAs || viewAs === detail.session.workload) return setComputed(null)
-    window.api.computeRecommendation(detail.session.id, viewAs).then(setComputed, (e: Error) => setErr(e.message))
+    setComputed(null) // never show the previous session/workload's result while the new one is pending
+    if (!detail || !viewAs || viewAs === detail.session.workload) return
+    let live = true // stale-reply guard: a slower answer for an earlier session+workload is dropped (W4b F11)
+    window.api.computeRecommendation(detail.session.id, viewAs).then((r) => { if (live) setComputed(r) }, (e: Error) => { if (live) setErr(e.message) })
+    return () => { live = false }
   }, [detail, viewAs])
   const shown: SessionDetail | null = detail && computed ? {
     ...detail,
@@ -166,7 +169,9 @@ export function ResultsPage({ sessionId }: { sessionId?: number }) {
   useEffect(() => { window.api.listSessions().then(setList, (e: Error) => setErr(e.message)) }, [tick])
   useEffect(() => {
     if (sel == null) return setDetail(null)
-    window.api.getSession(sel).then(setDetail, (e: Error) => setErr(e.message))
+    let live = true // session A's late reply must not replace session B's detail
+    window.api.getSession(sel).then((d) => { if (live) setDetail(d) }, (e: Error) => { if (live) setErr(e.message) })
+    return () => { live = false }
   }, [sel, tick])
   // Refresh when a session ends or a step lands while this page is open (list status + detail charts).
   useEffect(() => window.api.onBenchEvent((e) => {

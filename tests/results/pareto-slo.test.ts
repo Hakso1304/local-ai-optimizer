@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Metric } from '../../src/shared/bench-types'
 import type { SessionCandidate } from '../../src/shared/types'
 import { paretoFrontier, paretoPoints } from '../../src/renderer/src/ParetoChart'
-import { factsOf, meetsSlo, parseLimit, sloDefaults } from '../../src/renderer/src/SloFilter'
+import { factsOf, meetsSlo, parseLimit, sessionProfile, sloDefaults } from '../../src/renderer/src/SloFilter'
 import { WORKLOADS } from '../../src/core/scoring/workloads'
 
 const p = (id: string, x: number, y: number) => ({ id, x, y })
@@ -55,7 +55,7 @@ const llama = cand({ id: 'llama8', rec: 32768, ref: 16384, practical: 65536, qua
 
 describe('factsOf', () => {
   it('uses the scored (reference) step for TTFT/decode/VRAM — not recommendedCtx, not the max over rungs', () => {
-    expect(factsOf(llama)).toEqual({ ctx: 16384, ttftMs: 3506, decodeTps: 93, practicalCtx: 65536, peakVramBytes: 6.55 * GiB })
+    expect(factsOf(llama)).toEqual({ ctx: 16384, ttftMs: 3506, decodeTps: 93, decodeKind: 'measured', practicalCtx: 65536, peakVramBytes: 6.55 * GiB })
   })
   it('a failed step never supplies numbers', () => {
     const c = cand({ id: 'x', rec: null, ref: 8192, practical: 8192, runs: [{ ctx: 8192, ttft: 900, decode: 40 }, { ctx: 16384, status: 'fail', decode: 999, vram: 99 * GiB }] })
@@ -77,6 +77,14 @@ describe('meetsSlo', () => {
     expect(meetsSlo(f, { maxTtftS: null, minDecodeTps: null, minPracticalCtx: null, maxVramGiB: 6 }).failed).toEqual(['peak VRAM'])
     // VRAM of the scored step (6.55 GiB), not of the 64K rung (12.6 GiB): a 7 GiB cap passes
     expect(meetsSlo(f, { maxTtftS: null, minDecodeTps: null, minPracticalCtx: null, maxVramGiB: 7 }).ok).toBe(true)
+  })
+  it('labels an estimated decode rate in the failure reason', () => {
+    const f = { ...factsOf(llama), decodeKind: 'estimated' as const }
+    expect(meetsSlo(f, { maxTtftS: null, minDecodeTps: 200, minPracticalCtx: null, maxVramGiB: null }).failed).toEqual(['decode (ESTIMATED)'])
+  })
+  it('defaults follow the effective profile: advisory latency → no TTFT limit, required ctx → ctx floor', () => {
+    const p = sessionProfile({ workload: 'coding', requiredContext: 65536, minDecodeTps: 20 })
+    expect(sloDefaults(p, 65536)).toEqual({ maxTtftS: null, minDecodeTps: 20, minPracticalCtx: 65536, maxVramGiB: null })
   })
   it('an unmeasured value fails an active constraint (unknown ≠ ok) but passes when the constraint is off', () => {
     const f = { ctx: null, ttftMs: null, decodeTps: null, practicalCtx: null, peakVramBytes: null }

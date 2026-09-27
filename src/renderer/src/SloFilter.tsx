@@ -1,19 +1,33 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { WorkloadId, WorkloadProfile } from '../../shared/bench-types'
-import type { SessionCandidate } from '../../shared/types'
-import { WORKLOADS } from '../../core/scoring/workloads'
+import type { ProvenanceKind, WorkloadProfile } from '../../shared/bench-types'
+import type { SessionCandidate, SessionSummary } from '../../shared/types'
+import { WORKLOADS, effectiveProfile } from '../../core/scoring/workloads'
 import { fmtCtx } from './ui'
 
 /** A constraint left null is off. */
 export interface SloValues { maxTtftS: number | null; minDecodeTps: number | null; minPracticalCtx: number | null; maxVramGiB: number | null }
 /** Measured facts per candidate at its scored step; null = not measured. */
-export interface SloFacts { ttftMs: number | null; decodeTps: number | null; practicalCtx: number | null; peakVramBytes: number | null; ctx: number | null }
+export interface SloFacts {
+  ttftMs: number | null; decodeTps: number | null; practicalCtx: number | null; peakVramBytes: number | null; ctx: number | null
+  /** Provenance of decodeTps: 'estimated' = wall-clock derived (no runtime timings). */
+  decodeKind?: ProvenanceKind
+}
 export type SloCheck = (c: SessionCandidate) => { ok: boolean; failed: string[] }
 
-/** Defaults from the workload: its latency tolerance, its decode gate, and the eligibility floor (half the target ctx). */
+/** Defaults from the session's EFFECTIVE profile (see sessionProfile): its latency tolerance (none when latency is
+ *  advisory, e.g. a requiredContext session), its decode gate, and the context floor (required ctx, else half the target). */
 export function sloDefaults(p: WorkloadProfile, requiredContext?: number | null): SloValues {
-  return { maxTtftS: p.latencyToleranceMs / 1000, minDecodeTps: p.minDecodeTps ?? null, minPracticalCtx: requiredContext ?? p.targetContext / 2, maxVramGiB: null }
+  return {
+    maxTtftS: p.latencyAdvisory ? null : p.latencyToleranceMs / 1000,
+    minDecodeTps: p.minDecodeTps ?? null,
+    minPracticalCtx: requiredContext ?? p.requiredContext ?? p.targetContext / 2,
+    maxVramGiB: null
+  }
 }
+
+/** The profile the session was scored with: workload + its request's requiredContext / minDecodeTps. */
+export const sessionProfile = (s: Pick<SessionSummary, 'workload' | 'requiredContext' | 'minDecodeTps'>): WorkloadProfile =>
+  effectiveProfile(WORKLOADS[s.workload], { requiredContext: s.requiredContext, minDecodeTps: s.minDecodeTps })
 
 const ok = (c: SessionCandidate['runs'][number]) => c.status === 'pass' || c.status === 'degraded'
 
@@ -24,10 +38,11 @@ export function factsOf(c: SessionCandidate): SloFacts {
   const r = c.runs.find((x) => x.ctx === ctx && ok(x))
   return {
     ctx: r ? ctx : null,
-    ttftMs: r?.ttftMs.value ?? null,
-    decodeTps: r?.decodeTps.value ?? null,
+    ttftMs: r?.ttftMs?.value ?? null,
+    decodeTps: r?.decodeTps?.value ?? null,
+    decodeKind: r?.decodeTps?.kind,
     practicalCtx: c.cliff.practicalContextCeiling.value,
-    peakVramBytes: r?.peakVramBytes.value ?? null
+    peakVramBytes: r?.peakVramBytes?.value ?? null
   }
 }
 
@@ -40,7 +55,7 @@ export function meetsSlo(f: SloFacts, s: SloValues): { ok: boolean; failed: stri
     else if (!pass(v)) failed.push(what)
   }
   chk(s.maxTtftS, f.ttftMs, (v) => v <= s.maxTtftS! * 1000, 'TTFT')
-  chk(s.minDecodeTps, f.decodeTps, (v) => v >= s.minDecodeTps!, 'decode')
+  chk(s.minDecodeTps, f.decodeTps, (v) => v >= s.minDecodeTps!, f.decodeKind === 'estimated' ? 'decode (ESTIMATED)' : 'decode')
   chk(s.minPracticalCtx, f.practicalCtx, (v) => v >= s.minPracticalCtx!, 'practical ctx')
   chk(s.maxVramGiB, f.peakVramBytes, (v) => v <= s.maxVramGiB! * 1024 ** 3, 'peak VRAM')
   return { ok: failed.length === 0, failed }
@@ -54,15 +69,16 @@ export const parseLimit = (text: string): number | null => {
 
 const CTX = [2048, 4096, 8192, 16384, 32768, 65536, 131072]
 
-export function SloFilter({ workload, requiredContext, candidates, onChange }: {
-  workload: WorkloadId
-  /** The session's required context (if set) is the default minimum practical context. */
-  requiredContext?: number | null
+export function SloFilter({ session, candidates, onChange }: {
+  /** Defaults follow this session's effective profile (requiredContext, custom minDecodeTps, advisory latency). */
+  session: Pick<SessionSummary, 'workload' | 'requiredContext' | 'minDecodeTps'>
   candidates: SessionCandidate[]
   onChange: (check: SloCheck) => void
 }) {
-  const [s, setS] = useState<SloValues>(() => sloDefaults(WORKLOADS[workload], requiredContext))
-  useEffect(() => setS(sloDefaults(WORKLOADS[workload], requiredContext)), [workload, requiredContext])
+  const { workload, requiredContext, minDecodeTps } = session
+  const defaults = useMemo(() => sloDefaults(sessionProfile({ workload, requiredContext, minDecodeTps }), requiredContext), [workload, requiredContext, minDecodeTps])
+  const [s, setS] = useState<SloValues>(defaults)
+  useEffect(() => setS(defaults), [defaults])
   const check = useMemo<SloCheck>(() => (c) => meetsSlo(factsOf(c), s), [s])
   useEffect(() => onChange(check), [check, onChange])
   const n = candidates.filter((c) => check(c).ok).length
@@ -83,7 +99,7 @@ export function SloFilter({ workload, requiredContext, candidates, onChange }: {
         </select>
       </label>
       {numIn('maxVramGiB', 'Max peak VRAM GiB', '0.5')}
-      <button className="mini" onClick={() => setS(sloDefaults(WORKLOADS[workload], requiredContext))}>Workload defaults</button>
+      <button className="mini" onClick={() => setS(defaults)}>Workload defaults</button>
       <span className="muted">{n} of {candidates.length} configurations meet the constraints (measured at each config's scored context)</span>
     </div>
   )

@@ -16,20 +16,44 @@ export type SandboxOutcome = { ok: true; raw: string | null } | { ok: false; err
 const MARK = '\u0000QB-RESULT\u0000' // result follows the last marker; guards against stray stdout
 const MAX_STDOUT = 64 * 1024
 
-// Runs inside the child: read {script,timeoutMs} JSON from stdin, run it in a fresh V8 context
+// Runs inside the child: read {script,timeoutMs,capBytes} JSON from stdin, run it in a fresh V8 context
 // (same isolation as checkers.runHarness), write MARK + JSON outcome.
-const CHILD = `const vm=require('node:vm');let s='';process.stdin.setEncoding('utf8');
-process.stdin.on('data',d=>{s+=d}).on('end',()=>{const {script,timeoutMs}=JSON.parse(s);let out;
+// Hardening (review-w4b F1): the host code is strict, so V8 CallSite.getFunction() never hands a host function to a
+// model-installed Error.prepareStackTrace; Error is frozen in the context before the model runs; and a thrown value is
+// never read through getters/toString — only own data properties of a native error, else a fixed diagnostic.
+// F2: V8's old-space cap does not cover ArrayBuffer backing stores, so the child also checks its own RSS/arrayBuffers
+// after the run (the parent polls RSS while it runs).
+const CHILD = `'use strict';const vm=require('node:vm');const {isNativeError}=require('node:util').types;let s='';process.stdin.setEncoding('utf8');
+const own=(e,k)=>{const d=Object.getOwnPropertyDescriptor(e,k);return d&&typeof d.value==='string'?d.value.slice(0,300):null};
+const why=(e)=>typeof e==='string'?e.slice(0,300):typeof e!=='object'&&typeof e!=='function'?String(e):isNativeError(e)?(own(e,'message')??'error without a readable message'):'uncaught non-Error exception in model code';
+process.stdin.on('data',d=>{s+=d}).on('end',()=>{const {script,timeoutMs,capBytes}=JSON.parse(s);let out;
 try{const ctx=vm.createContext(vm.constants.DONT_CONTEXTIFY,{codeGeneration:{strings:false,wasm:false},microtaskMode:'afterEvaluate'});
+vm.runInContext('Object.freeze(Error);Object.freeze(Error.prototype)',ctx);
 const raw=vm.runInContext(script,ctx,{timeout:timeoutMs});out={ok:true,raw:typeof raw==='string'?raw:null}}
-catch(e){out={ok:false,error:String((e&&e.message)||e)}}
+catch(e){out={ok:false,error:why(e)}}
+const m=process.memoryUsage();if(m.arrayBuffers>capBytes||m.rss>capBytes*1.5+${48 * 1024 * 1024})out={ok:false,error:'memory limit exceeded (ArrayBuffer/RSS '+Math.round(Math.max(m.arrayBuffers,m.rss)/1048576)+' MiB)'};
 process.stdout.write(${JSON.stringify(MARK)}+JSON.stringify(out))})`
+
+/** Child working set in bytes via tasklist (no native Job Object API from Node); null if unreadable. */
+function childRss(pid: number): Promise<number | null> {
+  return new Promise((resolve) => {
+    const t = spawn('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { windowsHide: true })
+    let o = ''
+    t.stdout.setEncoding('utf8').on('data', (d: string) => { o += d })
+    t.on('error', () => resolve(null))
+    t.on('close', () => {
+      const kb = /"[^"]*","\d+","[^"]*","\d+","([\d.,\s]+)\s*K"/.exec(o)?.[1]?.replace(/[^\d]/g, '')
+      resolve(kb ? Number(kb) * 1024 : null)
+    })
+  })
+}
 
 export function runSandboxed(script: string, opts: SandboxOptions): Promise<SandboxOutcome> {
   const memoryMb = opts.memoryMb ?? 256
   return new Promise((resolve) => {
     let settled = false
-    const done = (o: SandboxOutcome) => { if (!settled) { settled = true; clearTimeout(hard); resolve(o) } }
+    const done = (o: SandboxOutcome) => { if (!settled) { settled = true; clearTimeout(hard); clearInterval(rssPoll); resolve(o) } }
+    const capBytes = memoryMb * 1024 * 1024
     const child = spawn(
       process.execPath,
       ['--permission', `--max-old-space-size=${memoryMb}`, '--max-semi-space-size=16', '-e', CHILD],
@@ -41,6 +65,17 @@ export function runSandboxed(script: string, opts: SandboxOptions): Promise<Sand
     const kill = (why: string) => { killedFor ??= why; child.kill() }
     // vm timeout should fire first; this catches anything that blocks outside the vm's clock.
     const hard = setTimeout(() => kill(`hard timeout: sandbox killed after ${opts.timeoutMs + 2000}ms`), opts.timeoutMs + 2000)
+    // ponytail: RSS poll via tasklist every 250 ms (a slow allocation is caught mid-run; a fast one by the child's own
+    // post-run check). Ceiling: a burst faster than 250 ms can briefly exceed the cap; a Job Object would need native code.
+    let polling = false
+    const rssPoll = setInterval(() => {
+      if (polling || child.pid === undefined) return
+      polling = true
+      void childRss(child.pid).then((rss) => {
+        polling = false
+        if (rss != null && rss > capBytes * 1.5 + 48 * 1024 * 1024) kill(`memory limit exceeded (RSS ${Math.round(rss / 1048576)} MiB)`)
+      })
+    }, 250)
     child.stdout.setEncoding('utf8').on('data', (d: string) => {
       out += d
       if (out.length > MAX_STDOUT) kill('output limit exceeded')
@@ -59,6 +94,6 @@ export function runSandboxed(script: string, opts: SandboxOptions): Promise<Sand
       }
     })
     child.stdin.on('error', () => {}) // child may die before reading all input
-    child.stdin.end(JSON.stringify({ script, timeoutMs: opts.timeoutMs }))
+    child.stdin.end(JSON.stringify({ script, timeoutMs: opts.timeoutMs, capBytes }))
   })
 }
