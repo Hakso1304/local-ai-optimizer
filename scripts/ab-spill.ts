@@ -6,6 +6,10 @@
 // Identical argv: -c 65536 -ngl 999 -dev Vulkan0 -t 8 -b 2048 -ub 512 -fa on -fit off --parallel 1. Warmup + 2 reps.
 // --hip: Vulkan-vs-HIP ladder A/B instead — 8B f16 at 32K and 64K (0.56·ctx prompt), identical argv except the exe and
 //   -dev Vulkan0 / ROCm0; first reports whether the HIP build enumerates ROCm0 (stops there if not).
+// --igpu: can the iGPU's UMA memory replace the CPU layers? Qwen3.8-27B at 8K: (a) -ngl 49 on Vulkan0, rest on CPU
+//   (session 3's clean config) vs (b) -ngl 999 -dev Vulkan0,Vulkan1 -ts 49,16 (the 16 CPU layers on the iGPU). The
+//   per-device layer split is read from the load log. No per-device KV experiment: b11208 has no KV placement flag
+//   (-mg places KV only with -sm row, which Vulkan does not implement).
 // Telemetry: typeperf 1 s, per-PID dedicated/shared + adapter dedicated/shared (all LUIDs). At spill onset (per-PID shared
 // > first sample + 256 MiB) records per-PID dedicated, adapter dedicated, adapter free and adapter total.
 import { execFileSync, spawn } from 'node:child_process'
@@ -17,11 +21,13 @@ import { generateFiller } from '../src/core/quality'
 const EXE = 'vendor/llama.cpp/llama-server.exe'
 const HIP_EXE = 'vendor/llama.cpp-hip/llama-server.exe'
 const HIP = process.argv.includes('--hip')
+const IGPU = process.argv.includes('--igpu')
+const QWEN = 'D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf'
 const MODEL = 'D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf'
 const ADAPTER_TOTAL = 17095983104 // RX 9070 XT qwMemorySize (scanner, registry)
 const GiB = 1024 ** 3
 const MiB = 1024 ** 2
-const out = process.argv.slice(2).find((a) => !a.startsWith('--')) ?? (HIP ? 'docs/ab-hip-2026-09-28.json' : 'docs/ab-spill-2026-09-28.json')
+const out = process.argv.slice(2).find((a) => !a.startsWith('--')) ?? (HIP ? 'docs/ab-hip-2026-09-28.json' : IGPU ? 'docs/ab-igpu-2026-09-28.json' : 'docs/ab-spill-2026-09-28.json')
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const g = (b: number | null) => (b == null ? null : +(b / GiB).toFixed(2))
 const baseArgv = (ctx: number, extra: string[] = [], dev = 'Vulkan0') => ['-m', MODEL, '-c', String(ctx), '-ngl', '999', '-dev', dev, '-t', '8', '-b', '2048', '-ub', '512', '-fa', 'on', '-fit', 'off', '--parallel', '1', ...extra]
@@ -110,6 +116,8 @@ async function launch(label: string, argv: string[], promptTokens: number | null
     peakAdapterDedicatedGiB: g(peak((r) => (luid ? r.adapterDed[luid] ?? null : null))),
     spillOnset: onset ? { atSec: +((onset.t - t0) / 1000).toFixed(1), pidDedicatedGiB: g(onset.pidDed), pidSharedGiB: g(onset.pidShr), adapterDedicatedGiB: g(luid ? onset.adapterDed[luid] : null), adapterFreeGiB: g(luid ? ADAPTER_TOTAL - onset.adapterDed[luid] : null) } : null,
     buffersMiB: { model: bufs('model'), kv: bufs('KV'), compute: bufs('compute') },
+    layersPerDevice: [...log.matchAll(/layer\s+\d+ assigned to device (\S+?),?\s/g)].reduce<Record<string, number>>((a, m) => ((a[m[1]] = (a[m[1]] ?? 0) + 1), a), {}),
+    offloadLines: log.split(/\r?\n/).filter((l) => /offload(ing|ed) \d+/.test(l)).map((l) => l.trim()),
     largestBufferMiB: Math.max(0, ...[...bufs('model'), ...bufs('KV'), ...bufs('compute')].map((b) => b.mib)),
     listDevicesBefore: devicesBefore, ramAvailBeforeGiB: g(ramBefore), ramAvailAfterGiB: g(ramMin)
   }
@@ -139,8 +147,24 @@ async function hipAb() {
   console.log(`wrote ${out}; leftover llama-server ${servers()}`)
 }
 
+async function igpuAb() {
+  const devices = listDevices()
+  console.log(`--list-devices: ${JSON.stringify(devices)}`)
+  const common = ['-m', QWEN, '-c', '8192', '-t', '8', '-b', '2048', '-ub', '512', '-fa', 'on', '-lm', 'none', '-fit', 'off', '--parallel', '1', '--cache-ram', '0', '-lv', '4']
+  const results = []
+  await idle(120_000)
+  results.push(await launch('a Qwen3.8-27B 8K -ngl 49 Vulkan0, rest on CPU', [...common, '-ngl', '49', '-dev', 'Vulkan0'], 4572))
+  if (devices.some((l) => /Vulkan1/.test(l))) {
+    await idle(120_000)
+    results.push(await launch('b Qwen3.8-27B 8K -ngl 999 Vulkan0,Vulkan1 -ts 49,16 (CPU layers on the iGPU)', [...common, '-ngl', '999', '-dev', 'Vulkan0,Vulkan1', '-ts', '49,16'], 4572))
+  }
+  writeFileSync(out, JSON.stringify({ when: new Date().toISOString(), model: QWEN, devices, results }, null, 1))
+  console.log(`wrote ${out}; leftover llama-server ${servers()}`)
+}
+
 void (async () => {
   if (HIP) return hipAb()
+  if (IGPU) return igpuAb()
   const results = []
   await idle(120_000)
   results.push(await launch('A1 fresh, 36,572-token prompt', baseArgv(65536), 36572))
