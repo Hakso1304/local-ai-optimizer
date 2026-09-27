@@ -72,3 +72,7 @@ This is the MVP Definition of Done, the later user requirements and the cross-cu
 | Packaging | DONE-WITH-CAVEAT | a3dc31e electron-builder portable + NSIS; 2fa68f4 review fixes (dev `-dev` userData, DB refusal, NSIS cleanup) | Unsigned |
 | Packaged build verification | DONE-WITH-CAVEAT | Nightly 2026-09-28 pre-verdict build at 3ec8278 (clean worktree): dist/Local AI Optimizer-0.1.0-nightly-2026-09-28-pre-verdict-portable.exe 100,311,388 B + -setup.exe 100,542,095 B, dist/BUILD-INFO.txt; packaged check on 5 sessions (interp-2 reinterpretation, trace, evidence section); console windows hidden (3e7183f); HIP opt-in install present | Unsigned; Astra's verdict pending; HIP untested |
 | NVIDIA / CUDA path | BLOCKED(env) | 56c1bbb, acbd169 wired; `tests/nvidia.test.ts` fixtures | No NVIDIA GPU here (nvidia-smi: insufficient permissions) |
+
+## 2026-09-28 postfix nightly checkpoint
+
+Clean detached build `5814270`: `dist/nightly-2026-09-28-postfix-unvalidated/` contains portable and NSIS artifacts plus BUILD-INFO. Typecheck/build passed; validation 803 passed, 1 skipped. This is an unsigned, hardware-unvalidated nightly, separate from the pre-verdict build. See orchestrator-log.md for hashes and calibration gate status.
