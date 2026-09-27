@@ -3,11 +3,31 @@ import type { ChildProcess } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { assertNewArtifact, bounded, idle, launch, outputPathFor, ramFloor, safeEnv, stopOwned, unifiedMemoryKeys, watchRam, type CollisionEvidence, type LaunchProbe } from '../scripts/ab-spill'
+import { assertNewArtifact, baseArgv, bounded, idle, launch, outputPathFor, ramFloor, safeEnv, stopOwned, unifiedMemoryKeys, watchRam, type CollisionEvidence, type LaunchProbe } from '../scripts/ab-spill'
 
 const GiB = 1024 ** 3
 
 describe('ab-spill safety helpers (injected fakes; no GPU or executable)', () => {
+  it('builds every future A/B argv with app mmap/cache policy and verbosity 4', () => {
+    const valueAfter = (argv: string[], flag: string) => argv[argv.indexOf(flag) + 1]
+    const base = baseArgv(65536)
+    const q8 = baseArgv(131072, ['-ctk', 'q8_0', '-ctv', 'q8_0'])
+    const ub256 = baseArgv(65536).map((arg, i, argv) => argv[i - 1] === '-ub' ? '256' : arg)
+    for (const argv of [base, q8, ub256]) {
+      expect(argv.filter((x) => x === '-lv')).toHaveLength(1)
+      expect(valueAfter(argv, '-lv')).toBe('4')
+      expect(valueAfter(argv, '-lm')).toBe('none')
+      expect(valueAfter(argv, '--cache-ram')).toBe('0')
+      expect(valueAfter(argv, '-dev')).toBe('Vulkan0')
+    }
+    expect(valueAfter(base, '-c')).toBe('65536')
+    expect(valueAfter(base, '-ub')).toBe('512')
+    expect(valueAfter(q8, '-c')).toBe('131072')
+    expect(valueAfter(q8, '-ctk')).toBe('q8_0')
+    expect(valueAfter(q8, '-ctv')).toBe('q8_0')
+    expect(valueAfter(ub256, '-ub')).toBe('256')
+  })
+
   it('uses a repaired output path and refuses the old partial artifact or any existing explicit path', () => {
     const old = 'docs/ab-spill-2026-09-28.json'
     const repaired = outputPathFor([])
