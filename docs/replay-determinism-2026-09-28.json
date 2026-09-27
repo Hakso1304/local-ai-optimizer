@@ -1,0 +1,270 @@
+{
+  "label": "SOFTWARE REPLAY",
+  "sourceHead": "3d12db19b91e32c588464d1c12ef06bc9081f7d0",
+  "database": {
+    "location": "%APPDATA%/local-ai-optimizer-dev/optimizer.db",
+    "sizeBytes": 1069056,
+    "connection": "DatabaseSync readOnly; PRAGMA query_only=ON; one read transaction"
+  },
+  "scope": "Stored sessions 1 and 3, current sessionInputs and recommendForWorkload, stored machine and request; no benchmark or hardware repeat",
+  "repeatsPerSession": 10,
+  "sessions": [
+    {
+      "sessionId": 1,
+      "status": "done",
+      "workload": "large_coding",
+      "inputsScope": {
+        "inputSha256": "66736A0F29004FE818A2CE1666DC16E7AC502B8BBD6E68BD7DAA5C044B0B1B53",
+        "candidateCount": 2,
+        "latestRunCount": 13,
+        "historyRunCount": 14,
+        "rawRunCount": 14,
+        "rawQualityRows": 60,
+        "acceptedBaselineQualityRows": 60,
+        "generationConfigGroups": 1,
+        "storedMachineProfile": true,
+        "selectedDevice": "Vulkan0",
+        "storedRequest": {
+          "requiredContext": 131072
+        },
+        "requestedLadder": null,
+        "qualityMode": null,
+        "qualitySeed": 3812919358,
+        "sessionVersions": null,
+        "planningSnapshot": {
+          "ramFloorBytes": 4294967296,
+          "mmapCreditBytes": 4920739232
+        },
+        "stopReason": "done"
+      },
+      "replay": {
+        "runs": [
+          {
+            "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+            "decisionTraceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+            "bestConfigId": null,
+            "rankedCount": 2,
+            "provisional": false
+          },
+          {
+            "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+            "decisionTraceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+            "bestConfigId": null,
+            "rankedCount": 2,
+            "provisional": false
+          },
+          {
+            "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+            "decisionTraceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+            "bestConfigId": null,
+            "rankedCount": 2,
+            "provisional": false
+          },
+          {
+            "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+            "decisionTraceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+            "bestConfigId": null,
+            "rankedCount": 2,
+            "provisional": false
+          },
+          {
+            "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+            "decisionTraceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+            "bestConfigId": null,
+            "rankedCount": 2,
+            "provisional": false
+          },
+          {
+            "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+            "decisionTraceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+            "bestConfigId": null,
+            "rankedCount": 2,
+            "provisional": false
+          },
+          {
+            "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+            "decisionTraceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+            "bestConfigId": null,
+            "rankedCount": 2,
+            "provisional": false
+          },
+          {
+            "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+            "decisionTraceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+            "bestConfigId": null,
+            "rankedCount": 2,
+            "provisional": false
+          },
+          {
+            "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+            "decisionTraceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+            "bestConfigId": null,
+            "rankedCount": 2,
+            "provisional": false
+          },
+          {
+            "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+            "decisionTraceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+            "bestConfigId": null,
+            "rankedCount": 2,
+            "provisional": false
+          }
+        ],
+        "uniqueRecommendationHashes": [
+          "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60"
+        ],
+        "uniqueDecisionTraceHashes": [
+          "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991"
+        ],
+        "deterministic": true
+      },
+      "storedComparison": {
+        "storedRecommendationSha256": "6C966EBB96AB6B0828C98529BB1DD0037D70AFA2D7DD17AAE19E29BC37848051",
+        "storedDecisionTraceSha256": "65921D5EBDFFCA88C843BD58E0298504409B173D5329B0F347E80C4DF1AD7676",
+        "storedBestConfigId": null,
+        "replayBestConfigId": null,
+        "sameFullRecommendation": false,
+        "sameBestConfigId": true
+      },
+      "observations": [
+        "Stored recommendation payload differs from current replay; no stored row was rewritten."
+      ],
+      "contradictions": []
+    },
+    {
+      "sessionId": 3,
+      "status": "done",
+      "workload": "coding",
+      "inputsScope": {
+        "inputSha256": "573EC0203216289E427A55B4F1FE2A7728ABE123F80ECED5BF3416AFD864B316",
+        "candidateCount": 5,
+        "latestRunCount": 17,
+        "historyRunCount": 17,
+        "rawRunCount": 17,
+        "rawQualityRows": 180,
+        "acceptedBaselineQualityRows": 180,
+        "generationConfigGroups": 3,
+        "storedMachineProfile": true,
+        "selectedDevice": "Vulkan0",
+        "storedRequest": {},
+        "requestedLadder": [
+          4096,
+          8192,
+          16384,
+          32768
+        ],
+        "qualityMode": null,
+        "qualitySeed": 3814755830,
+        "sessionVersions": {
+          "benchmark": "bench-1.0.0",
+          "prompts": "ladder-2"
+        },
+        "planningSnapshot": {
+          "ramFloorBytes": 4294967296,
+          "mmapCreditBytes": 0
+        },
+        "stopReason": "user-cap"
+      },
+      "replay": {
+        "runs": [
+          {
+            "recommendationHash": "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7",
+            "decisionTraceHash": "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC",
+            "bestConfigId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "rankedCount": 5,
+            "provisional": false
+          },
+          {
+            "recommendationHash": "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7",
+            "decisionTraceHash": "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC",
+            "bestConfigId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "rankedCount": 5,
+            "provisional": false
+          },
+          {
+            "recommendationHash": "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7",
+            "decisionTraceHash": "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC",
+            "bestConfigId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "rankedCount": 5,
+            "provisional": false
+          },
+          {
+            "recommendationHash": "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7",
+            "decisionTraceHash": "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC",
+            "bestConfigId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "rankedCount": 5,
+            "provisional": false
+          },
+          {
+            "recommendationHash": "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7",
+            "decisionTraceHash": "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC",
+            "bestConfigId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "rankedCount": 5,
+            "provisional": false
+          },
+          {
+            "recommendationHash": "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7",
+            "decisionTraceHash": "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC",
+            "bestConfigId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "rankedCount": 5,
+            "provisional": false
+          },
+          {
+            "recommendationHash": "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7",
+            "decisionTraceHash": "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC",
+            "bestConfigId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "rankedCount": 5,
+            "provisional": false
+          },
+          {
+            "recommendationHash": "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7",
+            "decisionTraceHash": "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC",
+            "bestConfigId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "rankedCount": 5,
+            "provisional": false
+          },
+          {
+            "recommendationHash": "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7",
+            "decisionTraceHash": "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC",
+            "bestConfigId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "rankedCount": 5,
+            "provisional": false
+          },
+          {
+            "recommendationHash": "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7",
+            "decisionTraceHash": "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC",
+            "bestConfigId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "rankedCount": 5,
+            "provisional": false
+          }
+        ],
+        "uniqueRecommendationHashes": [
+          "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7"
+        ],
+        "uniqueDecisionTraceHashes": [
+          "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC"
+        ],
+        "deterministic": true
+      },
+      "storedComparison": {
+        "storedRecommendationSha256": "39588E69008A7EFF0A2F6B43CD5DE7397BD412518B7C03C1A842830644FD8EDF",
+        "storedDecisionTraceSha256": "55E4FB5B68FDC769431A2E25059AC1F3544C759D368D81555734D5F984BCF41C",
+        "storedBestConfigId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+        "replayBestConfigId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+        "sameFullRecommendation": false,
+        "sameBestConfigId": true
+      },
+      "observations": [
+        "Stored recommendation payload differs from current replay; no stored row was rewritten."
+      ],
+      "contradictions": []
+    }
+  ],
+  "limitations": [
+    "Software replay tests deterministic interpretation of existing stored rows only; it is not E1 real-hardware repeat.",
+    "Historical spill and quality observations are neither remeasured nor rehabilitated.",
+    "Stored recommendations remain unchanged; any stored-versus-replay difference reflects current read-time interpretation."
+  ],
+  "allDeterministic": true,
+  "hashMethod": "SHA-256 of UTF-8 JSON.stringify output; fresh JSON.parse(JSON.stringify(input)) before each replay"
+}
