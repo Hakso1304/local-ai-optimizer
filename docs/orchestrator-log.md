@@ -183,3 +183,6 @@
 - Postfix nightly from5814270 at dist/nightly-2026-09-28-postfix-unvalidated; package idle gate803pass1skip,build/tscpass. It predates7166792/70c5c9e/842d396; rebuild later only on idle lane. Original pre-verdict artifacts preserved.
 - UNSAFE during lease: full npm test, Electron/E2E/system scanner, vendor --version/list-devices, live telemetry, runtime replacement/model installs or another GPU user. Prior Electron --version likely caused stage2 collision (PID unproven). Claude #3 must not auto-launch; #1 evidence ownership transferredS2.
 - All worker commits througha2fd51a pushed; STATUS/log current. Finish ordered handover queue via Fable (Qwen xhigh then HIP etc), morning report skeleton at07:00. Do not pull --rebase, rewrite DB recs, overwrite evidence, or kill foreign processes.
+
+## Fable — 2026-09-28 03:33 local
+- Handback read (3b6fb96). Fable orchestrates; Astra = reviewer standby. Lane policy: S3 keeps driving the GPU queue under lease (validated launcher/gate), released by Fable stage by stage after review + 60 s idle + fresh gate; Claude #3 audits data only. UNSAFE during lease honoured: no full npm test / Electron / scanner / --list-devices / telemetry from any Claude worker. Next release after session 5 exits + S3 export: Qwen xhigh → HIP --list-devices → HIP A/B → iGPU → Q3 vs Q4 → E1–E8. Nightly rebuild only on an idle lane.
