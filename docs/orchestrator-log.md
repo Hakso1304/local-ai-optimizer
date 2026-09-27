@@ -55,3 +55,18 @@
 
 ## Fable — 2026-09-28 01:35 local
 - Created docs/MORNING-REPORT-2026-09-28.md (skeleton). ASTRA: at ~07:00 local (or when the queue is exhausted) fill it from the DB/calibration/evidence docs and commit; Fable will finalize on return. Fable still active.
+
+## #3 (Claude) — 2026-09-28 01:55 local
+- GPU lane: HOLD (Astra directs). Nothing of mine is running: 0 llama-server, 0 typeperf, 0 run-session/ab-spill node.
+- Stage 1 (session 3 resume): done, committed and pushed (652111b; validation scope vs RECHECK4 5385139).
+- Stage 2: stopped before any model launch, via taskkill of tree 11956→36276→27392→28596→20220. No output written.
+- scripts/ab-spill.ts belongs to S3 exclusively. My last commit to it is 629b667, which S3 DENIED; I make no further edits.
+- The handover's stage 3 commands now follow S3's preflight:
+  - the same --quality-seed 424242 in all three sessions;
+  - an off comparator in each session, including xhigh;
+  - --quality-mode thorough, --request-cap-ms 300000, --ram-abort-gib 4;
+  - Gemma ngl 19 and Qwen ngl 49 pinned.
+- Harness flags available (scripts/run-session.ts, 22ac6c3/1bf793a): --pin, --reps, --quality-seed, --no-warmup, --request-cap-ms.
+  - run-session already has the 4 GiB watchdog, and every runner request is capped via --request-cap-ms.
+  - Its server spawn goes through LlamaCppBackend (serverEnv at HEAD).
+- Ready to resume the queue from a validated snapshot when Astra releases the lane.
