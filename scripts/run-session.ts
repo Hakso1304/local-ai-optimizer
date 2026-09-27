@@ -7,7 +7,7 @@
 //   H  custom: flags choose workload/models/ladder/heavy mode (quality on unless --no-quality)
 // Dumps everything (events, runs, quality, recommendation, raw quality prompts/replies) to docs/session-run-<scenario>-<ts>.json.
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { freemem, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SessionEvent, SessionRequest } from '../src/shared/bench-events'
@@ -28,6 +28,7 @@ import { val } from '../src/core/scoring/cliff'
 import type { SystemProfile } from '../src/shared/types'
 import { validateHarnessLimits } from './harness-limits'
 import { existingDbPath } from './harness-paths'
+import { reserveSessionDump, type SessionDump } from './session-dump'
 
 const scenario = (process.argv[2] ?? 'A').toUpperCase()
 const MODELS_DIR = 'D:\\llm-models'
@@ -128,7 +129,7 @@ function wrap(b: LlamaCppBackend): SessionBackend {
 const servers = () =>
   execFileSync('tasklist', ['/FI', 'IMAGENAME eq llama-server.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true }).split('\n').filter((l) => /^"llama-server\.exe"/i.test(l)).length
 
-async function main(): Promise<void> {
+async function run(dump: SessionDump<Record<string, unknown>>): Promise<void> {
   for (let i = 0; servers() > 0; i++) {
     if (i >= 20) throw new Error('llama-server still running after 10 min')
     console.log(`${el()} llama-server already running (another worker) — waiting 30 s`)
@@ -205,18 +206,18 @@ async function main(): Promise<void> {
     console.log(`${el()} resuming session ${resumeId}: ${stored.request.workload}, ${stored.plan.length} planned configs`)
   }
   if (dbPath) console.log(`${el()} persisting to ${dbPath}; vramInUse ${vr ? (vr.bytes / GiB).toFixed(2) + ' GiB' : 'unavailable'}`)
-  const file = join('docs', `session-run-${scenario}${scenario === 'H' ? `-${req.workload}${req.heavyMode ? '-heavy' : ''}` : ''}-${new Date(t0).toISOString().replace(/[:.]/g, '-')}.json`)
+  const file = dump.path
   let rec: Recommendation | null = null
   let ramAbort: string | null = null
   // File-backed: rewritten after every step/candidate/session event, so a killed job keeps what it measured.
   const save = () => {
     const unloadMs = abortAt !== null && cancelledAt !== null ? cancelledAt - abortAt : null
-    writeFileSync(file, JSON.stringify({
+    dump.checkpoint({
       scenario, startedAt: new Date(t0).toISOString(), wallMs: Date.now() - t0, abortToCancelledMs: unloadMs, ramAbort,
       git: gitState, dbPath: dbPath ?? null, vramInUseAtPlanning: vr ? { bytes: vr.bytes, luid: vr.luid } : null,
       runtime: det.version, device: dev, models, request: req, recommendation: rec, db, transcripts, minRamAvailGiB: { ladder: +(minRamAvail.ladder / GiB).toFixed(2), quality: +(minRamAvail.quality / GiB).toFixed(2) }, promptCacheSeen,
       events: events.filter((e) => e.type !== 'telemetry'), telemetryEvents: events.filter((e) => e.type === 'telemetry').length
-    }, null, 1))
+    })
   }
   // Self-abort when system RAM runs low (heavy runs on a 31 GB box).
   const ramAbortBytes = limits.ramAbortGib * GiB
@@ -260,4 +261,16 @@ async function main(): Promise<void> {
   console.log(`${el()} wall ${((Date.now() - t0) / 1000).toFixed(0)} s; abort→cancelled ${unloadMs ?? 'n/a'} ms; ram abort ${ramAbort ?? 'no'}; leftover llama-server ${servers()}; wrote ${file}`)
 }
 
-main().catch((e) => { console.error(e); process.exit(1) })
+async function main(): Promise<void> {
+  const file = join('docs', `session-run-${scenario}${scenario === 'H' ? `-${flag('--workload') ?? 'coding'}${process.argv.includes('--heavy') ? '-heavy' : ''}` : ''}-${new Date(t0).toISOString().replace(/[:.]/g, '-')}.json`)
+  const dump = reserveSessionDump<Record<string, unknown>>(file, { scenario, startedAt: new Date(t0).toISOString(), lifecycle: { status: 'reserved', error: null } })
+  let error: string | null = null
+  try { await run(dump) }
+  catch (e) { error = e instanceof Error ? e.stack ?? e.message : String(e); throw e }
+  finally {
+    const last = dump.current()
+    dump.checkpoint({ ...last, lifecycle: { status: error ? 'failed' : last.ramAbort ? 'aborted' : 'done', error, finishedAt: new Date().toISOString() } })
+  }
+}
+
+main().catch((e) => { console.error(e); process.exitCode = 1 })
