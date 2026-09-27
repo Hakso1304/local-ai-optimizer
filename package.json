@@ -1,0 +1,34 @@
+{
+  "name": "local-ai-optimizer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Benchmarks locally runnable LLM configurations and recommends model+config per workload from measured data.",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "npm run typecheck && electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "setup:runtime": "tsx scripts/ensure-runtime.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^44.4.5",
+    "electron-vite": "^5.0.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.0",
+    "vite": "^7.0.0",
+    "vitest": "^5.0.2"
+  },
+  "allowScripts": {
+    "electron@44.4.5": true,
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.2": true
+  }
+}

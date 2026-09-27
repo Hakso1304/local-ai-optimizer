@@ -1,0 +1,8 @@
+node_modules/
+out/
+dist/
+vendor/
+models/
+*.db
+*.log
+.DS_Store

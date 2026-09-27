@@ -1,0 +1,18 @@
+:root { color-scheme: dark; --bg: #0f1115; --panel: #161a21; --line: #262c36; --fg: #d6dbe3; --muted: #7d8694; --ok: #3fb950; --bad: #f85149; --warn: #d29922; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.45 Consolas, 'Cascadia Mono', monospace; }
+.app { display: flex; height: 100vh; }
+nav { width: 180px; background: var(--panel); border-right: 1px solid var(--line); padding: 12px 8px; display: flex; flex-direction: column; gap: 2px; }
+.brand { font-weight: bold; letter-spacing: .08em; padding: 4px 8px 14px; color: var(--muted); font-size: 11px; }
+nav button { text-align: left; background: none; border: 0; color: var(--fg); padding: 6px 8px; border-radius: 3px; cursor: pointer; font: inherit; }
+nav button.active, nav button:hover { background: var(--line); }
+main { flex: 1; overflow: auto; padding: 16px 20px; }
+.bar { display: flex; align-items: center; gap: 12px; }
+h1 { font-size: 16px; margin: 0; } h2 { font-size: 14px; margin: 20px 0 8px; }
+.bar button { background: var(--line); color: var(--fg); border: 1px solid #333b47; padding: 4px 10px; border-radius: 3px; font: inherit; cursor: pointer; }
+table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: normal; }
+.muted { color: var(--muted); } .err { color: var(--bad); }
+.badge { font-size: 11px; padding: 1px 6px; border-radius: 3px; border: 1px solid; }
+.badge.available { color: var(--ok); } .badge.unavailable { color: var(--bad); } .badge.unsupported { color: var(--warn); }
