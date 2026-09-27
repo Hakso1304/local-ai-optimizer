@@ -177,6 +177,13 @@ Rule I-3.5 (`speed.partial-offload`, warn, on expectDegraded configs): "<n>/<m> 
 on GPU: <decode> t/s" plus, only when a comparable measured full-offload or other
 partial rung exists at the same context, the comparison ("-nkvo 7.4 vs 10.7 t/s at 2K"
 — measured 2026-09-27, dense; 27.0 vs 38.5 MoE). No universal claim.
+Rule I-3.9 (`speed.backend`, info, origin measured-calibration once the HIP A/B exists):
+when the same model/config was measured on two installed backends (e.g. Vulkan vs
+ROCm/HIP): "<backend A> vs <backend B> for <model> @ <ctx>: decode X vs Y t/s, TTFT, 
+dedicated ceiling A vs B GiB (per-process budget is backend-specific)". Backends are an
+ordinary candidate axis: the recommendation names the backend and the export uses its
+executable. Managed-memory oversubscription (GGML_CUDA_ENABLE_UNIFIED_MEMORY) is never
+enabled by the benchmark; a runtime that uses it is not comparable.
 Rule I-3.6 (`speed.moe-note`, info): expertCount > 0 → "mixture-of-experts:
 <expertUsedCount>/<expertCount> experts per token; partial offload tends to cost less
 than for a dense model (one cross-family observation: 3.6× on 2026-09-27)". Active
