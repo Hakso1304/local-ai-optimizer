@@ -220,7 +220,7 @@ async function main(): Promise<void> {
   }, (e) => {
     events.push(e)
     if (e.type === 'telemetry') return
-    if (e.type === 'phase' && e.phase === 'quality') phase = 'quality'
+    if (e.type === 'phase') phase = e.phase === 'quality' ? 'quality' : 'ladder' // quality runs per model, between ladders
     if (e.type === 'candidate:started' || (e.type === 'phase' && e.phase === 'quality')) currentConfig = e.configId // quality runs after all ladders
     if (scenario === 'B' && e.type === 'step:started' && /Llama-3\.1-8B/i.test(e.configId) && !abortScheduled) {
       abortScheduled = true
