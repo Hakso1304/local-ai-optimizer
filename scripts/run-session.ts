@@ -188,13 +188,13 @@ async function run(dump: SessionDump<Record<string, unknown>>): Promise<void> {
   const [scanned, det, devs, infos] = await Promise.all([scannedPromise, detectPromise, devicesPromise, findGgufModels([MODELS_DIR])])
   ctl.signal.throwIfAborted()
   // Same as main.ts withVramInUse: other-process VRAM measured at planning time (effective budget).
-  const vr = await readVramInUse()
+  const vr = await readVramInUse(20_000, ctl.signal)
   ctl.signal.throwIfAborted()
   const machine: SystemProfile = { ...scanned, vramInUse: vr
     ? { value: vr.bytes, status: 'available', source: `typeperf GPU Adapter Memory(luid_${vr.luid}_phys_0)\Dedicated Usage` }
     : { value: null, status: 'unavailable', source: 'typeperf GPU Adapter Memory', error: 'reading failed' } }
-  const dev = pickDiscreteDevice(devs)
-  const gpuDevice = BACKEND === 'hip' ? (devs.find((d) => d.id === 'ROCm0')?.id ?? null) : (dev?.id ?? null)
+  const dev = BACKEND === 'hip' ? (devs.find((d) => d.id === 'ROCm0') ?? null) : pickDiscreteDevice(devs)
+  const gpuDevice = dev?.id ?? null
   if (BACKEND === 'hip' && gpuDevice !== 'ROCm0') throw new Error('HIP build did not enumerate ROCm0; session not started')
   const dbPath = DB_PATH
   const appDb = dbPath ? openDb(dbPath) : null
