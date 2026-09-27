@@ -531,6 +531,34 @@ describe('runSession', () => {
     expect(rec?.insights?.some((i) => i.ruleId === 'I-2.8') ?? false).toBe(false)
   })
 
+  it.each([
+    ['request error', 'error', 'infra_error'],
+    ['request throws', 'throw', 'infra_error'],
+    ['token limit', 'limit', 'truncated'],
+    ['timeout', 'timeout', 'truncated'],
+    ['wrong answer', 'wrong', 'valid']
+  ] as const)('CR-04-long classifies %s without treating infrastructure failure as a valid wrong answer', async (_label, mode, status) => {
+    const b = fakeBackend(() => ({}))
+    const original = b.runPrompt.bind(b)
+    b.runPrompt = async (q) => {
+      if (!q.prompt.includes('OBSIDIAN-42')) return original(q)
+      if (mode === 'throw') throw new Error('needle request failed')
+      const result = await original(q)
+      if (mode === 'error') return { ...result, error: 'HTTP 503', text: '' }
+      if (mode === 'limit') return { ...result, stopType: 'limit', text: '' }
+      if (mode === 'timeout') return { ...result, timedOut: true, error: 'timed out', stopType: 'limit', text: '' }
+      return { ...result, text: 'WRONG' }
+    }
+    const evaluate: SessionDeps['evaluate'] = async (test, output) => test.id === 'CR-04-long'
+      ? { testId: test.id, category: test.category, weight: test.weight, pass: output.includes('OBSIDIAN-42'), score: output.includes('OBSIDIAN-42') ? 1 : 0, detail: 'needle checker' }
+      : passAll(test, output)
+    const { s } = await run(() => ({}), { workload: 'long_context_coding', requiredContext: 32768, ladder: [2048, 32768], runQuality: true, qualityMode: 'quick' },
+      { backend: () => b, evaluate })
+    const rows = s.quality.flatMap((q) => q.results).filter((r) => r.testId === 'CR-04-long') as (QualityResult & { evaluationStatus?: string; outputTruncated?: boolean })[]
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ pass: false, score: 0, evaluationStatus: status, outputTruncated: status === 'truncated' })
+  })
+
   it('O1: a constant 0.5 GiB first-rung residual is a benign baseline before retry, verdict and learning', async () => {
     const verified = { ...machine, gpus: { ...machine.gpus, value: machine.gpus.value!.map((g) => ({ ...g, driverVersion: '32.0.1' })) } } as SystemProfile
     const sampler = (pid: number) => {
