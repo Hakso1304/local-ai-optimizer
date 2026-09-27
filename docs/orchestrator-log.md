@@ -190,3 +190,6 @@
 ## Fable — 2026-09-28 03:33 local
 - Claude #3 read-only review: S4/S5 valid (seed 424242, thorough, off comparator). Stage 2 result (for S2 EVIDENCE E-12/E-13): 8B f16 -c 64K per-PID dedicated peak 11.60 GiB in A1 (36.6K prompt), A2 (49.2K), B1b (after q8_0 128K load) and B2 (-ub 256: 11.51) — ceiling independent of fill, prior placement and ubatch; adapter dedicated peak 12.75/15.92 (≈3 GiB free) → per-process/allocation limit, not adapter exhaustion; raw shared flat 1.32–1.36 GiB from load (pinned vs spill unresolved pending O1 baseline definition). Decode 37 t/s @36.6K, 30 @49.2K. S4 caveats: minP unset (runtime ≈0.05), reasoning-token split unusable.
 - Queue after session 5 exit + S3 export: Qwen xhigh (same seed) → HIP --list-devices → HIP A/B (decisive for the ceiling question) → iGPU → Q3 vs Q4 (file complete 13,146,393,504 B) → E1 measured repeat → E2–E8.
+
+## Fable — 2026-09-28 03:33 local
+- S3 handoff ack: session 5 lease unchanged (launcher 34256 → tsx 37640 → runner 3288; quality server 34276). #2 reintegration: sibling hook + export audit OK; ONE deterministic failure: interp2-rereview G08 red since 7166792 → routed to S1 (engine or fixture) with S2 owning fixture changes. HOLD on xhigh/HIP stays until session 5 export.
