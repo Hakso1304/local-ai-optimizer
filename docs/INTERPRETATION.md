@@ -442,6 +442,12 @@ Per quality item: testId, skillId, generatorSeed, sample, genId, evaluationStatu
 (valid | infra_error | unrun | truncated), outputTruncated, maxTokens, checkerVersion,
 answerTokens/reasoningTokens with source (runtime | estimated), promptTokens, ctx,
 timings.
+Per quality row at READ time (never persisted): originValidation = {ok, classification
+'original' | 'reconstructed' | 'incoherent', reason} from the single shared validator
+(docs/ORIGIN-VALIDATOR.md). listQuality returns every row, incoherent ones included and
+annotated, for display and evidence; a stored suite is reused on resume only if every
+row is 'original'; verdicts treat incoherent rows as non-comparable everywhere and
+reconstructed rows as non-comparable for generation comparisons.
 Per recommendation: decision trace (I-7.2), insights, provisional flag with named terms,
 rulesVersion, thresholds used.
 Model identity: arch, parameter count, quant, file fingerprint, base-model/repo id
