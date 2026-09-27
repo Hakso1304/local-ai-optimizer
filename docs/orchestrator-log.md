@@ -319,3 +319,6 @@
 
 ## Fable — 2026-09-28 05:45 local
 - 27f33bc pushed (S3 Q8 ab-spill port reservation + owner/props verification). Remaining S3: Q2/Q3/Q5–Q7. S1: T-round + A (CIM µs ticks) + B (standalone baseline measured) + gen-choice disclosure. S2: tests for all. Guide I-8.0 scope corrected.
+
+## Fable — 2026-09-28 05:46 local
+- Heartbeat: pushed e25d119/64cdf3c (S2 harness CLI/DB + A/B ownership tests). Waiting: S1 critical commit (CIM µs identity + standalone baseline + T-round + G08); S3 Q2/Q3/Q5–Q7; Astra partial harness review.
