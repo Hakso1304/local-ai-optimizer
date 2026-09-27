@@ -1,0 +1,182 @@
+{
+ "_source": "GET https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/b11208 (2026-09-27), assets trimmed to name/size/url",
+ "tag_name": "b11208",
+ "prerelease": true,
+ "assets": [
+  {
+   "name": "cudart-llama-b11208-bin-ubuntu-cuda-12.8-x64.tar.gz",
+   "size": 594377809,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/cudart-llama-b11208-bin-ubuntu-cuda-12.8-x64.tar.gz"
+  },
+  {
+   "name": "cudart-llama-b11208-bin-ubuntu-cuda-13.4-arm64.tar.gz",
+   "size": 552521408,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/cudart-llama-b11208-bin-ubuntu-cuda-13.4-arm64.tar.gz"
+  },
+  {
+   "name": "cudart-llama-b11208-bin-ubuntu-cuda-13.4-x64.tar.gz",
+   "size": 440236545,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/cudart-llama-b11208-bin-ubuntu-cuda-13.4-x64.tar.gz"
+  },
+  {
+   "name": "cudart-llama-bin-win-cuda-12.4-x64.zip",
+   "size": 391443627,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/cudart-llama-bin-win-cuda-12.4-x64.zip"
+  },
+  {
+   "name": "cudart-llama-bin-win-cuda-13.4-arm64.zip",
+   "size": 153262407,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/cudart-llama-bin-win-cuda-13.4-arm64.zip"
+  },
+  {
+   "name": "cudart-llama-bin-win-cuda-13.4-x64.zip",
+   "size": 423535356,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/cudart-llama-bin-win-cuda-13.4-x64.zip"
+  },
+  {
+   "name": "llama-b11208-bin-android-arm64-snapdragon.tar.gz",
+   "size": 57032111,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-android-arm64-snapdragon.tar.gz"
+  },
+  {
+   "name": "llama-b11208-bin-android-arm64.tar.gz",
+   "size": 72523108,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-android-arm64.tar.gz"
+  },
+  {
+   "name": "llama-b11208-bin-linux-arm64-snapdragon.tar.gz",
+   "size": 19028957,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-linux-arm64-snapdragon.tar.gz"
+  },
+  {
+   "name": "llama-b11208-bin-macos-arm64.tar.gz",
+   "size": 11755538,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-macos-arm64.tar.gz"
+  },
+  {
+   "name": "llama-b11208-bin-macos-x64.tar.gz",
+   "size": 11309143,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-macos-x64.tar.gz"
+  },
+  {
+   "name": "llama-b11208-bin-ubuntu-arm64.tar.gz",
+   "size": 13499624,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-ubuntu-arm64.tar.gz"
+  },
+  {
+   "name": "llama-b11208-bin-ubuntu-cuda-12.8-x64.tar.gz",
+   "size": 170926103,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-ubuntu-cuda-12.8-x64.tar.gz"
+  },
+  {
+   "name": "llama-b11208-bin-ubuntu-cuda-13.4-arm64.tar.gz",
+   "size": 146977259,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-ubuntu-cuda-13.4-arm64.tar.gz"
+  },
+  {
+   "name": "llama-b11208-bin-ubuntu-cuda-13.4-x64.tar.gz",
+   "size": 151687373,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-ubuntu-cuda-13.4-x64.tar.gz"
+  },
+  {
+   "name": "llama-b11208-bin-ubuntu-openvino-2026.4-x64.tar.gz",
+   "size": 109122572,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-ubuntu-openvino-2026.4-x64.tar.gz"
+  },
+  {
+   "name": "llama-b11208-bin-ubuntu-rocm-10.0-x64.tar.gz",
+   "size": 240731292,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-ubuntu-rocm-10.0-x64.tar.gz"
+  },
+  {
+   "name": "llama-b11208-bin-ubuntu-s390x.tar.gz",
+   "size": 15751629,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-ubuntu-s390x.tar.gz"
+  },
+  {
+   "name": "llama-b11208-bin-ubuntu-sycl-fp16-x64.tar.gz",
+   "size": 55707267,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-ubuntu-sycl-fp16-x64.tar.gz"
+  },
+  {
+   "name": "llama-b11208-bin-ubuntu-sycl-fp32-x64.tar.gz",
+   "size": 55483741,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-ubuntu-sycl-fp32-x64.tar.gz"
+  },
+  {
+   "name": "llama-b11208-bin-ubuntu-vulkan-arm64.tar.gz",
+   "size": 24669294,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-ubuntu-vulkan-arm64.tar.gz"
+  },
+  {
+   "name": "llama-b11208-bin-ubuntu-vulkan-x64.tar.gz",
+   "size": 31345904,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-ubuntu-vulkan-x64.tar.gz"
+  },
+  {
+   "name": "llama-b11208-bin-ubuntu-x64.tar.gz",
+   "size": 17403677,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-ubuntu-x64.tar.gz"
+  },
+  {
+   "name": "llama-b11208-bin-win-cpu-arm64.zip",
+   "size": 12040747,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-win-cpu-arm64.zip"
+  },
+  {
+   "name": "llama-b11208-bin-win-cpu-x64.zip",
+   "size": 19154685,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-win-cpu-x64.zip"
+  },
+  {
+   "name": "llama-b11208-bin-win-cuda-12.4-x64.zip",
+   "size": 263078249,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-win-cuda-12.4-x64.zip"
+  },
+  {
+   "name": "llama-b11208-bin-win-cuda-13.4-arm64.zip",
+   "size": 144605366,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-win-cuda-13.4-arm64.zip"
+  },
+  {
+   "name": "llama-b11208-bin-win-cuda-13.4-x64.zip",
+   "size": 152343866,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-win-cuda-13.4-x64.zip"
+  },
+  {
+   "name": "llama-b11208-bin-win-opencl-adreno-arm64.zip",
+   "size": 12857484,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-win-opencl-adreno-arm64.zip"
+  },
+  {
+   "name": "llama-b11208-bin-win-openvino-2026.4-x64.zip",
+   "size": 88333237,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-win-openvino-2026.4-x64.zip"
+  },
+  {
+   "name": "llama-b11208-bin-win-rocm-10.0-x64.zip",
+   "size": 257364326,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-win-rocm-10.0-x64.zip"
+  },
+  {
+   "name": "llama-b11208-bin-win-sycl-x64.zip",
+   "size": 120814971,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-win-sycl-x64.zip"
+  },
+  {
+   "name": "llama-b11208-bin-win-vulkan-x64.zip",
+   "size": 33062035,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-bin-win-vulkan-x64.zip"
+  },
+  {
+   "name": "llama-b11208-ui.tar.gz",
+   "size": 3086354,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-ui.tar.gz"
+  },
+  {
+   "name": "llama-b11208-xcframework.zip",
+   "size": 60915933,
+   "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b11208/llama-b11208-xcframework.zip"
+  }
+ ]
+}

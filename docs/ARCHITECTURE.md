@@ -67,6 +67,15 @@ interface InferenceBackend {
 4. If it has its own device naming, provide the `gpuDevice` string for `SessionDeps`. Candidate generation (`candidates.ts`) takes `runtime.backend: 'vulkan'|'cuda'|'cpu'`; `cpu` means only `ngl=0` candidates.
 5. Add a fake-process test like `tests/runtime/llamacpp-lifecycle.test.ts` (uses `tests/fixtures/fake-llama-server.cjs`). Do not use real inference in tests.
 
+### Vendor paths
+| Vendor | Runtime build | Telemetry | Status |
+|---|---|---|---|
+| AMD | Vulkan (`llama-b<N>-bin-win-vulkan-x64.zip`) | PDH counters via typeperf (`telemetry/sampler.ts`): per-PID VRAM/shared, GPU engine util, CPU, RAM. Temperature, power and clocks are **UNAVAILABLE** (they need the ADLX native SDK). | Tested (RX 9070 XT) |
+| NVIDIA | CUDA build + `cudart-llama-bin-win-cuda-<ver>-x64.zip` extracted into the **same dir**, chosen by `pickReleaseAsset` (`runtimes/llamacpp/assets.ts`) from the driver's CUDA major, with Vulkan as the fallback | PDH (same as AMD) plus `startNvidiaSampler` (`telemetry/nvidia.ts`, `nvidia-smi --query-gpu … -lms`): util, VRAM used, temperature, power. `probeNvidiaSmi()` treats failure text or a non-zero exit as unavailable. | **UNTESTED on real hardware.** Fixtures only. The dev box's stale driver reports "insufficient permissions" (exit 4). |
+| Intel | Vulkan | PDH (same as AMD) | Untested |
+
+Not integrated yet: `assets.ts` and `nvidia.ts` are standalone. `ensureRuntime` still downloads Vulkan only, and the session runner uses only the PDH sampler.
+
 ## 4. Session runner (`src/core/benchmark/session.ts`)
 
 `runSession(req, deps, emit): Promise<Recommendation | null>` is one async function with closures and no classes. Its dependencies are injected (`SessionDeps`):
