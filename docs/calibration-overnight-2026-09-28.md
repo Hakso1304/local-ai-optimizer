@@ -40,3 +40,12 @@ Host RAM, `--cache-ram 0` check:
 - Minimum RAM available across the quality phases and the Gemma ladder: **8.01 GiB**. Before b3e671f, the same quality phase tripped the 4 GiB and 5 GiB watchdogs, with the server at ≈13.6 GiB.
 - `prompt cache is enabled` was not seen in the server log tail.
 - Caveat: the per-phase split is not available for this run. The phase flag was sticky; fixed in run-session.
+
+### Validation scope (RECHECK4, docs/review-w4o-2026-09-28.md O1–O5)
+- **O1 (benign first-rung baseline ordering) affects stage 1's spill verdicts. They are UNVALIDATED until O1 is fixed:**
+  - Gemma-4 ngl 23: "spilled 0.70 GiB at 4K" is its first rung, with a residual below the 1 GiB benign bound.
+  - Qwen3.8 ngl 49: "0.50 GiB at 16K".
+  - The 14B 32K guard_abort (3.0 GiB) is far above the bound and is unaffected.
+- **O2/O3/O5 (backend fallback, needle routing, CUDA identity) are not in this path.** The harness runs the runner with one Vulkan backend: deps.backendKind 'vulkan', no `backends` list. All stored configs are Vulkan ids, so no HIP/CUDA config exists to fall back from.
+- **O4 (unified-memory env casing): no variable matching /unified/i exists** in the process, User or Machine environment (checked 01:40). The inherited env passed to llama-server cannot carry it.
+- **Pinned configs (`--pin`, from stage 3 on) keep the planner's estimates for the cloned base config**, and say so in their notes. Their measured rows are experiment evidence. Their planning snapshot (I-2.3/I-4.1 texts) is not planner calibration.
