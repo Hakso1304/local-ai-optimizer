@@ -53,6 +53,18 @@ nothing is guessed silently.
   benchmarked through our own llama-server, never through Ollama/LM Studio. The export can emit an Ollama Modelfile /
   LM Studio settings (translations; LM Studio keys unverified).
 
+## Backends (AMD: Vulkan vs ROCm/HIP)
+
+- **Vulkan** is the default install. On a discrete AMD GPU the System page also offers *Install ROCm (HIP) runtime*:
+  the official llama.cpp ROCm build (~245 MB) of the same release as the Vulkan one, with the HIP runtime bundled (no
+  HIP SDK needed). It covers RDNA1–RDNA4, RX 9070 XT included. It lives in its own folder next to the Vulkan build.
+- With both installed, the benchmark plans every config on both backends (toggle *Compare backends*, on by default).
+  They are separate candidates (HIP ids end in `|hip`, device `ROCm0`), and the recommendation names the backend it
+  chose. The export uses that backend's llama-server.
+- Managed-memory oversubscription (`GGML_CUDA_ENABLE_UNIFIED_MEMORY`) is never enabled, so "fits in VRAM" stays measurable.
+- **The HIP path is untested on real hardware** until the first calibration run. Whether the driver exposes the GPU to
+  HIP is only known then; if it does not, the session runs on Vulkan and says so. See [docs/HIP-BACKEND.md](docs/HIP-BACKEND.md).
+
 ## Where things live
 
 | What | Installed / portable app | Dev (`npm run dev`) |
