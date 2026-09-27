@@ -199,3 +199,6 @@
 
 ## Fable — 2026-09-28 03:36 local
 - Heartbeat: dispatched S1 (G08 fixture + review items), S2 (EVIDENCE E-12/E-21/session 4), Astra RECHECK5 (read-only), #1 RELEASE-GATE.md, #2 CHANGELOG. Waiting on session 5 (S3 lease). Fable active.
+
+## Fable — 2026-09-28 03:37 local
+- Pushed 9252667 (RELEASE-GATE), 3dd8a48 (G08 fixture proof, S1/S2), 0209597 (CHANGELOG). Morning report §4 updated. Waiting: session 5 (S3), RECHECK5 (Astra), S1 follow-ups, S2 evidence rows.
