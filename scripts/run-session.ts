@@ -26,13 +26,28 @@ import type { CandidateConfig, KvType } from '../src/shared/bench-types'
 import { WORKLOADS } from '../src/core/scoring/workloads'
 import { val } from '../src/core/scoring/cliff'
 import type { SystemProfile } from '../src/shared/types'
+import { validateHarnessLimits } from './harness-limits'
+import { existingDbPath } from './harness-paths'
 
 const scenario = (process.argv[2] ?? 'A').toUpperCase()
 const MODELS_DIR = 'D:\\llm-models'
 const flag = (k: string) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : undefined }
+const valuedFlags = new Set(['--workload', '--models', '--ladder', '--ram-abort-gib', '--required-ctx', '--gen-configs', '--quality-mode', '--max-per-model', '--db', '--request-cap-ms', '--pin', '--resume', '--reps', '--quality-seed', '--backend'])
+const switchFlags = new Set(['--heavy', '--no-quality', '--gen-search', '--no-warmup'])
+for (let i = 3; i < process.argv.length; i++) {
+  const arg = process.argv[i]
+  if (!arg.startsWith('--')) throw new Error(`unexpected argument: ${arg}`)
+  if (switchFlags.has(arg)) continue
+  if (!valuedFlags.has(arg)) throw new Error(`unknown option: ${arg}`)
+  if (!process.argv[i + 1] || process.argv[i + 1].startsWith('--')) throw new Error(`${arg} requires a value`)
+  i++
+}
+if (scenario === 'H' && (!flag('--request-cap-ms') || !flag('--ram-abort-gib'))) throw new Error('scenario H requires explicit --request-cap-ms and --ram-abort-gib')
+const limits = validateHarnessLimits({ requestCapMs: Number(flag('--request-cap-ms') ?? 300_000), ramAbortGib: Number(flag('--ram-abort-gib') ?? 5) })
+const DB_PATH = existingDbPath(flag('--db'), scenario === 'H')
 const WANT = flag('--models')?.split(',') ?? ['qwen2.5-1.5b-instruct-q4_k_m', 'Meta-Llama-3.1-8B-Instruct-Q4_K_M']
 /** --request-cap-ms N: upper bound on every prompt request's timeout (overnight runs: 300000). */
-const REQUEST_CAP_MS = flag('--request-cap-ms') ? Number(flag('--request-cap-ms')) : null
+const REQUEST_CAP_MS = limits.requestCapMs
 /** --pin '[{"model":"Q4_K_M","ngl":54,"kv":"f16"}]': run exactly these configs instead of the planner's pick. Each is
  *  the planner's first candidate of a matching model (substring of name/id) with gpuLayers/kvType/id replaced and the
  *  steps = --ladder. ponytail: estimates/notes stay the planner's (said in notes); fine for experiments, not the app. */
@@ -126,7 +141,7 @@ async function main(): Promise<void> {
     ? { value: vr.bytes, status: 'available', source: `typeperf GPU Adapter Memory(luid_${vr.luid}_phys_0)\Dedicated Usage` }
     : { value: null, status: 'unavailable', source: 'typeperf GPU Adapter Memory', error: 'reading failed' } }
   const dev = pickDiscreteDevice(devs)
-  const dbPath = flag('--db')
+  const dbPath = DB_PATH
   const appDb = dbPath ? openDb(dbPath) : null
   // --resume <id> (needs --db): continue a stored session exactly like the app's Resume — stored request, scan and
   // candidate plan; already measured (configId, ctx) steps are reused, cancelled/skipped ones re-run.
@@ -200,7 +215,7 @@ async function main(): Promise<void> {
     }, null, 1))
   }
   // Self-abort when system RAM runs low (heavy runs on a 31 GB box).
-  const ramAbortBytes = Number(flag('--ram-abort-gib') ?? 5) * GiB // 5 GiB: shared box (several agents + builds)
+  const ramAbortBytes = limits.ramAbortGib * GiB
   const watchdog = setInterval(() => {
     minRamAvail[phase] = Math.min(minRamAvail[phase], freemem())
     if (ctl.signal.aborted || freemem() >= ramAbortBytes) return
@@ -216,7 +231,7 @@ async function main(): Promise<void> {
     readRamAvailableBytes: () => freemem(), // Windows: GlobalMemoryStatusEx ullAvailPhys = "Available"
     signal: ctl.signal,
     ...(stored ? { plan: stored.plan, machine: stored.machine ?? machine } : PINS ? { plan: planFor(req).candidates.map((c) => c.config) } : {}),
-    config: scenario === 'C' ? { ramFloorMinBytes: 64 * GiB } : {}
+    config: { ...(scenario === 'C' ? { ramFloorMinBytes: 64 * GiB } : {}), ...(req.reps !== undefined ? { reps: req.reps } : {}) }
   }, (e) => {
     events.push(e)
     if (e.type === 'telemetry') return

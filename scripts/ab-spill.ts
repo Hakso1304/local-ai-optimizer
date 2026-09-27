@@ -19,10 +19,16 @@ import { existsSync, writeFileSync } from 'node:fs'
 import { freemem } from 'node:os'
 import { createInterface } from 'node:readline'
 import { generateFiller } from '../src/core/quality'
+import { validateHarnessLimits } from './harness-limits'
 
 // Same safety bounds as the session harness: every request <= 5 min, host RAM watchdog 4 GiB (kills the server).
-const REQUEST_TIMEOUT_MS = 300_000
-const RAM_ABORT_BYTES = 4 * 1024 ** 3
+const optionValue = (name: string): string | undefined => {
+  const i = process.argv.indexOf(name)
+  return i < 0 ? undefined : process.argv[i + 1]
+}
+const limits = validateHarnessLimits({ requestCapMs: Number(optionValue('--request-cap-ms') ?? 300_000), ramAbortGib: Number(optionValue('--ram-abort-gib') ?? 4) })
+const REQUEST_TIMEOUT_MS = limits.requestCapMs
+const RAM_ABORT_BYTES = limits.ramAbortGib * 1024 ** 3
 const LOAD_TIMEOUT_MS = 120_000
 const PROBE_TIMEOUT_MS = 30_000
 /** Windows environment names are case-insensitive. Keep this independent of uncommitted runtime changes. */
@@ -30,7 +36,7 @@ export const unifiedMemoryKeys = (base: NodeJS.ProcessEnv = process.env) => Obje
 export const safeEnv = (base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => Object.fromEntries(Object.entries(base).filter(([k]) => k.toUpperCase() !== 'GGML_CUDA_ENABLE_UNIFIED_MEMORY'))
 export function ramFloor(read: () => number = freemem): number {
   const available = read()
-  if (available < RAM_ABORT_BYTES) throw new Error(`RAM available ${g(available)} GiB < 4 GiB`)
+  if (available < RAM_ABORT_BYTES) throw new Error(`RAM available ${g(available)} GiB < ${limits.ramAbortGib} GiB`)
   return available
 }
 export const bounded = (signal: AbortSignal, ms = REQUEST_TIMEOUT_MS) => AbortSignal.any([signal, AbortSignal.timeout(ms)])
@@ -53,7 +59,7 @@ export function watchRam(controller: AbortController, kill: () => void, read: ()
     const free = read()
     minimum = Math.min(minimum, free)
     if (!reason && free < RAM_ABORT_BYTES) {
-      reason = `RAM available ${g(free)} GiB < 4 GiB`
+      reason = `RAM available ${g(free)} GiB < ${limits.ramAbortGib} GiB`
       controller.abort(new Error(reason))
       kill()
     }
@@ -73,7 +79,8 @@ const ADAPTER_TOTAL = 17095983104 // RX 9070 XT qwMemorySize (scanner, registry)
 const GiB = 1024 ** 3
 const MiB = 1024 ** 2
 export function outputPathFor(args: string[]): string {
-  return args.find((a) => !a.startsWith('--')) ?? (args.includes('--hip') ? 'docs/ab-hip-2026-09-28.json' : args.includes('--igpu') ? 'docs/ab-igpu-2026-09-28.json' : 'docs/ab-spill-repaired-2026-09-28.json')
+  const positionals = args.filter((a, i) => !a.startsWith('--') && !['--request-cap-ms', '--ram-abort-gib'].includes(args[i - 1]))
+  return positionals[0] ?? (args.includes('--hip') ? 'docs/ab-hip-2026-09-28.json' : args.includes('--igpu') ? 'docs/ab-igpu-2026-09-28.json' : 'docs/ab-spill-repaired-2026-09-28.json')
 }
 export function assertNewArtifact(path: string, exists: (path: string) => boolean = existsSync): void {
   if (exists(path)) throw new Error(`refusing to overwrite existing A/B artifact: ${path}`)
