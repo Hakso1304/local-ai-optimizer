@@ -280,3 +280,6 @@
 
 ## Fable — 2026-09-28 05:06 local
 - 770b894 pushed (S2 tests adapted to inspect/killVerified seams; green vs S1's in-tree source). S1 nudged to commit; #1 pre-reviewing the residual diff. Session 5 medium phase ongoing.
+
+## Fable — 2026-09-28 05:08 local
+- 0a20d21 pushed; #1 static review: all RECHECK7 residuals landed; two follow-ups routed (checkStuck in backendFor for quality/needle; 15 s inspect at load) + S2 negative. Astra RECHECK8 dispatched. Session 5 medium phase ongoing.
