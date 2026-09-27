@@ -4,23 +4,36 @@ import { describe, expect, it } from 'vitest'
 import { windowsProcessTree } from '../../src/core/runtimes/llamacpp'
 
 describe.skipIf(process.platform !== 'win32')('real Windows process identity, disposable Node only', () => {
-  it('inspects an owned PID, scans descendants and kills only that creation-time identity', async () => {
-    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'],
-      { stdio: 'ignore', windowsHide: true })
+  it('finds a live Node grandchild by identity and reaps both identities', async () => {
+    const script = "const { spawn } = require('node:child_process'); const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true }); process.send({ pid: child.pid }); setInterval(() => {}, 1000)"
+    const child = spawn(process.execPath, ['-e', script],
+      { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true })
+    let grandchildPid: number | null = null
     try {
       await once(child, 'spawn')
       expect(child.pid).toBeGreaterThan(0)
+      const [message] = await Promise.race([
+        once(child, 'message'),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Node grandchild PID not reported')), 5000))
+      ])
+      grandchildPid = (message as { pid: number }).pid
+      expect(grandchildPid).toBeGreaterThan(0)
       const identity = await windowsProcessTree.inspect!(child.pid!)
       expect(identity).toMatchObject({ pid: child.pid, name: expect.stringMatching(/node/i), startedAt: expect.stringMatching(/^\d{4}-\d\d-\d\dT/) })
       const descendants = await windowsProcessTree.descendants(child.pid!)
-      expect(descendants.every((record) => Number.isSafeInteger(record.pid) && record.startedAt.endsWith('Z'))).toBe(true)
-      expect(descendants.every((record) => record.parentPid === child.pid || descendants.some((parent) => parent.pid === record.parentPid))).toBe(true)
+      const grandchild = descendants.find((record) => record.pid === grandchildPid)
+      expect(grandchild, 'the real descendant scan must find the live grandchild').toBeDefined()
+      expect(grandchild).toMatchObject({ parentPid: child.pid, name: expect.stringMatching(/node/i), startedAt: expect.stringMatching(/^\d{4}-\d\d-\d\dT/) })
+      expect(await windowsProcessTree.inspect!(grandchildPid!)).toEqual(grandchild)
+      expect(await windowsProcessTree.killVerified!(grandchild!)).toBe(true)
+      expect(await windowsProcessTree.isAlive(grandchildPid!)).toBe(false)
       const closed = once(child, 'close')
       expect(await windowsProcessTree.killVerified!(identity!)).toBe(true)
       await closed
       expect(await windowsProcessTree.isAlive(child.pid!)).toBe(false)
     } finally {
+      if (grandchildPid != null) { try { process.kill(grandchildPid) } catch { /* already reaped */ } }
       if (child.exitCode === null && child.signalCode === null) child.kill()
     }
-  }, 20_000)
+  }, 30_000)
 })
