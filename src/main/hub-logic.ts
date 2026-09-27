@@ -1,5 +1,6 @@
 // Pure parts of the hub IPC (no Electron): progress/ETA, user-facing error text, disk and destination checks.
-import { relative, resolve, isAbsolute } from 'node:path'
+import { existsSync } from 'node:fs'
+import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { HubError } from '../core/hub/hf'
 import type { HubFailKind, HubProgress } from '../shared/hub-types'
 
@@ -33,6 +34,15 @@ export function userMessage(e: unknown): { kind: HubFailKind; error: string } {
 export function isAllowedDest(destDir: string, modelDirs: string[]): boolean {
   const d = resolve(destDir)
   return modelDirs.some((m) => { const r = relative(resolve(m), d); return r === '' || (!r.startsWith('..') && !isAbsolute(r)) })
+}
+
+/** Nearest existing directory at or above dir (for the free-space check before destDir is created); null when
+ *  not even the drive root exists (e.g. D:\ on a PC without a D: drive). */
+export function nearestExisting(dir: string, exists: (p: string) => boolean = existsSync): string | null {
+  for (let d = resolve(dir); ; d = dirname(d)) {
+    if (exists(d)) return d
+    if (dirname(d) === d) return null
+  }
 }
 
 /** Bytes still to fetch (resume-aware) plus a 1 GiB margin must fit in the free space. */

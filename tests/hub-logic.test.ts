@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { HubError } from '../src/core/hub/hf'
-import { diskCheck, isAllowedDest, progressInfo, userMessage } from '../src/main/hub-logic'
+import { diskCheck, isAllowedDest, nearestExisting, progressInfo, userMessage } from '../src/main/hub-logic'
 
 const GiB = 1024 ** 3
 
@@ -26,6 +26,12 @@ describe('hub IPC pure logic', () => {
     expect(isAllowedDest('D:\\llm-models\\sub', dirs)).toBe(true)
     expect(isAllowedDest('D:\\llm-models\\..\\Windows', dirs)).toBe(false)
     expect(isAllowedDest('C:\\Windows', dirs)).toBe(false)
+  })
+
+  it('free-space probe walks up to the nearest existing dir; a missing drive gives null', () => {
+    const have = new Set(['D:\\', 'D:\\llm-models'])
+    expect(nearestExisting('D:\\llm-models\\new\\sub', (p) => have.has(p))).toBe('D:\\llm-models')
+    expect(nearestExisting('Q:\\nope\\x', (p) => have.has(p))).toBeNull()
   })
 
   it('disk check: remaining bytes (resume-aware) + 1 GiB margin', () => {

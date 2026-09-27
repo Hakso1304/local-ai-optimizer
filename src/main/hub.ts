@@ -6,7 +6,7 @@ import { existsSync, readFileSync, rmSync, statSync, statfsSync, writeFileSync }
 import { join, resolve } from 'node:path'
 import { downloadFile, listGgufFiles, searchModels, whoami, type HfGgufFile } from '../core/hub/hf'
 import type { HubAccount, HubResult } from '../shared/hub-types'
-import { diskCheck, isAllowedDest, progressInfo, userMessage } from './hub-logic'
+import { diskCheck, isAllowedDest, nearestExisting, progressInfo, userMessage } from './hub-logic'
 
 export interface HubDeps { userDataDir: string; modelDirs: () => string[] }
 
@@ -79,8 +79,11 @@ export function registerHubIpc(ipcMain: IpcMain, getWindow: () => BrowserWindow 
     if (!file) return { ok: false, kind: 'not_found', error: `${path} is not a GGUF file in ${repoId}` }
     const part = `${resolve(destDir, ...path.split('/'))}.part`
     const partBytes = existsSync(part) ? statSync(part).size : 0
-    const fs = statfsSync(existsSync(destDir) ? destDir : resolve(destDir, '..'))
-    const disk = diskCheck(fs.bavail * fs.bsize, file.sizeBytes, partBytes)
+    const probe = nearestExisting(destDir)
+    if (!probe) return { ok: false, kind: 'bad_dest', error: `The destination drive for ${destDir} does not exist.` }
+    let free: number
+    try { const fs = statfsSync(probe); free = fs.bavail * fs.bsize } catch (e) { return { ok: false, kind: 'bad_dest', error: `Cannot read free space of ${probe}: ${(e as Error).message}` } }
+    const disk = diskCheck(free, file.sizeBytes, partBytes)
     if (!disk.ok) return { ok: false, kind: 'disk_full', error: disk.error }
 
     const ctl = new AbortController()
