@@ -271,3 +271,6 @@
 
 ## Fable — 2026-09-28 04:34 local
 - 61173c1 (S2 hardening tests) pushed; S1 asked to commit the matching source. RECHECK7 running; session 5 still in low phase.
+
+## Fable — 2026-09-28 04:57 local
+- RECHECK7 committed; 67c5ea3 pushed. Residuals S1 (identity-bound reap), S2 (fatal enumeration), S3 (replay partial origin) → S1 + S2 negatives. STATUS/morning report updated. Session 5 in medium phase.
