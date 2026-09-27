@@ -1,0 +1,70 @@
+{
+    "kind":  "local-ai-optimizer/stage3-launch-v1",
+    "sessionId":  4,
+    "snapshotHead":  "6bac7833b3901f9818a0111a69e7e61f69f37bd4",
+    "sourceZipSha256":  "CF50A34F32F75E2A9E0BF6B32D81116D7F2B33023969AB89AF66C4249FD3386E",
+    "runnerSha256":  "80F0EA179254449B6F60DCF7EE098482CF4A2E5BF713A11F0B34776A66654DB1",
+    "launcherPath":  "C:\\Users\\hyuns\\AppData\\Local\\Temp\\s3-stage3-gemma-final-8dece389417d41059fde25d3bdf6f3f1\\launch-gemma.cjs",
+    "launcherSha256":  "29BF3272F2ED0A6EE32F05A23E6EF988FDAAC0012C728C79A92CEE9CDE1D567A",
+    "runtimeReleaseTag":  "b11208",
+    "vendorExeSha256":  "352D52FBCCDF88CEB094421B9A4A0B8C56B9354CF9D10F9B82AB21828F0876FA",
+    "spawn":  {
+                  "executable":  "E:\\nodejs\\node.exe",
+                  "cwd":  "C:\\Users\\hyuns\\AppData\\Local\\Temp\\s3-stage3-gemma-final-8dece389417d41059fde25d3bdf6f3f1\\run",
+                  "shell":  false,
+                  "windowsHide":  true,
+                  "tsxCli":  "C:\\Users\\hyuns\\AppData\\Local\\Temp\\s3-stage3-gemma-final-8dece389417d41059fde25d3bdf6f3f1\\run\\node_modules\\tsx\\dist\\cli.mjs",
+                  "runner":  "C:\\Users\\hyuns\\AppData\\Local\\Temp\\s3-stage3-gemma-final-8dece389417d41059fde25d3bdf6f3f1\\run\\scripts\\run-session.ts",
+                  "args":  [
+                               "H",
+                               "--workload",
+                               "coding",
+                               "--heavy",
+                               "--ladder",
+                               "8192",
+                               "--models",
+                               "gemma-4-26B-A4B-it-UD-Q4_K_M",
+                               "--pin",
+                               "[{\"model\":\"gemma\",\"ngl\":19}]",
+                               "--request-cap-ms",
+                               "300000",
+                               "--ram-abort-gib",
+                               "4",
+                               "--quality-mode",
+                               "thorough",
+                               "--quality-seed",
+                               "424242",
+                               "--db",
+                               "C:\\Users\\hyuns\\AppData\\Roaming\\local-ai-optimizer-dev\\optimizer.db",
+                               "--gen-configs",
+                               "[{\"id\":\"off\",\"thinking\":false,\"temperature\":1,\"topP\":0.95,\"topK\":64,\"source\":\"model-card\"},{\"id\":\"think\",\"thinking\":true,\"temperature\":1,\"topP\":0.95,\"topK\":64,\"source\":\"model-card\"}]"
+                           ]
+              },
+    "preflight":  {
+                      "at":  "2026-09-28T02:41:06.1272520+09:00",
+                      "competingProcesses":  0,
+                      "unifiedMemoryKeys":  0,
+                      "ramAvailableGiB":  17.22,
+                      "rx9070DedicatedGiB":  1.12
+                  },
+    "observedPids":  {
+                         "launcher":  29028,
+                         "tsx":  30892,
+                         "runner":  24980,
+                         "ladderServer":  11316,
+                         "qualityServer":  15112
+                     },
+    "teardown":  {
+                     "at":  "2026-09-28T03:22:46.6538789+09:00",
+                     "competingProcesses":  0,
+                     "ramAvailableGiB":  17.31,
+                     "runnerExitCode":  0,
+                     "runnerRamAbort":  false
+                 },
+    "artifacts":  {
+                      "dump":  "docs/session-run-stage3-gemma-2026-09-28.json",
+                      "dumpSha256":  "E53515960100C0BF4CBD892280032CE590E179F6C386CA99D1B5DFD97A2209A4",
+                      "export":  "docs/session-evidence-stage3-gemma-2026-09-28.json",
+                      "exportSha256":  "FA8F887F0A0C3814687B7F6747BCE67FE434E86B25D2DD54073FD92E8B121909"
+                  }
+}
