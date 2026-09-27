@@ -226,3 +226,6 @@
 
 ## Fable — 2026-09-28 04:07 local
 - Heartbeat: 722a4f8 pushed (S2 NEG2: reconstructed negative green; 2 intended RED gates + I-7.4 transient/I-8.0 wording). Waiting on S1 P1–P3 commit, S3 session 5 export, then Q-fix rounds and Astra re-reviews before any lane release.
+
+## Fable — 2026-09-28 04:10 local
+- Pushed cf5683a (LIMITATIONS/BENCHMARK: reconstructed proof, Q1–Q8 open, ceiling unknown-origin). Q2 test seams (processTree injector; async sampler.stop) requested from S1; S2's Q1 RED tests identify the two paths (warmup-after-tokenize, long needle) that still start requests after the guard latches. scripts/harness-limits.ts exists (uncommitted, S3).
