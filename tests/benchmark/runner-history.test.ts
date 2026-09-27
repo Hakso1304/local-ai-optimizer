@@ -1,5 +1,5 @@
 // Executed re-review scenarios (docs/review-w4i-2026-09-27.md) that touch the RUNNER's producer path.
-// `it.fails` = known gap (G06/G09) until #1's fix round lands — remove `.fails` when it does.
+// Formerly `it.fails` (G06/G09); fixed in #1's re-review round.
 // Minimal fake backend/storage copied from session.test.ts (kept separate: new test files only).
 import { describe, expect, it } from 'vitest'
 import type { SessionEvent, SessionRequest } from '../../src/shared/bench-events'
@@ -98,7 +98,7 @@ describe('G06 — live/resumed recommendations see every persisted attempt (I-6.
     expect(texts(first.rec)).toMatch(/device_lost/)
   })
 
-  it.fails('a resumed session whose retry succeeded still reports the superseded device_lost as critical', async () => {
+  it('a resumed session whose retry succeeded still reports the superseded device_lost as critical', async () => {
     const first = await run((ctx) => (ctx === 4096 ? { prompt: 'device_lost' } : {}), { ladder })
     const resumed = await run(() => ({}), { ladder, resumeSessionId: 's1', retryFailed: true }, first.s.runs)
     // Precondition: the history really holds both attempts at 4K (the failure and the successful retry).
@@ -124,11 +124,11 @@ describe('G09 — versionless rows are not speed-eligible (I-6.0)', () => {
     expect(speedIneligible(row({ benchmark: 'bench-1', prompts: 'ladder-1', quality: 'qb-2.0.0', runtime: 'b1' } as BenchmarkRunResult['versions']), 'bench-1/ladder-1')).toBeNull()
   })
 
-  it.fails('a completed row with no versions has no version proof and must not enter speed scoring', () => {
+  it('a completed row with no versions has no version proof and must not enter speed scoring', () => {
     expect(speedIneligible(row(undefined), 'bench-1/ladder-1')).not.toBeNull()
   })
 
-  it.fails('a resumed session whose stored rows lost their versions must not confirm a winner from them', async () => {
+  it('a resumed session whose stored rows lost their versions must not confirm a winner from them', async () => {
     const ladder = [2048, 4096, 8192]
     const first = await run(() => ({}), { ladder, runQuality: true })
     // Control: with versions the same evidence DOES confirm a winner (otherwise this test would prove nothing).

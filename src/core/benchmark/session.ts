@@ -15,7 +15,7 @@ import { recommend } from '../scoring/recommend'
 import { DEFAULT_SCORING_CONFIG, effectiveProfile, withProfile } from '../scoring/workloads'
 import { DEFAULT_CANDIDATE_RULES, estimateMemory, generateCandidates, machineFromProfile, rulesForRequest, type CandidateRules } from './candidates'
 import { LADDER_FILL, LADDER_FILL_TOLERANCE, LADDER_PREDICT, LADDER_SIZE_ROUNDS, PROMPT_VERSION, ladderPrompt } from './prompts'
-import { RULES_VERSION } from '../interpret'
+import { RULES_VERSION, type InterpretData, type StoredRun } from '../interpret'
 import { BASELINE_GEN, genConfigsFor, genLabel, samplingFor, splitReasoning, summarizeGen, templateKwargsFor, type GenRow } from './gen'
 
 /** Bump when the runner's measurement procedure changes (warmup, reps, reduction, timeouts). */
@@ -69,6 +69,8 @@ export interface SessionStorage {
   createSession(s: { workload: SessionRequest['workload']; request: SessionRequest; startedAt: number }): Awaitable<string>
   setSessionStatus(sessionId: string, status: 'running' | 'done' | 'cancelled' | 'paused' | 'failed', error?: string): Awaitable<void>
   listRuns(sessionId: string): Awaitable<BenchmarkRunResult[]>
+  /** Every persisted attempt incl. superseded retries (I-6.3); absent → listRuns is taken as the history. */
+  listRunHistory?(sessionId: string): Awaitable<StoredRun[]>
   saveRun(sessionId: string, run: BenchmarkRunResult, detail: RunDetail): Awaitable<void>
   listQuality(sessionId: string, modelId: string): Awaitable<QualityResult[]>
   saveQuality(sessionId: string, modelId: string, configId: string, ctx: number, results: QualityResult[]): Awaitable<void>
@@ -221,6 +223,23 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       r.status === 'cancelled' || r.failureKind === 'skipped_memory' || rerunIds.has(r.configId) ||
       (!!req.retryFailed && (r.status === 'fail' || r.status === 'timeout') && r.failureKind !== 'config_drift')
     const done = new Map((req.resumeSessionId ? await storage.listRuns(sessionId) : []).filter((r) => !rerun(r)).map((r) => [`${r.configId}@${r.ctx}`, r] as const))
+    // G06: the same InterpretData as the read-time path — every attempt (superseded retries included), the planning
+    // floor, the stop reason and the session's own versions — for interim and final recommendations.
+    const history: StoredRun[] = req.resumeSessionId
+      ? [...((await storage.listRunHistory?.(sessionId)) ?? (await storage.listRuns(sessionId)))].map((r, i) => ({ ...r, runId: (r as StoredRun).runId ?? `stored-${i}` }))
+      : []
+    const recordAttempt = (run: BenchmarkRunResult, detail: RunDetail) => {
+      const runId = `live-${history.length}`
+      for (const h of history) if (h.configId === run.configId && h.ctx === run.ctx && !h.supersededBy) h.supersededBy = runId
+      history.push({ ...run, runId, startedAt: detail.startedAt, endedAt: detail.endedAt })
+    }
+    const interpretData = (stopReason?: InterpretData['stopReason']): Omit<InterpretData, 'candidates' | 'machine'> => {
+      // Mark superseded rows in stored history that lacked the marker (latest row per step wins).
+      const last = new Map<string, string>()
+      for (const h of history) last.set(`${h.configId}@${h.ctx}`, h.runId!)
+      const allRuns = history.map((h) => (h.supersededBy || last.get(`${h.configId}@${h.ctx}`) === h.runId ? h : { ...h, supersededBy: last.get(`${h.configId}@${h.ctx}`) }))
+      return { allRuns, planningSnapshot: { ramFloorBytes: ramFloor }, sessionVersions: { benchmark: BENCHMARK_VERSION, prompts: PROMPT_VERSION }, ...(stopReason ? { stopReason } : {}) }
+    }
 
     // All candidates of all requested models, smallest estimated footprint first.
     const plan: { cand: CandidateConfig; model: ModelMeta }[] = []
@@ -350,6 +369,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
           checkStuck()
           run = out.run
           await storage.saveRun(sessionId, run, out.detail)
+          recordAttempt(run, out.detail)
           if (run.failureKind === 'device_lost') gpuLost = true
           if (out.detail.reason) log(run.status === 'pass' ? 'warn' : 'error', `${cand.id} @${ctx}: ${out.detail.reason}`)
         }
@@ -382,9 +402,9 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         // D05: persist a provisional recommendation after each model, so a later cancel/abort still leaves one.
         if (rest.length && !signal?.aborted && !paused()) {
           withQuality()
-          const pro = recommend(inputs, machine, req.workload, scoringCfg, unplanned, req)
+          const pro = recommend(inputs, machine, req.workload, scoringCfg, unplanned, req, interpretData())
           pro.provisional = true
-          pro.reasons.unshift(`[I-1.1] Provisional: saved after ${model.name}; ${rest.length} configuration${rest.length > 1 ? 's' : ''} still to run`)
+          pro.reasons.unshift(`[I-1.2] Provisional: saved after ${model.name}; ${rest.length} configuration${rest.length > 1 ? 's' : ''} still to run`)
           await storage.saveRecommendation(sessionId, pro)
         }
       }
@@ -402,7 +422,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       return null
     }
     withQuality()
-    const rec = recommend(inputs, machine, req.workload, scoringCfg, unplanned, req)
+    const rec = recommend(inputs, machine, req.workload, scoringCfg, unplanned, req, interpretData(req.ladder?.length ? 'user-cap' : 'done'))
     rec.reasons.push(...longNotes)
     await storage.saveRecommendation(sessionId, rec)
     await storage.setSessionStatus(sessionId, 'done')
@@ -507,11 +527,12 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     let loading = true
     let blindPolls = 0
     let minRam: number | null = null // lowest RAM available seen by the guard (OS reading, else telemetry rows)
+    let minLoadRam: number | null = null // the same, during the load phase only (G11: phase-tagged lifecycle)
     const flush = () => {
       restartIfBlind()
       // Independent of typeperf: OS free RAM every poll (typeperf may be slow, localized, or not running at all).
       const os = osRam()
-      if (os !== null) minRam = Math.min(minRam ?? os, os)
+      if (os !== null) { minRam = Math.min(minRam ?? os, os); if (loading) minLoadRam = Math.min(minLoadRam ?? os, os) }
       if (!guard && os !== null && os + mmapCredit < ramFloor) {
         guard = `RAM available ${(os / GiB).toFixed(1)} GiB (OS) fell below the floor`
         void (loading ? unload() : backend.cancel())
@@ -527,7 +548,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       for (; emitted < xs.length; emitted++) {
         const s = xs[emitted]
         send({ type: 'telemetry', configId: cand.id, ctx, sample: s })
-        if (s.ramAvailBytes != null) minRam = Math.min(minRam ?? s.ramAvailBytes, s.ramAvailBytes)
+        if (s.ramAvailBytes != null) { minRam = Math.min(minRam ?? s.ramAvailBytes, s.ramAvailBytes); if (loading) minLoadRam = Math.min(minLoadRam ?? s.ramAvailBytes, s.ramAvailBytes) }
         // Heavy (partial-offload) configs: a shared-memory spill is a measurement (degraded + spill reason, then the
         // ladder moves on), not an abort. The RAM floor always aborts.
         const spillAbort = !cand.expectDegraded && s.procVramSharedBytes != null && s.procVramSharedBytes - pinned - spillBase > cfg.sharedSpillAbortBytes
@@ -643,7 +664,15 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     return result(f?.status ?? 'pass', f?.kind ?? null, f?.reason ?? null, {
       warm,
       ramAvailBeforeLoadBytes: beforeLoad, mmapCreditBytes: mmapCredit,
-      peakVramPlateauSamples: pk.max.procVramDedicatedBytes == null ? 0 : samples.filter((x) => x.procVramDedicatedBytes != null && x.procVramDedicatedBytes >= pk.max.procVramDedicatedBytes! * 0.99).length,
+      // G11: plateau samples counted only BEFORE spill onset (first sample whose adjusted shared exceeds the threshold).
+      peakVramPlateauSamples: (() => {
+        const peakDed = pk.max.procVramDedicatedBytes
+        if (peakDed == null) return 0
+        const ordered = [...samples].sort((a, b) => a.ts - b.ts)
+        const onset = ordered.findIndex((x) => x.procVramSharedBytes != null && x.procVramSharedBytes - pinned - spillBase > DEFAULT_SCORING_CONFIG.cliff.sharedSpillBytes)
+        return (onset < 0 ? [] : ordered.slice(0, onset)).filter((x) => x.procVramDedicatedBytes != null && x.procVramDedicatedBytes >= peakDed * 0.99).length
+      })(),
+      minRamAvailDuringLoadBytes: minLoadRam === null ? { value: null, kind: 'unavailable', reason: 'no RAM reading during load' } : { value: minLoadRam, kind: 'measured', source: 'RAM guard during load' },
       repDecodeTps: reps.map((r) => r.decodeTps).filter((x): x is number => typeof x === 'number'),
       minRamAvailBytes: minRam === null ? { value: null, kind: 'unavailable', reason: 'no RAM reading during the step' } : { value: minRam, kind: 'measured', source: 'RAM guard: OS free RAM / typeperf' },
       promptTokens: median(reps.map((r) => r.promptTokens)),

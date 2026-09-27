@@ -216,6 +216,7 @@ export function makeSessionStorage(db: DatabaseSync, planFor: PlanFor): SessionS
   return {
     createSession: ({ workload, request }) => String(saveSession(db, { workload, request, ...planFor(request) }, 'running')),
     setSessionStatus: (id, status, error) => setSessionStatus(db, sid(id), status, error),
+    listRunHistory: (id) => sessionInputs(db, sid(id))?.allRuns ?? [],
     listRuns: (id) =>
       (db.prepare(LATEST_RUNS).all(sid(id)) as { payload: string }[]).map((r) => {
         const { detail: _d, ...run } = json<BenchmarkRunResult & { detail?: unknown }>(r.payload)

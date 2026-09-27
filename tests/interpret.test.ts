@@ -178,7 +178,7 @@ describe('§3 speed', () => {
   it('I-3.3 TTFT band; warn + "accepted because required" over tolerance with a required ctx; info within', () => {
     expect(panel(full8(), 'coding').find((i) => i.ruleId === 'I-3.3')!.severity).toBe('info')
     const req = panel(eight(), 'coding', { requiredContext: 65536 }).find((i) => i.ruleId === 'I-3.3')!
-    expect(req).toMatchObject({ severity: 'warn' })
+    expect(req).toMatchObject({ severity: 'note' }) // accepted because required: no remedy to suggest (G12)
     expect(req.text).toMatch(/accepted because you required 64K/)
   })
   it('I-3.4 prefill scaling reported with the prompt-token ratio and measured TTFT; not on the 8B', () => {
@@ -223,7 +223,7 @@ describe('§4 memory', () => {
   })
   it('I-4.4 mmap note only with before / during / after-unload values; omitted otherwise', () => {
     const m = (v: number) => ({ value: v * GiB, kind: 'measured' as const })
-    const life = synth([run(2048, {}, { ramAvailBeforeLoadBytes: m(20), minRamAvailBytes: m(15) }), run(4096, {}, { ramAvailBeforeLoadBytes: m(19.8) })])
+    const life = synth([run(2048, {}, { ramAvailBeforeLoadBytes: m(20), minRamAvailDuringLoadBytes: m(15) }), run(4096, {}, { ramAvailBeforeLoadBytes: m(19.8) })])
     expect(text(panel([life], 'general_chat'), 'I-4.4')).toMatch(/RAM drop of 5\.00 GiB during load \(before 20\.00 GiB, minimum 15\.00 GiB\) .* released after unload \(19\.80 GiB\)/)
     expect(has(panel(full8(), 'coding'), 'I-4.4')).toBe(false)
   })
@@ -372,7 +372,8 @@ describe('§8 generation configs', () => {
     expect(has(panel(withGens(1, 1), 'reasoning'), 'I-8.0')).toBe(false)
   })
   it('I-8.1 the chosen thinking config with its paired difference and both effective speeds; baseline kept → none', () => {
-    const r = recommend(withGens(1, 1), M, 'reasoning')
+    // Max Quality has no latency weight: the cross-context time-to-answer projection (estimated, G08) is not decisive there.
+    const r = recommend(withGens(1, 1), M, 'max_quality')
     expect(r.best?.gen?.config.id).toBe('think-low-t1')
     expect(r.best?.gen?.reason).toMatch(/^\[I-8\.1\] Meta-Llama-3\.1-8B-Instruct Q4_K_M: thinking on \(effort low, T=1\.0\): Q \+60 \[\+\d+, \+\d+\] vs thinking off; answers 4\.0× slower \(effective 25\.0 vs 100\.0 t\/s\)$/)
     expect(has(panel(withGens(0.4, 0.4), 'reasoning'), 'I-8.1')).toBe(false)

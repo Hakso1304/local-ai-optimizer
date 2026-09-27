@@ -35,7 +35,7 @@ function passRungs(runs: BenchmarkRunResult[], cliff: CliffReport): { byCtx: Map
   return { byCtx, pass }
 }
 
-/** Scoring step (rule I-2.8): the largest PASS rung ≤ target, else the smallest PASS rung, else the smallest usable
+/** Scoring step (rule I-7.1 scoring rung): the largest PASS rung ≤ target, else the smallest PASS rung, else the smallest usable
  *  rung — so candidates are compared at the workload's need, never beyond the practical ceiling (X9). */
 export function referenceStep(runs: BenchmarkRunResult[], cliff: CliffReport, target: number, common = false): { run: BenchmarkRunResult; why: string; reaches: boolean } | null {
   const { byCtx, pass } = passRungs(runs, cliff)
@@ -50,7 +50,7 @@ export function referenceStep(runs: BenchmarkRunResult[], cliff: CliffReport, ta
   return u ? { run: byCtx.get(u.ctx)!, why: 'no passing rung; smallest usable (degraded) rung', reaches: !common } : null
 }
 
-/** Recommended -c (rule I-3.10, audit D06): always a measured PASS rung. Latency advisory → the largest PASS rung ≤
+/** Recommended -c (rule I-3.7, audit D06): always a measured PASS rung. Latency advisory → the largest PASS rung ≤
  *  maxContext. Otherwise the largest PASS rung ≤ maxContext whose measured TTFT ≤ tolerance (unknown TTFT never
  *  qualifies, D07); if none, the smallest PASS rung with fits=false (the TTFT gate then fails). null without a PASS rung. */
 export function recommendedStep(runs: BenchmarkRunResult[], cliff: CliffReport, profile: WorkloadProfile):
@@ -73,6 +73,8 @@ export function recommendedStep(runs: BenchmarkRunResult[], cliff: CliffReport, 
  *  error quarantine the result (rule I-5.7): quality is then unavailable, never a measured 0. */
 export function measuredQuality(results: QualityResult[], categories: QualityCategory[], cfg: ScoringConfig = DEFAULT_SCORING_CONFIG):
   ({ ok: true; u: QualityInterval; coverage: ReturnType<typeof coverage> } | { ok: false; quarantined: boolean; reason: string }) {
+  // G10: any infrastructure error in the result quarantines it, whether or not its category is weighted here.
+  if ((results as UncertaintyRow[]).some((r) => r.evaluationStatus === 'infra_error')) return { ok: false, quarantined: true, reason: 'Quality quarantined: infra_error in the result' }
   const rows = (results as UncertaintyRow[]).filter((q) => categories.includes(q.category)).map(({ genId: _g, ...r }) => r as UncertaintyRow)
   if (!rows.length) return { ok: false, quarantined: false, reason: 'no quality results for these categories' }
   const weights = Object.fromEntries(categories.map((c) => [c, cfg.qualityCategoryWeights[c]]))
@@ -120,9 +122,14 @@ function memory(ref: BenchmarkRunResult, input: CandidateInput, machine: Machine
     : u <= n.memKnee ? 100 - ((u - n.memFullUntil) / (n.memKnee - n.memFullUntil)) * (100 - n.memKneeScore)
       : n.memKneeScore * clamp01((1 - u) / (1 - n.memKnee))
   const notes: string[] = []
-  if ((val(ref.peakSharedGpuBytes) ?? 0) > cfg.cliff.sharedSpillBytes) { m = Math.min(m, n.memSpillCap); notes.push('spills to shared GPU memory') }
+  const peak = cpu ? ref.peakRamBytes : ref.peakVramBytes
+  const shared = ref.peakSharedGpuBytes
+  // G01: an unmeasured spill is not "no spill" — without it the memory term is not verified (neutral, unavailable).
+  if (!cpu && shared.kind !== 'measured') return unknown(NA(`shared-GPU usage not measured at ${ref.ctx} (${shared.reason ?? shared.kind}); spill not verified`), cfg)
+  if ((val(shared) ?? 0) > cfg.cliff.sharedSpillBytes) { m = Math.min(m, n.memSpillCap); notes.push('spills to shared GPU memory') }
   if (!cpu && !input.config.gpuLayersAll) { m = Math.min(m, n.memPartialOffloadCap); notes.push('partial GPU offload') }
-  return { score: m, input: { value: u, kind: 'measured', source: `peak ${cpu ? 'RAM' : 'VRAM'} / total` }, note: notes.join('; ') || undefined }
+  // Provenance follows the peak (an estimated peak never becomes a measured memory term).
+  return { score: m, input: { value: u, kind: peak.kind === 'measured' ? 'measured' : peak.kind, source: `peak ${cpu ? 'RAM' : 'VRAM'} / total${peak.kind === 'measured' ? '' : ` (peak ${peak.kind})`}` }, note: notes.join('; ') || undefined }
 }
 
 export function componentScores(
@@ -179,7 +186,8 @@ export function componentScores(
     const t = val(ref.ttftMs, true), rm = val(gen.reasoningMs)
     decodeM = gen.effectiveTps
     ttftM = t !== null && rm !== null
-      ? { value: t + rm, kind: gen.reasoningMs?.kind === 'measured' ? 'measured' : 'estimated', source: `TTFT at ${fmtCtx(ref.ctx)} + ${gen.gen.id} reasoning time (suite median)` }
+      // G08: a projection across contexts (ladder TTFT + suite reasoning time) stays ESTIMATED.
+      ? { value: t + rm, kind: 'estimated', source: `TTFT at ${fmtCtx(ref.ctx)} + ${gen.gen.id} reasoning time (quality-suite median, other context)` }
       : NA(`reasoning time unavailable for ${gen.gen.id}`)
   }
   const components: Record<ComponentId, ComponentScore> = {

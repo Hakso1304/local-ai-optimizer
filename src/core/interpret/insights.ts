@@ -70,7 +70,7 @@ export function interpret(v: Verdicts): Insight[] {
   }
 
   // §2 coverage
-  for (const c of firstOf(everyone)) {
+  for (const c of everyone) {
     const cov = c.coverage
     const declared = c.input.model.ctxTrain
     const stopped = cov.limitKind === 'failure' || cov.limitKind === 'spill' || cov.limitKind === 'cliff'
@@ -79,7 +79,9 @@ export function interpret(v: Verdicts): Insight[] {
         : cov.limitKind === 'user-cap' ? 'Higher contexts were not attempted (the ladder was capped by the request).'
           : cov.limitKind === 'cancelled' ? 'Higher contexts were not attempted (the session stopped early).'
             : 'Higher contexts were not attempted.'
-    if (cov.largestCleanTested !== null) {
+    if (cov.largestCleanTested === null) {
+      push('ctx.coverage', tag('ctx.coverage', `${id(c)}: no clean context measured in this run${cov.firstObservedFailure ? ` — first observed at ${fmtCtx(cov.firstObservedFailure.ctx)}: ${cov.firstObservedFailure.reason}` : ''}${c.dropped.length ? `; ${c.dropped.length} completed row(s) not verified (I-6.0)` : ''}.`), [], { configId: id(c) })
+    } else {
       add('ctx.coverage', { config: id(c), clean: fmtCtx(cov.largestCleanTested), declared: declared ? fmtCtx(declared) : 'unknown', stopped },
         [ev('largestCleanTested', c.cs.cliff.practicalContextCeiling, undefined, id(c))], { configId: id(c) })
       if (declared && cov.largestCleanTested < declared * P('ctx.declared-vs-tested', 'fraction')) {
@@ -93,7 +95,9 @@ export function interpret(v: Verdicts): Insight[] {
       const s = cov.firstPlannedSkip
       const what = `estimated ${s.resource === 'vram' ? 'VRAM' : 'RAM'} ${s.estimateBytes !== undefined ? gib(s.estimateBytes) : '?'} > budget ${s.budgetBytes !== undefined ? gib(s.budgetBytes) : '?'} (planning snapshot)`
       add('ctx.planned-skip', { config: id(c), ctx: fmtCtx(s.ctx), what }, [num('estimateBytes', s.estimateBytes ?? null, 'estimated', s.ctx, id(c)), num('budgetBytes', s.budgetBytes ?? null, 'estimated', s.ctx, id(c))],
-        { configId: id(c), action: s.resource === 'vram' ? action('enable-kv-q8') : action('enable-heavy-mode') })
+        { configId: id(c), action: s.resource === 'vram'
+          ? (c.input.config.kvType === 'f16' ? action('enable-kv-q8') : c.input.config.gpuLayersAll ? action('enable-heavy-mode') : profile.requiredContext ? action('lower-required-context') : action('inspect-diagnostics'))
+          : action('rerun-idle') })
     }
   }
   for (const c of everyone) {
@@ -106,14 +110,21 @@ export function interpret(v: Verdicts): Insight[] {
       const d0 = prev ? val(prev.decodeTps, true) : null, d1 = val(runs[i]?.decodeTps, true)
       const delta = prev && d0 !== null && d1 !== null ? `; decode ${t1(d0)} → ${t1(d1)} t/s vs ${fmtCtx(prev.ctx)}` : ''
       const clean = c.cs.cliff.spillFreeUpTo
-      add('ctx.spill', { config: id(c), threshold: gib(P('ctx.spill', 'spillBytes')), ctx: fmtCtx(spill.toCtx), spill: gib(spill.to!), delta, single: '' },
-        [num('peakSharedGpuBytes', spill.to, 'measured', spill.toCtx, id(c))], { configId: id(c), action: clean ? action('use-context', fmtCtx(clean)) : action('enable-kv-q8') })
+      const single = ' — one peak per rung, sample count not recorded: provisional'
+      const act = clean ? action('use-context', fmtCtx(clean)) : c.input.config.kvType === 'f16' ? action('enable-kv-q8') : action('inspect-diagnostics')
+      if (spill.metric === 'peakSharedGpuRawBytes') {
+        push('ctx.spill', tag('ctx.spill', `${id(c)}: raw shared-GPU usage (host-pinned excluded) grew +${gib(spill.to!)} at ${fmtCtx(spill.toCtx)} vs ${spill.fromCtx ? fmtCtx(spill.fromCtx) : 'the previous rung'} — above the ${gib(v.cfg.cliff.rawSharedGrowthBytes)} growth rule; the adjusted spill stayed below ${gib(v.cfg.cliff.sharedSpillBytes)}${delta}${single}.`),
+          [num('peakSharedGpuRawBytes', spill.to, 'measured', spill.toCtx, id(c), { algorithm: 'raw-growth-1' })], { configId: id(c), action: act })
+      } else {
+        add('ctx.spill', { config: id(c), threshold: gib(v.cfg.cliff.sharedSpillBytes), ctx: fmtCtx(spill.toCtx), spill: gib(spill.to!), delta, single },
+          [num('peakSharedGpuBytes', spill.to, 'measured', spill.toCtx, id(c), { algorithm: 'adjusted-spill' })], { configId: id(c), action: act })
+      }
     }
     // I-2.6 recovered dip; disclose skipped rungs between
     const u = [...c.scored.runs].filter(isUsable).sort((a, b) => a.ctx - b.ctx)
     for (let i = 1; i + 1 < u.length; i++) {
       const a = val(u[i - 1].decodeTps, true)!, b = val(u[i].decodeTps, true)!, cc = val(u[i + 1].decodeTps, true)!
-      if (b / a <= P('ctx.recovered-dip', 'dropRatio') && a - b >= P('ctx.recovered-dip', 'minDropTps') && cc > a * P('ctx.recovered-dip', 'dropRatio')) {
+      if (b / a <= v.cfg.cliff.decodeDropRatio && a - b >= v.cfg.cliff.minDecodeDropTps && cc > a * v.cfg.cliff.decodeDropRatio) {
         const gap = u[i + 1].ctx > u[i].ctx * 2 ? `; rungs between ${fmtCtx(u[i].ctx)} and ${fmtCtx(u[i + 1].ctx)} were not tested` : ''
         add('ctx.recovered-dip', { config: id(c), ctx: fmtCtx(u[i].ctx), a: t1(a), b: t1(b), next: fmtCtx(u[i + 1].ctx), c: t1(cc), gap }, [ev('decodeTps', u[i].decodeTps, u[i].ctx, id(c))], { configId: id(c) })
       }
@@ -128,6 +139,8 @@ export function interpret(v: Verdicts): Insight[] {
       const ok = mine.find((c) => (c.coverage.largestCleanTested ?? 0) >= req)
       if (ok) { reached++; return `${m.name} reached (${id(ok)})` }
       const tried = allInputs.filter((i) => i.model.id === m.id).flatMap((i) => i.runs).find((r) => r.ctx >= req)
+      const unverified = mine.flatMap((c) => c.dropped).find((d) => d.ctx >= req)
+      if (tried && (tried.status === 'pass' || tried.status === 'degraded') && unverified) return `${m.name} measured at ${fmtCtx(tried.ctx)} but not verified (${unverified.reason})`
       if (tried) return `${m.name} tested and failed at ${fmtCtx(tried.ctx)} (${tried.failureKind ?? tried.status})`
       const best = mine.map((c) => c.coverage).sort((a, b) => (b.largestCleanTested ?? 0) - (a.largestCleanTested ?? 0))[0]
       return `${m.name} not tested (${best ? `largest clean ${best.largestCleanTested === null ? 'none' : fmtCtx(best.largestCleanTested)}, ${best.limitKind}` : 'no usable configuration'})`
@@ -143,10 +156,12 @@ export function interpret(v: Verdicts): Insight[] {
     const mine = rows.filter((r) => profile.promptSetIds.includes(r.category))
     if (q.input.kind === 'measured' && q.lower !== undefined) {
       const cov = q.coverage!
-      const cats = CATS.filter((k) => profile.promptSetIds.includes(k)).map((k) => { const r = mine.filter((x) => x.category === k); return r.length ? `${k} ${r.filter((x) => x.pass).length}/${r.length}` : null }).filter(Boolean).join(', ')
+      let flagsU: ReturnType<typeof categoryFlags> = []
+      try { flagsU = categoryFlags(mine, { weakAtMost: P('quality.category', 'weakAtMost'), codingAtMost: P('quality.category', 'codingAtMost'), minItems: 1 }) } catch { /* quarantined */ }
+      const cats = CATS.filter((k) => profile.promptSetIds.includes(k)).map((k) => { const f = flagsU.find((x) => x.category === k); return f && f.validItems ? `${k} ${Math.round(f.rate! * f.validItems)}/${f.validItems}` : null }).filter(Boolean).join(', ')
       add('quality.report', { model: c.input.model.name, q: Math.round(q.score), lo: Math.round(q.lower), hi: Math.round(q.upper!), method: q.method, version: q.algorithm, items: cov.uniqueItems, skills: cov.uniqueSkills, samples: cov.uniqueItems ? Math.round(cov.completions / cov.uniqueItems) : 0, categories: cats },
         [ev('quality', q.input, undefined, id(c), { samples: cov.completions, algorithm: `${q.method} ${q.algorithm}` })], { configId: id(c) })
-      const missingCats = profile.promptSetIds.filter((k) => mine.filter((x) => x.category === k).length < P('quality.coverage', 'minPerCategory'))
+      const missingCats = profile.promptSetIds.filter((k) => (flagsU.find((x) => x.category === k)?.validItems ?? 0) < P('quality.coverage', 'minPerCategory'))
       if (cov.uniqueItems < P('quality.coverage', 'minItems') || missingCats.length) {
         add('quality.coverage', { model: c.input.model.name, why: [cov.uniqueItems < P('quality.coverage', 'minItems') ? `${cov.uniqueItems} unique items < ${P('quality.coverage', 'minItems')}` : null, missingCats.length ? `< ${P('quality.coverage', 'minPerCategory')} items in ${missingCats.join(', ')}` : null].filter(Boolean).join('; ') }, [ev('quality', q.input, undefined, id(c))], { configId: id(c) })
       }
@@ -214,7 +229,7 @@ export function interpret(v: Verdicts): Insight[] {
       const scoredAt = sc && sc.ctx !== rc.ctx ? ` (scored at ${fmtCtx(sc.ctx)}: TTFT ${val(sc.ttftMs, true) === null ? 'unknown' : sec(val(sc.ttftMs, true)!)}, decode ${t1(val(sc.decodeTps, true)!)} t/s)` : ''
       const accepted = over && profile.requiredContext ? `; accepted because you required ${fmtCtx(profile.requiredContext)}` : over && profile.latencyAdvisory ? '; latency is advisory for this workload' : ''
       push('speed.ttft-band', tag('speed.ttft-band', `Recommended context ${fmtCtx(rc.ctx)}: TTFT ${sec(t)} with ${rc.promptTokens ?? '?'} prompt tokens — ${band(t, [[b.immediate, 'immediate'], [b.short, 'short wait'], [b.noticeable, 'noticeable'], [b.long, 'long']], 'very long')} (tolerance ${(profile.latencyToleranceMs / 1000).toFixed(0)} s${accepted}), decode ${d === null ? '?' : t1(d)} t/s${scoredAt}`),
-        [ev('ttftMs', rc.ttftMs, rc.ctx, id(lead))], { configId: id(lead), severity: over ? 'warn' : 'info', action: over && !accepted && lead.coverage.largestCleanTested ? action('use-context', fmtCtx(Math.min(...lead.scored.runs.filter((r) => isUsable(r) && (val(r.ttftMs, true) ?? Infinity) <= profile.latencyToleranceMs).map((r) => r.ctx), rc.ctx))) : null })
+        [ev('ttftMs', rc.ttftMs, rc.ctx, id(lead))], { configId: id(lead), severity: over ? (accepted ? 'note' : 'warn') : 'info', action: over && !accepted && lead.coverage.largestCleanTested ? action('use-context', fmtCtx(Math.min(...lead.scored.runs.filter((r) => isUsable(r) && (val(r.ttftMs, true) ?? Infinity) <= profile.latencyToleranceMs).map((r) => r.ctx), rc.ctx))) : null })
     }
     const g = lead.gen?.gq
     if (g?.gen.thinking) {
@@ -256,7 +271,7 @@ export function interpret(v: Verdicts): Insight[] {
       if (peak !== null && plan?.planningVramBudgetBytes != null) {
         const remaining = plan.planningVramBudgetBytes - plan.planningReserveBytes - peak
         const low = remaining < P('mem.budget-basis', 'warnBytes')
-        push('mem.budget-basis', tag('mem.budget-basis', `${id(lead)} at ${fmtCtx(rc.ctx)}: planning budget remaining ${sgib(remaining)} (budget ${gib(plan.planningVramBudgetBytes)} − reserve ${gib(plan.planningReserveBytes)} − peak ${gib(peak)}; in use at planning ${gib(val(plan.vramInUse) ?? 0)} ${plan.vramInUse.kind})${low ? ' — less room for other apps, spill risk increases' : ''}`),
+        push('mem.budget-basis', tag('mem.budget-basis', `${id(lead)} at ${fmtCtx(rc.ctx)}: planning budget remaining ${sgib(remaining)} (budget ${gib(plan.planningVramBudgetBytes)} − reserve ${gib(plan.planningReserveBytes)} − peak ${gib(peak)}; in use at planning ${val(plan.vramInUse) === null ? `unavailable (${plan.vramInUse.reason ?? 'not measured'})` : `${gib(val(plan.vramInUse)!)} ${plan.vramInUse.kind}${plan.vramInUse.kind === 'estimated' ? ' — an assumed default, not a reading' : ''}`})${low ? ' — less room for other apps, spill risk increases' : ''}`),
           [ev('peakVramBytes', rc.peakVramBytes, rc.ctx, id(lead)), num('planningVramBudgetBytes', plan.planningVramBudgetBytes, 'measured'), num('planningReserveBytes', plan.planningReserveBytes, 'declared'), ev('vramInUseBytes', plan.vramInUse)],
           { configId: id(lead), severity: low ? 'warn' : 'info', action: low && lead.coverage.largestCleanTested ? action('use-context', fmtCtx(lead.coverage.largestCleanTested)) : null })
       } else if (peak !== null && val(machine.vramBytes, true) !== null) {
@@ -285,11 +300,11 @@ export function interpret(v: Verdicts): Insight[] {
     // I-4.4: only with the before / during / after lifecycle observed
     const runs = [...c.input.runs].sort((a, b) => a.ctx - b.ctx)
     for (let i = 0; i + 1 < runs.length && c.input.config.mmap !== false; i++) {
-      const before = val(runs[i].ramAvailBeforeLoadBytes), min = val(runs[i].minRamAvailBytes), after = val(runs[i + 1].ramAvailBeforeLoadBytes)
+      const before = val(runs[i].ramAvailBeforeLoadBytes), min = val(runs[i].minRamAvailDuringLoadBytes), after = val(runs[i + 1].ramAvailBeforeLoadBytes)
       if (before === null || min === null || after === null || before - min < GiB) continue
       if (after >= before - P('mem.mmap-note', 'releasedWithinBytes')) {
         add('mem.mmap-note', { config: cid, ctx: fmtCtx(runs[i].ctx), drop: gib(before - min), before: gib(before), min: gib(min), after: gib(after) },
-          [ev('ramAvailBeforeLoadBytes', runs[i].ramAvailBeforeLoadBytes, runs[i].ctx, cid), ev('minRamAvailBytes', runs[i].minRamAvailBytes, runs[i].ctx, cid), ev('ramAvailBeforeLoadBytes', runs[i + 1].ramAvailBeforeLoadBytes, runs[i + 1].ctx, cid)], { configId: cid })
+          [ev('ramAvailBeforeLoadBytes', runs[i].ramAvailBeforeLoadBytes, runs[i].ctx, cid), ev('minRamAvailDuringLoadBytes', runs[i].minRamAvailDuringLoadBytes, runs[i].ctx, cid), ev('ramAvailBeforeLoadBytes', runs[i + 1].ramAvailBeforeLoadBytes, runs[i + 1].ctx, cid)], { configId: cid })
         break
       }
     }
@@ -299,6 +314,12 @@ export function interpret(v: Verdicts): Insight[] {
     if (at && total && ded !== null && (at.peakVramPlateauSamples ?? 0) >= P('mem.saturation-observed', 'minSamples')) {
       add('mem.saturation-observed', { config: cid, pct: Math.round((ded / total) * 100), samples: at.peakVramPlateauSamples }, [ev('peakVramBytes', at.peakVramBytes, sp!.ctx, cid, { samples: at.peakVramPlateauSamples })], { configId: cid })
     }
+  }
+
+  // G12: the gate verdicts themselves, as insights with their catalog action.
+  for (const c of everyone) for (const f of c.failures) {
+    const key = f.ruleId === rule('gate.context-floor').id ? 'gate.context-floor' : f.ruleId === rule('gate.quality-min').id ? 'gate.quality-min' : f.ruleId === rule('gate.stability').id ? 'gate.stability' : null
+    if (key) push(key, f.text, [], { configId: id(c) })
   }
 
   // §6 eligibility and stability — failures from ALL persisted runs (I-6.3)
@@ -353,7 +374,7 @@ export function interpret(v: Verdicts): Insight[] {
     const off = c.genOptions.find((g) => !g.gq.gen.thinking)
     const g = c.gen
     if (g && off && g !== off) {
-      const { d } = difference(g.gq.results as UncertaintyRow[], off.gq.results as UncertaintyRow[], profile, v.cfg)
+      const { d } = difference(g.gq.results as UncertaintyRow[], off.gq.results as UncertaintyRow[], profile, v.cfg, 'gen')
       const lo = val(off.gq.effectiveAnswerLatencyMs, true), hi = val(g.gq.effectiveAnswerLatencyMs, true)
       const ratio = lo && hi ? (hi >= lo ? `answers ${t1(hi / lo)}× slower` : `answers ${t1(lo / hi)}× faster`) : 'answer time not measured'
       push('gen.best-config', tag('gen.best-config', `${c.input.model.name}: ${genLabel(g.gq.gen)}: Q ${d ? fmtDiff(d) : '?'} vs thinking off; ${ratio} (effective ${val(g.gq.effectiveTps) === null ? '?' : t1(val(g.gq.effectiveTps)!)} vs ${val(off.gq.effectiveTps) === null ? '?' : t1(val(off.gq.effectiveTps)!)} t/s)`),
@@ -365,7 +386,7 @@ export function interpret(v: Verdicts): Insight[] {
     for (let i = 0; i + 1 < think.length; i++) {
       const lo = think[i], hi = think[i + 1]
       const rlo = val(lo.gq.reasoningTokens), rhi = val(hi.gq.reasoningTokens)
-      const { d } = difference(hi.gq.results as UncertaintyRow[], lo.gq.results as UncertaintyRow[], profile, v.cfg)
+      const { d } = difference(hi.gq.results as UncertaintyRow[], lo.gq.results as UncertaintyRow[], profile, v.cfg, 'gen')
       if (rlo !== null && rhi !== null && rhi > rlo && d && d.lower <= 0 && d.upper >= 0) {
         add('gen.effort-saturation', { model: c.input.model.name, hi: hi.gq.gen.effort, lo: lo.gq.gen.effort, rhi: Math.round(rhi), rlo: Math.round(rlo), diff: fmtDiff(d) }, [ev('reasoningTokens', hi.gq.reasoningTokens), ev('reasoningTokens', lo.gq.reasoningTokens)], { configId: id(c) })
       }

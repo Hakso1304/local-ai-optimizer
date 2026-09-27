@@ -98,13 +98,13 @@ export function recommend(
     decided(`${v.fallback ? `${cid} meets the required context ${fmtCtx(profile.requiredContext!)} but is below the ${profile.label} speed gate (${top.failures.map((f) => f.text).join('; ')}); constraints ${top.failures.length ? 'partly unmet' : 'met'}`
       : `best for ${profile.label}: ${cid} scores ${top.total.toFixed(1)}/100; constraints met`}; decided by ${last.kind} (${last.detail})${trace.neutralizations.length ? `; ${trace.neutralizations.length} quality neutralization(s)` : ''}; tie-break chain ${chain}`)
     reasons.push(...said('quality.difference'))
-    // I-7.4: how much speed the pick costs, or that quality could not separate them.
-    const fastId = trace.alternatives.fastest.configId
-    const fast = v.ranked.find((s) => s.input.config.id === fastId)
-    if (fast && fast !== top && fast.decode && top.decode && fast.decode > top.decode) {
-      const { d } = top.qualityMeasured && fast.qualityMeasured ? difference(top, fast, profile, cfg) : { d: null }
-      const qd = d ? `quality ${fmtDiff(d)} vs ${fast.input.config.id}` : `quality ${qText(top)} vs ${qText(fast)}`
-      reasons.push(cite('cmp.quality-vs-speed', { text: d && d.lower > 0 ? `chosen for quality: ${qd}; decode ${t1(top.decode)} vs ${t1(fast.decode)} t/s (${(fast.decode / top.decode).toFixed(1)}× slower)` : `${qd} — not a quality win; decode ${t1(top.decode)} vs ${t1(fast.decode)} t/s, other terms decided` }))
+    // I-7.4: rendered from the stored trace entry (never recomputed here).
+    const qs = trace.qualityVsSpeed
+    if (qs) {
+      const fast = v.ranked.find((s) => s.input.config.id === qs.fastest)!
+      const d = qs.difference
+      const qd = d ? `quality ${fmtDiff(d)} vs ${qs.fastest}` : `quality ${qText(top)} vs ${qText(fast)} (${qs.reason ?? 'not paired'})`
+      reasons.push(cite('cmp.quality-vs-speed', { text: d && d.lower > 0 ? `chosen for quality: ${qd}; decode ${t1(qs.decodeWinner)} vs ${t1(qs.decodeFastest)} t/s (${(qs.decodeFastest / qs.decodeWinner).toFixed(1)}× slower)` : `${qd} — not a quality win; decode ${t1(qs.decodeWinner)} vs ${t1(qs.decodeFastest)} t/s, other terms decided` }))
     }
     if (genReason) reasons.push(genReason)
     if (profile.requiredContext) {
@@ -130,7 +130,7 @@ export function recommend(
     for (const s of picks) whyNot.push({ configId: s.input.config.id, model: s.input.model.name, summary: cite('cmp.why-not', { text: whyNotText(s, top) }) })
     for (const g of top.genOptions) {
       if (g === top.gen) continue
-      const { d, reason } = top.gen ? difference(g.gq.results as UncertaintyRow[], top.gen.gq.results as UncertaintyRow[], profile, cfg) : difference(g.gq.results as UncertaintyRow[], top, profile, cfg)
+      const { d, reason } = difference(g.gq.results as UncertaintyRow[], (top.gen ? top.gen.gq.results : top.qualityRows) as UncertaintyRow[], profile, cfg, 'gen')
       const a = val(g.gq.effectiveAnswerLatencyMs, true), b = top.gen ? val(top.gen.gq.effectiveAnswerLatencyMs, true) : null
       whyNot.push({
         configId: cid, genId: g.gq.gen.id, model: top.input.model.name,
@@ -143,7 +143,8 @@ export function recommend(
 
   function whyNotText(s: CandidateVerdict, w: CandidateVerdict): string {
     const parts: string[] = []
-    const { d, reason } = s.qualityMeasured && w.qualityMeasured ? difference(s, w, profile, cfg) : { d: null, reason: 'quality not measured for both' }
+    const stored = trace.candidates.find((c) => c.configId === s.input.config.id)?.qualityVsWinner
+    const { d, reason } = stored ? { d: stored.difference, reason: stored.reason } : { d: null, reason: 'quality not measured for both' }
     parts.push(d ? `quality ${fmtDiff(d)} (${qText(s)} vs ${qText(w)})` : `quality ${qText(s)} vs ${qText(w)} (${reason})`)
     if (s.decode !== null && w.decode !== null) {
       const a = s.cs.referenceCtx, b = w.cs.referenceCtx

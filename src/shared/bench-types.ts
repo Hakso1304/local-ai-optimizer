@@ -253,12 +253,14 @@ export interface BenchmarkRunResult {
   repDecodeTps?: number[]
   /** Lowest RAM available the guard saw during the step (load + requests). */
   minRamAvailBytes?: Metric
+  /** Lowest RAM available during the load phase only (I-4.4 lifecycle: before load / during load / after unload). */
+  minRamAvailDuringLoadBytes?: Metric
   /** RAM available just before this step's load (i.e. after the previous server was unloaded). */
   ramAvailBeforeLoadBytes?: Metric
   /** The RAM floor the guard enforced and the mmap credit it granted (rule I-4.3: signed distance, credit separately). */
   ramFloorBytes?: number
   mmapCreditBytes?: number
-  /** Telemetry samples within 1 % of the dedicated-VRAM peak (rule I-4.5 needs a plateau of ≥ 3). */
+  /** Telemetry samples within 1 % of the dedicated-VRAM peak BEFORE spill onset (rule I-4.5 needs ≥ 3); 0 = no spill. */
   peakVramPlateauSamples?: number
   /** Structured reason when the runner skipped the step before loading (live RAM pre-check). */
   skip?: PlannedSkip
