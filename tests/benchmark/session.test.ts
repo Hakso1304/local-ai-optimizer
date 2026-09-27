@@ -698,8 +698,50 @@ describe('runSession', () => {
     expect(ctxOf(backend)).toEqual([2048, 4096])
     expect(s.runs.map((r) => r.status)).toEqual(['pass', 'pass'])
     expect(s.runs.every((r) => r.peakSharedGpuBytes.value === 0)).toBe(true)
+    expect(s.runs.map((r) => r.baselineAbsorbedBytes?.value)).toEqual([0.5 * GiB - 1024 ** 2, 0.5 * GiB - 1024 ** 2])
     expect(s.budget.filter((b) => b.o.kind === 'capacity')).toEqual([])
     expect(rec?.insights?.some((i) => i.ruleId === 'I-2.8')).toBe(false)
+  })
+
+  it('records raw-minus-pinned first-rung baseline, including a possibly masked first-rung spill', async () => {
+    const sampler = (pid: number) => {
+      const xs = [{ ...sample(pid - 1000), procVramSharedBytes: 0.5 * GiB }]
+      return { samples: xs, unavailable: {}, stop: () => xs }
+    }
+    const { s } = await run(() => ({ hostMiB: 100 }), { ladder: [2048] }, { startSampler: sampler })
+    expect(s.runs[0].peakSharedGpuRawBytes?.value).toBe(0.5 * GiB)
+    expect(s.runs[0].hostPinnedBytes?.value).toBe(100 * 1024 ** 2)
+    expect(s.runs[0].baselineAbsorbedBytes).toMatchObject({ kind: 'measured', value: 0.5 * GiB - 100 * 1024 ** 2 })
+    expect(s.runs[0].peakSharedGpuBytes.value).toBe(0)
+    expect(s.runs[0].baselineAbsorbedBytes?.source).toMatch(/cause unverified/)
+  })
+
+  it('records a zero baseline and leaves an unknown first-rung reading unabsorbed', async () => {
+    const zero = await run(() => ({}), { ladder: [2048] }, { startSampler: (pid) => {
+      const xs = [{ ...sample(pid - 1000), procVramSharedBytes: 0 }]
+      return { samples: xs, unavailable: {}, stop: () => xs }
+    } })
+    expect(zero.s.runs[0].baselineAbsorbedBytes).toMatchObject({ kind: 'measured', value: 0 })
+    const unknown = await run(() => ({}), { ladder: [2048] }, { startSampler: (pid) => {
+      const xs = [{ ...sample(pid - 1000), procVramSharedBytes: null }]
+      return { samples: xs, unavailable: {}, stop: () => xs }
+    } })
+    expect(unknown.s.runs[0].baselineAbsorbedBytes).toBeUndefined()
+  })
+
+  it('runs a legacy backendless CPU candidate only when backend inventory is implicit', async () => {
+    const base = generateCandidates(machineFromProfile(machine, 'Vulkan0'), model, { backend: 'vulkan' }, WORKLOADS.general_chat).candidates[0]
+    const cpu = { ...base, id: `${base.id}|legacy-cpu`, backend: undefined, device: null, gpuLayers: 0, gpuLayersAll: false, ctxSteps: [2048] }
+    const implicit = fakeBackend(() => ({}))
+    const a = await run(() => ({}), { ladder: [2048] }, { plan: [cpu], backend: () => implicit, backendKind: 'cpu', gpuDevice: null, runtimeVersion: 'b1' })
+    expect(implicit.calls.loads).toHaveLength(1)
+    expect(a.s.runs).toEqual([expect.objectContaining({ configId: cpu.id, status: 'pass', versions: expect.objectContaining({ runtime: 'cpu:b1' }) })])
+    const explicit = fakeBackend(() => ({}))
+    const b = await run(() => ({}), { ladder: [2048] }, { plan: [cpu], backend: () => explicit, backendKind: 'cpu', gpuDevice: null,
+      backends: [{ kind: 'hip', backend: () => explicit, runtimeVersion: 'b1', exePath: 'fake-hip', device: 'ROCm0' }] })
+    expect(explicit.calls.loads).toEqual([])
+    expect(b.s.runs).toEqual([])
+    expect(b.events).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'candidate:done', configId: cpu.id, status: 'skipped' })]))
   })
 
   it('O2: a resumed HIP candidate cannot execute on Vulkan when HIP is absent', async () => {

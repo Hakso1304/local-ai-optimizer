@@ -79,6 +79,20 @@ describe('F3 per-component basis and a stored counterfactual', () => {
 })
 
 describe('F4 the adjusted spill is rendered as observed', () => {
+  it('I-2.2 discloses absorbed first-rung residual without treating it as proven spill-free capacity', () => {
+    const c = candidate('a', [2048, 4096])
+    c.runs[0].peakSharedGpuRawBytes = m(0.5 * GiB)
+    c.runs[0].baselineAbsorbedBytes = m(0.4 * GiB)
+    c.runs[1].peakSharedGpuRawBytes = m(1.6 * GiB)
+    const i = interpret(V([c])).find((x) => x.ruleId === 'I-2.2')!
+    expect(i.text).toMatch(/0\.40 GiB first-rung shared residual was subtracted as baseline \(cause unverified\)/)
+    expect(i.evidence).toEqual(expect.arrayContaining([expect.objectContaining({ metric: 'baselineAbsorbedBytes' })]))
+    expect(i.text).not.toMatch(/first rung was spill-free|capacity confirmed/)
+    c.runs[0].baselineAbsorbedBytes = na('shared reading unavailable')
+    expect(text(interpret(V([c])), 'I-2.2')).toMatch(/first-rung baseline absorption was not recorded/)
+    c.runs[0].baselineAbsorbedBytes = m(0)
+    expect(text(interpret(V([c])), 'I-2.2')).toMatch(/0\.00 GiB first-rung shared residual was subtracted as baseline/)
+  })
   it('unavailable adjusted metric is not described as "stayed below"', () => {
     const c = candidate('a', [2048, 4096])
     c.runs[0].peakSharedGpuRawBytes = m(0.05 * GiB); c.runs[1].peakSharedGpuRawBytes = m(1.15 * GiB)
@@ -359,13 +373,14 @@ describe('I-2.8 placement spill (w4m: same-window reading required, heuristic)',
     c.runs[1] = { ...c.runs[1], adapterFreeAtSharedPeakBytes: m(0.2 * GiB) }
     expect(interpret(V([c])).some((x) => x.ruleId === 'I-2.8')).toBe(false) // card full
   })
-  it('a retry that cleared is a placement note with both observations', () => {
+  it('a cleared retry reports both observations and an unknown cause without a placement or capacity claim', () => {
     const c = candidate('a', [2048, 4096])
     c.runs[1] = { ...c.runs[1], placementRetry: true, placementFirst: { ...shape, adapterFreeAtSharedPeakBytes: m(3.1 * GiB), decodeTps: m(37) } }
     const i = interpret(V([c])).find((x) => x.ruleId === 'I-2.8')!
     expect(i.severity).toBe('note')
     expect(i.action ?? null).toBeNull()
-    expect(i.text).toMatch(/it cleared after a fresh restart \(0\.00 GiB shared, decode 40\.0 vs 37\.0 t\/s before\) — driver placement after a previous large load, not a capacity limit/)
+    expect(i.text).toMatch(/it cleared after a fresh restart \(0\.00 GiB shared, decode 40\.0 vs 37\.0 t\/s before\) — cause unknown \(likely a host-visible buffer\)/)
+    expect(i.text).not.toMatch(/previous large load|driver placement|confirmed placement|capacity limit|capacity confirmed/)
   })
   it('w4m-4: a retry that still shows residency is never called placement', () => {
     const c = candidate('a', [2048, 4096])
