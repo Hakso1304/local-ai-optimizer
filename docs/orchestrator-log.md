@@ -328,3 +328,6 @@
 
 ## Fable — 2026-09-28 06:01 local
 - S1 hotfix 127d96f (CIM-only µs identity; standalone quality MEASURED + thinking-state disclosure) + 340f3ee (gen-choice disclosure) pushed. Full suite on 340f3ee: 900/903; reds G08 fixture, inference F4 fake PID, G09 (owner TBD) -> S2/S1. S2 U1 911a157 / U2 a5de265 RED for S3. Astra: w4v (Q5) then RECHECK9 (w4w) on 127d96f. Lane HELD; #2 package after suite green.
+
+## Fable — 2026-09-28 06:13 local
+- Pushed S3 0d74210/147a5a8/9e34367/b8328e2 (Q2/Q3/Q6/Q7 + U1/U3) and S2 1d37311/c4cd64e (fixture repairs G08/F4/G09, harness tests). Full suite on 1d37311: 913/915; only U2 owner-query reds remain (S3). tsc clean at b8328e2. Lane HELD.
