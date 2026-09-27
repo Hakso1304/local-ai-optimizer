@@ -196,3 +196,6 @@
 
 ## Fable — 2026-09-28 03:35 local
 - Claude #1 static review of overnight src: G08 = fixture gap (S1+S2 fixing); latent legacy-cpu stateOf bug, O1 absorbed-baseline disclosure, I-2.8 cause contradicted by the repaired A/B (residency intrinsic from first sample; argv lacked -lv 4) → routed to S1/S2; guide I-2.8 reworded. S3 (when the lane is next released): add -lv 4 to A/B argv so buffers are declared.
+
+## Fable — 2026-09-28 03:36 local
+- Heartbeat: dispatched S1 (G08 fixture + review items), S2 (EVIDENCE E-12/E-21/session 4), Astra RECHECK5 (read-only), #1 RELEASE-GATE.md, #2 CHANGELOG. Waiting on session 5 (S3 lease). Fable active.
