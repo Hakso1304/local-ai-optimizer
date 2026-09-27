@@ -60,6 +60,11 @@ const storage: SessionStorage = {
 // Backend wrapper: records templated prompts + raw replies so the chat template can be checked by eye.
 const transcripts: { configId: string; templated: string; reply: string; stopType: string | null }[] = []
 let currentConfig = ''
+// Host-RAM checks for the quality phase (the default 8 GiB prompt cache once held ~13.6 GiB there; b3e671f passes
+// --cache-ram 0): lowest system RAM available per phase, and whether the server log (rolling tail) ever reports the cache.
+let phase: 'ladder' | 'quality' = 'ladder'
+const minRamAvail = { ladder: Infinity, quality: Infinity }
+let promptCacheSeen = false
 // Patch the REAL backend instance (only the two methods we observe) instead of re-listing methods in a new object:
 // a hand-written wrapper silently drops whatever the backend adds later (it once dropped applyTemplate's opts, then
 // tokenize/templateHash — so the runner fell back to untokenized prompt sizing). The app passes the backend directly.
@@ -71,6 +76,7 @@ function wrap(b: LlamaCppBackend): SessionBackend {
   b.runPrompt = async (...a: Parameters<LlamaCppBackend['runPrompt']>) => {
     const r = await runPrompt(...a)
     const req = a[0]
+    if (b.log.some((l) => /prompt cache is enabled/i.test(l))) promptCacheSeen = true // read-only: b.log feeds exit classification
     if (lastTemplated !== null && req.prompt === lastTemplated) transcripts.push({ configId: currentConfig, templated: req.prompt.slice(-400), reply: r.text, stopType: r.stopType })
     return r
   }
@@ -157,13 +163,14 @@ async function main(): Promise<void> {
     writeFileSync(file, JSON.stringify({
       scenario, startedAt: new Date(t0).toISOString(), wallMs: Date.now() - t0, abortToCancelledMs: unloadMs, ramAbort,
       git: gitState, dbPath: dbPath ?? null, vramInUseAtPlanning: vr ? { bytes: vr.bytes, luid: vr.luid } : null,
-      runtime: det.version, device: dev, models, request: req, recommendation: rec, db, transcripts,
+      runtime: det.version, device: dev, models, request: req, recommendation: rec, db, transcripts, minRamAvailGiB: { ladder: +(minRamAvail.ladder / GiB).toFixed(2), quality: +(minRamAvail.quality / GiB).toFixed(2) }, promptCacheSeen,
       events: events.filter((e) => e.type !== 'telemetry'), telemetryEvents: events.filter((e) => e.type === 'telemetry').length
     }, null, 1))
   }
   // Self-abort when system RAM runs low (heavy runs on a 31 GB box).
   const ramAbortBytes = Number(flag('--ram-abort-gib') ?? 5) * GiB // 5 GiB: shared box (several agents + builds)
   const watchdog = setInterval(() => {
+    minRamAvail[phase] = Math.min(minRamAvail[phase], freemem())
     if (ctl.signal.aborted || freemem() >= ramAbortBytes) return
     ramAbort = `system RAM available ${(freemem() / GiB).toFixed(1)} GiB < ${(ramAbortBytes / GiB).toFixed(1)} GiB at ${el().trim()}`
     console.log(`${el()} >>> RAM WATCHDOG ABORT: ${ramAbort}`)
@@ -181,6 +188,7 @@ async function main(): Promise<void> {
   }, (e) => {
     events.push(e)
     if (e.type === 'telemetry') return
+    if (e.type === 'phase' && e.phase === 'quality') phase = 'quality'
     if (e.type === 'candidate:started' || (e.type === 'phase' && e.phase === 'quality')) currentConfig = e.configId // quality runs after all ladders
     if (scenario === 'B' && e.type === 'step:started' && /Llama-3\.1-8B/i.test(e.configId) && !abortScheduled) {
       abortScheduled = true
