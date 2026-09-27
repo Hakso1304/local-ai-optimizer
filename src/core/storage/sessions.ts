@@ -9,7 +9,7 @@ import type { SessionRequest } from '../../shared/bench-events'
 import type { RunDetail, SessionStorage } from '../benchmark/session'
 import type { TelemetrySample } from '../telemetry/sampler'
 import { insertTelemetrySamples } from './db'
-import { defaultTestSet, qualityScore } from '../quality'
+import { defaultTestSet, qualityScore, suiteFor } from '../quality'
 import { BASELINE_GEN, genConfigsFor, summarizeGen, type GenRow } from '../benchmark/gen'
 import type { StoredRun } from '../interpret/verdicts'
 import { detectCliffs } from '../scoring/cliff'
@@ -147,6 +147,17 @@ export function getSession(db: DatabaseSync, id: number): SessionDetail | null {
 
 /** Scoring inputs of a stored session (latest row per step, quality per model) + the scan it was planned with,
  *  for re-scoring the same measurements under another workload. */
+/** The quality suite a session selected: v1 for qualityMode 'quick', else v2 with the session's seed (null = unknown). */
+function selectedSuite(db: DatabaseSync, id: number): { suite: string; suiteSeed: number | null } | null {
+  const row = db.prepare('SELECT payload FROM benchmark_session WHERE id = ?').get(id) as { payload: string } | undefined
+  const req = row ? json<SessionPayload>(row.payload).request : undefined
+  if (!req) return null
+  if (req.qualityMode === 'quick') return { suite: defaultTestSet.suite, suiteSeed: null }
+  if (req.qualitySeed == null) return null
+  const s = suiteFor(req.qualityMode, req.qualitySeed)
+  return { suite: s.suite, suiteSeed: s.suiteSeed }
+}
+
 export function sessionInputs(db: DatabaseSync, id: number): {
   inputs: CandidateInput[]; machine: SessionPayload['machine']; request: SessionRequest | null
   /** Engine inputs (interp-2 InterpretData): every attempt, session planning values, why the session stopped. */
@@ -231,15 +242,18 @@ export function makeSessionStorage(db: DatabaseSync, planFor: PlanFor): SessionS
         .run(sid(id), run.status, modelOf(id, run.configId), run.ctx, JSON.stringify({ ...run, detail })).lastInsertRowid)
       if (samples.length) insertTelemetrySamples(db, sid(id), runId, samples)
     },
-    // Resume re-uses a stored suite only if it is this build's suite version and complete; otherwise it re-runs.
+    // Resume re-uses stored quality only if it is the session's selected suite (qualityMode) with the session's seed, and
+    // complete; otherwise it re-runs. A v2 session without a recorded seed can't be matched → re-run.
     listQuality: (id, modelId) => {
       const rows = (db.prepare('SELECT payload FROM quality_result WHERE session_id = ? AND model_id = ? ORDER BY id').all(sid(id), modelId) as { payload: string }[])
-        .map((r) => json<QualityResult & { suite?: string; expected?: number }>(r.payload))
-      const ok = rows.length > 0 && rows.every((r) => r.suite === defaultTestSet.suite && r.expected === rows.length)
+        .map((r) => json<QualityResult & { suite?: string; expected?: number; suiteSeed?: number | null }>(r.payload))
+      const want = selectedSuite(db, sid(id))
+      const ok = want !== null && rows.length > 0 && rows.every((r) => r.suite === want.suite && (r.suiteSeed ?? null) === want.suiteSeed && r.expected === rows.length)
       return ok ? rows : []
     },
+    // The runner sets `suite` (v1 or v2); only rows from callers that don't are labelled with the v1 default.
     saveQuality: (id, modelId, configId, ctx, results) =>
-      saveQualityResults(db, sid(id), modelId, results.map((r) => ({ ...r, configId, ctx, suite: defaultTestSet.suite, expected: results.length }))),
+      saveQualityResults(db, sid(id), modelId, results.map((r) => ({ ...r, configId, ctx, suite: (r as { suite?: string }).suite ?? defaultTestSet.suite, expected: results.length }))),
     saveRecommendation: (id, rec) => { saveRecommendation(db, sid(id), rec, rec.best ? modelOf(id, rec.best.configId) : null) }
   }
 }

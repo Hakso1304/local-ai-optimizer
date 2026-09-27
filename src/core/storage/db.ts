@@ -37,6 +37,7 @@ export function openDb(path: string): DatabaseSync {
   try {
     db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;')
     migrate(db)
+    relabelV2Quality(db)
   } catch (e) {
     db.close() // don't leave the file locked when the schema is unusable
     throw e
@@ -55,6 +56,17 @@ export function insertTelemetrySamples(db: DatabaseSync, sessionId: number, runI
     db.exec('ROLLBACK')
     throw e
   }
+}
+
+/** Data repair, idempotent (runs on every open, no schema bump so older builds can still open the file): builds before
+ *  the fix stored every quality row as suite 'qb-1.1.0', so v2 rows (they carry generatorVersion qbg-2.0.0 and a seed)
+ *  were mislabelled. Relabels them 'qb-2.0.0'; a process still running the old code is repaired on the next open.
+ *  Returns the number of rows changed. */
+export function relabelV2Quality(db: DatabaseSync): number {
+  return Number(db.prepare(`UPDATE quality_result SET payload = json_set(payload, '$.suite', 'qb-2.0.0')
+    WHERE json_valid(payload) AND json_extract(payload, '$.generatorVersion') = 'qbg-2.0.0'
+      AND (json_extract(payload, '$.suiteSeed') IS NOT NULL OR json_extract(payload, '$.instanceSeed') IS NOT NULL)
+      AND json_extract(payload, '$.suite') IS NOT 'qb-2.0.0'`).run().changes)
 }
 
 export function migrate(db: DatabaseSync): number {

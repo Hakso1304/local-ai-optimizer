@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { openDb } from '../src/core/storage/db'
+import { openDb, relabelV2Quality } from '../src/core/storage/db'
 import { sessionInputs, getSession, getSessionResume, latestRecommendation, listSessions, makeSessionStorage, markInterrupted, saveRecommendation, saveSession, seedDemoSession, telemetryForRun } from '../src/core/storage/sessions'
 import { insertTelemetrySamples } from '../src/core/storage/db'
 import type { BenchmarkRunResult, CandidateConfig, ModelMeta, Recommendation } from '../src/shared/bench-types'
@@ -59,7 +59,7 @@ describe('session storage', () => {
     const config = { id: `${model.id}|ngl=all|kv=f16|t=8`, modelId: model.id, kvType: 'f16', gpuLayers: 99, gpuLayersAll: true, threads: 8 } as CandidateConfig
     const machine = { scannedAt: 'scan-1' } as SystemProfile
     const st = makeSessionStorage(db, () => ({ vramBytes: 16e9, candidates: [{ config, model }], machine }))
-    const req = { workload: 'fast_assistant' as const, modelIds: [model.id] }
+    const req = { workload: 'fast_assistant' as const, modelIds: [model.id], qualityMode: 'quick' as const } // v1 rows below
     const id = await st.createSession({ workload: req.workload, request: req, startedAt: 0 })
     const run = { configId: config.id, ctx: 2048, status: 'pass', decodeTps: { value: 300, kind: 'measured' } } as unknown as BenchmarkRunResult
     await st.saveRun(id, run, { samples: [{ ts: 5 } as never], reason: null, stderrTail: [], load: null, startedAt: 1, endedAt: 2 })
@@ -140,12 +140,48 @@ describe('session storage', () => {
     markInterrupted(db)
     expect(latestRecommendation(db, 'coding')).toBeNull()
     const st = makeSessionStorage(db, () => ({ vramBytes: null, candidates: [] }))
-    const id = await st.createSession({ workload: 'coding', request: { workload: 'coding', modelIds: ['m'] }, startedAt: 0 })
+    const id = await st.createSession({ workload: 'coding', request: { workload: 'coding', modelIds: ['m'], qualityMode: 'quick' }, startedAt: 0 })
     const q = (t: string) => ({ testId: t, category: 'coding' as const, weight: 1, pass: true, score: 1, detail: '' })
     await st.saveQuality(id, 'm', 'c', 2048, [q('a'), q('b')])
     expect(await st.listQuality(id, 'm')).toHaveLength(2)
     db.prepare('DELETE FROM quality_result WHERE id = (SELECT max(id) FROM quality_result)').run() // now incomplete
     expect(await st.listQuality(id, 'm')).toEqual([]) // resume re-runs the suite
+    db.close()
+  })
+
+  it('v2 quality: the runner\'s suite id is kept, and resume reuses it only for the session\'s own suite + seed', async () => {
+    const db = openDb(join(dir, 'v2.db'))
+    const st = makeSessionStorage(db, () => ({ vramBytes: null, candidates: [] }))
+    const v2 = (t: string, suiteSeed: number) => ({ testId: t, category: 'coding' as const, weight: 1, pass: true, score: 1, detail: '', suite: 'qb-2.0.0', suiteSeed, instanceSeed: 1, generatorVersion: 'qbg-2.0.0' })
+    const mk = (request: object) => st.createSession({ workload: 'coding', request: { workload: 'coding', modelIds: ['m'], ...request } as never, startedAt: 0 })
+    const id = await mk({ qualitySeed: 7 }) // unset mode = thorough (v2); the runner records its seed
+    await st.saveQuality(id, 'm', 'c', 2048, [v2('a', 7), v2('b', 7)])
+    const rows = await st.listQuality(id, 'm')
+    expect(rows.map((r) => (r as { suite?: string }).suite)).toEqual(['qb-2.0.0', 'qb-2.0.0']) // not overwritten with qb-1.1.0
+    const other = await mk({ qualitySeed: 8 }) // same suite, different seed → different items → re-run
+    await st.saveQuality(other, 'm', 'c', 2048, [v2('a', 7), v2('b', 7)])
+    expect(await st.listQuality(other, 'm')).toEqual([])
+    const quick = await mk({ qualityMode: 'quick' }) // v1 selected: v2 rows don't count
+    await st.saveQuality(quick, 'm', 'c', 2048, [v2('a', 7)])
+    expect(await st.listQuality(quick, 'm')).toEqual([])
+    const noSeed = await mk({}) // v2 without a recorded seed can't be matched
+    await st.saveQuality(noSeed, 'm', 'c', 2048, [v2('a', 7)])
+    expect(await st.listQuality(noSeed, 'm')).toEqual([])
+    db.close()
+  })
+
+  it('relabelV2Quality repairs v2 rows stored as qb-1.1.0 by older builds; v1 rows untouched; idempotent', () => {
+    const db = openDb(join(dir, 'relabel.db'))
+    const sid = saveSession(db, { workload: 'coding', vramBytes: null, candidates: [] }, 'running')
+    const put = (p: object) => db.prepare('INSERT INTO quality_result (session_id, model_id, payload) VALUES (?, ?, ?)').run(sid, 'm', JSON.stringify(p))
+    put({ testId: 'a', suite: 'qb-1.1.0', suiteSeed: 7, instanceSeed: 3, generatorVersion: 'qbg-2.0.0' }) // mislabelled v2
+    put({ testId: 'b', suite: 'qb-1.1.0', suiteSeed: null, instanceSeed: 4, generatorVersion: 'qbg-2.0.0' }) // v2, seed only per item
+    put({ testId: 'c', suite: 'qb-1.1.0' }) // genuine v1
+    put({ testId: 'd', suite: 'qb-1.1.0', generatorVersion: 'qbg-2.0.0' }) // no seed at all: not provably v2 → left
+    expect(relabelV2Quality(db)).toBe(2)
+    const suites = (db.prepare('SELECT payload FROM quality_result ORDER BY id').all() as { payload: string }[]).map((r) => JSON.parse(r.payload).suite)
+    expect(suites).toEqual(['qb-2.0.0', 'qb-2.0.0', 'qb-1.1.0', 'qb-1.1.0'])
+    expect(relabelV2Quality(db)).toBe(0)
     db.close()
   })
 
