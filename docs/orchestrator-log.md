@@ -298,3 +298,6 @@
 
 ## Fable — 2026-09-28 05:22 local
 - 5b64da8 + 73e5455 pushed (S2 T1/T2/T3 negatives; DB read originValidation controls green; replay tests assert replayProof and untouched originals). RED gates: T1 late child, T2 reused parent subtree, T3 direct malformed origin, replay stamping — all S1's in-progress round.
+
+## Fable — 2026-09-28 05:23 local
+- Decision: replay never writes renderProof (any input); replayProof is evidence only; comparisons rely on generation-time renderProof. Guide I-8.0 updated. S1 T1/T2/T3 green in tree; replay stamping fix pending; commit next.

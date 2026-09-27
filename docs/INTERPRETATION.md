@@ -360,7 +360,10 @@ immutable: whether the ORIGINAL producer recorded the generation prompt hash is 
 once and can never be set by a replay; a replay of a replay does not create proof, and a
 row with any reconstruction marker or an incoherent provenance record stays unverified.
 Proof requirements apply to every option in a generation comparison, including the OFF
-baseline; only plain standalone quality without requested kwargs is exempt.
+baseline; only plain standalone quality without requested kwargs is exempt. A replay
+tool never writes renderProof for any row: it writes replayProof (evidence of template
+behaviour with its lineage) and generation comparisons rely exclusively on the
+producer's generation-time renderProof.
 Rule I-8.1 (`gen.best-config`, info): per model: "thinking on (effort low, T=1.0):
 Q +17 [lo, hi] vs off; answers <k>× slower (effective <e> vs <d> t/s)".
 Rule I-8.2 (`gen.stochastic`, note): T > 0 → "sampled (seeded), n=<s> per item".
