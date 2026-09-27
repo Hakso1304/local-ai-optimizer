@@ -286,3 +286,6 @@
 
 ## Fable — 2026-09-28 05:10 local
 - 46755ce pushed (S2 stuck-switch negative, green vs S1's in-tree follow-up). S1 nudged to commit. RECHECK8 running. Session 5 medium phase ongoing.
+
+## Fable — 2026-09-28 05:15 local
+- RECHECK8 committed; T1/T2 HIGH + T3 MED routed to S1 with S2 negatives. b73a8c3 (follow-up) pushed. STATUS/morning report updated. Session 5 medium phase ongoing; lane gate = harness re-review after S3's round.
