@@ -139,4 +139,14 @@ describe('session storage', () => {
     expect(await st.listQuality(id, 'm')).toEqual([]) // resume re-runs the suite
     db.close()
   })
+
+  it('runner-filled run extras (repDecodeTps, minRamAvailBytes) survive the round trip', async () => {
+    const db = openDb(join(dir, 'x.db'))
+    const st = makeSessionStorage(db, () => ({ vramBytes: null, candidates: [] }))
+    const id = await st.createSession({ workload: 'coding', request: { workload: 'coding', modelIds: ['m'] }, startedAt: 0 })
+    const run = { configId: 'm|ngl=all', ctx: 4096, status: 'pass', repDecodeTps: [301.5, 298.2], minRamAvailBytes: { value: 8e9, kind: 'measured' } } as unknown as BenchmarkRunResult
+    await st.saveRun(id, run, { samples: [], reason: null, stderrTail: [], load: null, startedAt: 1, endedAt: 2 })
+    expect((await st.listRuns(id))[0]).toMatchObject({ repDecodeTps: [301.5, 298.2], minRamAvailBytes: { value: 8e9 } })
+    db.close()
+  })
 })
