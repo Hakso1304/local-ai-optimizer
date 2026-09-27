@@ -259,3 +259,6 @@
 
 ## Fable — 2026-09-28 04:23 local
 - #1 validated docs/GPU-QUEUE vs parsers: --reps ignored by runner (S1), validateHarnessLimits not wired (S3), $DB not expanded under shell:false + openDb creates missing DB (S3 launcher + doc), E5 49152 > 14B declared ctx (doc), session ids shift (doc). All routed. Waiting: S1 Q1/Q2 commit; S3 session 5 export.
+
+## Fable — 2026-09-28 04:30 local
+- Pushed 854b133 (Q1/Q2 + req.reps) and a3cc795 (R1–R3); tsc 0; tree clean. Astra RECHECK7 dispatched. #1 verifying its pre-review points landed. Waiting: S3 session 5 export → harness round.
