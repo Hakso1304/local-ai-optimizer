@@ -1179,6 +1179,39 @@ describe('runSession', () => {
     expect(r.rec).toBeNull()
   })
 
+  it('does not start quality on HIP after primary Vulkan unload fails fatally; a successful switch runs it', async () => {
+    const base = generateCandidates(machineFromProfile(machine, 'Vulkan0'), model, { backend: 'vulkan' }, WORKLOADS.general_chat).candidates[0]
+    const hip = { ...base, id: `${base.id}|hip`, backend: 'hip' as const, device: 'ROCm0', ctxSteps: [2048] }
+    const vk = { ...base, id: `${base.id}|less`, backend: 'vulkan' as const, gpuLayers: base.gpuLayers - 1, gpuLayersAll: false, ctxSteps: [2048] }
+    const plan = [hip, vk] // HIP wins quality by layers, after Vulkan finishes the last ladder.
+    const attempt = async (fatal: boolean) => {
+      const primary = fakeBackend(() => ({})), target = fakeBackend(() => ({}))
+      const load = primary.loadModel.bind(primary), unload = primary.unloadModel.bind(primary)
+      let hadLoad = false, fatalCalls = 0
+      primary.loadModel = async (cfg) => { hadLoad = true; return load(cfg) }
+      primary.unloadModel = async () => {
+        if (fatal && hadLoad && primary.pid === undefined) { fatalCalls++; throw new ServerStuckError('primary ownership could not be verified') }
+        await unload()
+      }
+      const out = await run(() => ({}), { ladder: [2048], runQuality: true, qualityMode: 'quick' }, { plan, backends: [
+        { kind: 'vulkan', backend: () => primary, runtimeVersion: 'b1', exePath: 'fake-vulkan', device: 'Vulkan0' },
+        { kind: 'hip', backend: () => target, runtimeVersion: 'b1', exePath: 'fake-hip', device: 'ROCm0' }
+      ] })
+      return { ...out, primary, target, fatalCalls }
+    }
+    const blocked = await attempt(true)
+    expect(blocked.fatalCalls).toBeGreaterThan(0)
+    expect(blocked.target.calls.loads).toHaveLength(1) // its ladder only; no new quality load
+    expect(blocked.s.quality).toHaveLength(0)
+    expect(blocked.rec).toBeNull()
+    expect(blocked.events.at(-1)).toMatchObject({ type: 'session:failed', error: 'primary ownership could not be verified' })
+
+    const clear = await attempt(false)
+    expect(clear.target.calls.loads).toHaveLength(2) // ladder, then quality after the verified switch
+    expect(clear.s.quality).toHaveLength(1)
+    expect(clear.events.at(-1)).toMatchObject({ type: 'session:done' })
+  })
+
   it('F12 (#2 shape): no timings but stream token counts → estimated TPS from those counts', async () => {
     const b = fakeBackend(() => ({}))
     b.runPrompt = async () => ({ ttftMs: 500, promptTokens: 1500, prefillMs: null, prefillTps: null, decodeTokens: 64, decodeMs: null, decodeTps: null, totalMs: 1500, text: 'x', stopType: 'limit', timedOut: false, error: null })
