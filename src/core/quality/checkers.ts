@@ -36,9 +36,15 @@ const res = (pass: boolean, score: number, detail: string): CheckResult => ({ pa
 const clip = (s: string, n = 80) => JSON.stringify(s.length > n ? `${s.slice(0, n)}…` : s)
 
 /** Drop reasoning blocks some templates leave in content, closed or not, then trim:
- *  Qwen/DeepSeek `<think>…</think>` and Gemma 4 `<|channel>thought…<channel|>`. */
+ *  Qwen/DeepSeek `<think>…</think>` and Gemma 4 `<|channel>thought…<channel|>`. A template that opens the block in the
+ *  prompt (Qwen3.x thinking: `…assistant\n<think>\n`) makes the reply start INSIDE it — only the close tag is in the
+ *  content — so a leading segment up to a close tag with no open tag before it is reasoning too (session 5: every
+ *  thinking answer was graded on its reasoning text). */
 export function stripThinking(s: string): string {
-  return s.replace(/<think>[\s\S]*?(<\/think>|$)/gi, '').replace(/<\|channel>thought[\s\S]*?(<channel\|>|$)/gi, '').trim()
+  return s
+    .replace(/^(?:(?!<think>)[\s\S])*?<\/think>/i, '')
+    .replace(/^(?:(?!<\|channel>)[\s\S])*?<channel\|>/i, '')
+    .replace(/<think>[\s\S]*?(<\/think>|$)/gi, '').replace(/<\|channel>thought[\s\S]*?(<channel\|>|$)/gi, '').trim()
 }
 
 /** Contents of the first ``` fence (preferring a js/javascript one); the whole string if there is no fence. */

@@ -17,6 +17,15 @@ describe('text checkers', () => {
     expect(stripThinking('<think>never closed')).toBe('')
     expect(exactMatch('<think>hmm Dave</think>Carol', 'Carol').pass).toBe(true)
   })
+  it('strips reasoning whose open tag was in the prompt (Qwen3.x thinking template), and nothing else', () => {
+    // Verbatim session-5 reply shape: the template ends `…assistant\n<think>\n`, so content starts inside the block.
+    expect(stripThinking('The user wants me to output exactly "READY".\n</think>\n\nREADY')).toBe('READY')
+    expect(exactMatch('Remove reds: blue, green\n</think>\n\nblue,green', 'blue,green').pass).toBe(true)
+    expect(stripThinking('Dave? no.<channel|>\nCarol')).toBe('Carol')
+    // A normal answer, or one whose block opens before the close, is unchanged by the leading-segment rule.
+    expect(stripThinking('READY')).toBe('READY')
+    expect(stripThinking('A <think>x</think> B')).toBe('A  B')
+  })
   it('strips Gemma 4 thought channels, closed, empty or unclosed', () => {
     expect(stripThinking('<|channel>thought\n*   Alice > Bob\n<channel|>Carol')).toBe('Carol')
     expect(stripThinking('<|channel>thought\n<channel|>BANANA')).toBe('BANANA')
