@@ -46,8 +46,8 @@ This is the MVP Definition of Done, the later user requirements and the cross-cu
 | Spill false-positive fix (`-lm none` pinned host memory) | DONE-WITH-CAVEAT | 2d51cc0: spill = shared − host-pinned − unsaturated baseline, only while dedicated ≥ 80 %; session tests | Checked against #3's figures (Qwen3.8 ngl 50: 3.82 GiB shared, 4 GiB free); not yet re-run live |
 | VRAM in use before planning | DONE | 960166c (measured before planning) + 4de83cc (`machineFromProfile` reads it; the note says when unavailable); `candidates.test.ts` | — |
 | Sampler pid-column restart | DONE-WITH-CAVEAT | 82670a9 (sampler `hasPidColumns`/`restart`) + 5f8f669 (runner restarts once; `samplerErrors` persisted); session test | Fake sampler only; live behaviour depends on typeperf timing |
-| Responsive layout | pending: #2 | — | — |
-| GPT reviewer pass | pending: #4 | — | — |
+| Responsive layout | DONE | aea9c42: fluid main, auto-fit grids, container-sized charts, min window 960×640; CDP-verified at 1280×720 / 1920×1080 / 2560×1440 | — |
+| GPT reviewer pass (Worker #4, GPT-6-Astra) | PARTIAL | cf05710: 14 findings (5 HIGH), 6 it.fails repros in tests/review-w4; fixes in progress (#1 runner/candidates/cliff, #2 llamacpp/storage/validate, #3 needle checker); second pass (hub/IPC/packaging/renderer/sandbox) running | Flip to DONE when the it.fails markers are removed |
 | HF download with login | DONE-WITH-CAVEAT | Core 282b3ec + `tests/hub.test.ts` (local servers: resume, redirect/no token leak, sha256, 401/403/404); IPC/page 2a349e7, 09fbf8b; wired fa491b0, 486f958 | No real huggingface.co call in the test suite; not yet verified live |
 
 ## Cross-cutting requirements
