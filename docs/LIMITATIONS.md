@@ -42,7 +42,7 @@ This is the single consolidated list, and every item is checked against the code
 - **PARTIAL: the ladder can include 128K.** It only runs where the declared ctx and the VRAM estimate allow; none of the calibrated models did (8B: memory-bound at 64K).
 
 ## Quality
-- **DONE-WITH-CAVEAT: suite v1 (`qb-1.0.0`) is small and strict.** It has 17 tests in 6 categories, with deterministic checkers and one rep at temperature 0. It is a relative signal, not a leaderboard; with few tests per category, one flaky answer moves Q by 5–33 points.
+- **DONE-WITH-CAVEAT: suite `qb-1.1.0` is small and strict.** It has 17 tests in 6 categories, with deterministic checkers and one rep at temperature 0. It is a relative signal, not a leaderboard; with few tests per category, one flaky answer moves Q by 5–33 points.
 - **DONE-WITH-CAVEAT: without a quality run, Q is an ESTIMATED prior** from parameter count and quantization. It is labelled in the breakdown and reasons, and it can decide close calls (e.g. 8B vs 14B for Document Analysis).
 - **PARTIAL: thinking-model token boost (×4) is off**, because `ModelMeta` has no `supportsThinking`.
 - **DONE-WITH-CAVEAT: model-written JS runs in a child-process sandbox** (`--permission`, memory cap, vm context, timeout). Network is blocked by the vm context, not by `--permission`.

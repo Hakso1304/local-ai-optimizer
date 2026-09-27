@@ -259,10 +259,10 @@ Server restarts between phases only when -c changes.
 
 ---
 
-## 4. Quality benchmark (suite `qb-1.0.0`, implemented)
+## 4. Quality benchmark (suite `qb-1.1.0`, implemented)
 
 Source of truth: `src/core/quality/tests.v1.json` (17 tests), checkers in `checkers.ts`, runner/scoring in `index.ts`. Not duplicated here.
-- Categories: IF-01..03 instruction, RS-01..04 reasoning (RS-03: 2^20 mod 7 = **4**), CD-01..03 coding, SO-01..02 structured, EX-01..02 extraction, CR-10/50/90 context (needle at 10/50/90 % depth, seeded filler).
+- Categories: IF-01..03 instruction, RS-01..04 reasoning (RS-03: 2^20 mod 7 = **4**; since qb-1.1.0 chain-of-thought is allowed with a final `Answer:` line, checked by `finalAnswer`), CD-01..03 coding, SO-01..02 structured, EX-01..02 extraction, CR-10/50/90 context (needle at 10/50/90 % depth, seeded filler).
 - All requests `temperature:0, seed:1`, no system prompt. Thinking models: reasoning/coding `max_tokens` ×4.
 - `jsCode` cases are `{expr, expected}` compared via canonical JSON. Model code runs **out of process** (`sandbox.ts`: `process.execPath` + `ELECTRON_RUN_AS_NODE=1`, `--permission`, `--max-old-space-size`, fresh vm context, timeout, 64 KB stdout cap). Workers with `resourceLimits` were rejected: a heap blow-up aborts the host [V per sandbox.ts].
 - `QualityResult {testId, category, weight, pass, score, detail}` (exported by `core/quality`, re-exported by `bench-types.ts`).
@@ -407,7 +407,7 @@ Schema version in `PRAGMA user_version`. Migrations are an ordered array of SQL 
 | Vulkan first-shape compile inflates TTFT | Shape warmup (§3.4). |
 | AMD temps/power unavailable | Documented UNAVAILABLE. Cooldown pacing instead. |
 | Memory estimate wrong for SWA/MoE/hybrid | Confidence flag, calibration ratio, and the guards (the estimate only prunes; it never decides). |
-| Quality suite too small / contaminated | Version it (`qb-1.0.0`), keep checkers strict, show per-test results. It's a relative signal, not a leaderboard. |
+| Quality suite too small / contaminated | Version it (`qb-1.1.0`), keep checkers strict, show per-test results. It's a relative signal, not a leaderboard. |
 | Model-generated JS execution | Permission model + vm context without globals + timeout + memory cap (network is not blocked by `--permission` in Node 24, hence vm). |
 | Long ladders take hours for 8B@64K on partial offload | Stop rules, 600 s rung cap, time estimate before start, resume. |
 | Antivirus/SmartScreen quarantining downloaded exe | Verify files after unzip. Surface "blocked" errors from spawn (EPERM/ENOENT). |

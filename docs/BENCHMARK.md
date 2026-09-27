@@ -32,7 +32,7 @@ A step is one candidate config at one context size. The server is started with `
 | `avgGpuUtil`, `avgCpuUtil` | mean over samples: GPU = max over the PID's 3D/Compute engine groups; CPU = `Processor(_Total)` | measured |
 | `status`, `failureKind` | see §4 | — |
 | `warm` | true when the size-matched warmup succeeded before the measured reps (X13) | — |
-| `versions` | `{benchmark: BENCHMARK_VERSION ('bench-1.0.0'), prompts: PROMPT_VERSION ('ladder-1'), quality: 'qb-1.0.0', runtime: SessionDeps.runtimeVersion}` (X17) | declared |
+| `versions` | `{benchmark: BENCHMARK_VERSION ('bench-1.0.0'), prompts: PROMPT_VERSION ('ladder-1'), quality: defaultTestSet.suite (now 'qb-1.1.0'), runtime: SessionDeps.runtimeVersion}` (X17) | declared |
 
 - Telemetry: `startSampler({pid})` (`src/core/telemetry/sampler.ts`) runs `typeperf -si 1`.
   - It starts **during load**, as soon as the new server pid exists, and runs through warmup and reps.
@@ -71,10 +71,10 @@ A step is one candidate config at one context size. The server is started with `
 
 ACCEPTANCE A11 mapping: ok → pass; failed / oom / device_lost / crashed → fail + kind.
 
-## 5. Quality suite v1 (`qb-1.0.0`)
+## 5. Quality suite (`qb-1.1.0`, file `tests.v1.json`)
 
 - Files: `src/core/quality/tests.v1.json` (17 tests), `checkers.ts`, `index.ts`.
-- Categories: instruction IF-01..03, reasoning RS-01..04, coding CD-01..03 (`jsCode` cases `{expr, expected}`, compared as canonical JSON), structured SO-01..02, extraction EX-01..02, context CR-10/50/90 (needle at 10/50/90 % depth in seeded filler).
+- Categories: instruction IF-01..03, reasoning RS-01..04 (since qb-1.1.0: step-by-step reasoning allowed, ending in a final `Answer: X` line; the `finalAnswer` checker takes the last Answer line, tolerating case, bold and backticks, and applies the inner exact/number check), coding CD-01..03 (`jsCode` cases `{expr, expected}`, compared as canonical JSON), structured SO-01..02, extraction EX-01..02, context CR-10/50/90 (needle at 10/50/90 % depth in seeded filler).
 - Runner (`session.ts` `runQuality`): runs once per **model**, on the first candidate with a usable step. It loads at ctx = min(profile.targetContext, practical ceiling) with filler `min(3000, 0.6·ctx)` tokens. Each prompt goes `applyTemplate(messages)` → `runPrompt` (temp 0, seed 1) → `evaluateAsync` (`jsCode` runs in the child-process sandbox).
 - A failed request counts as `pass:false` with the error in `detail`. An incomplete suite (cancel/crash) is **discarded**, not stored as partial.
 - Q = 100 · Σ_c W_c · passRate_c / Σ_c W_c over the categories that have results, where passRate_c = Σ weight·pass / Σ weight. W = instruction .2, reasoning .25, coding .25, structured .1, extraction .1, context .1. Scoring restricts c to the profile's `promptSetIds`.
