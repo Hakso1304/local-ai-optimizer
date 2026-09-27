@@ -1,3 +1,5 @@
+// Test scope: REAL typeperf output captured on the dev box (tests/fixtures/telemetry/*.csv) and synthetic rows for
+// edge shapes; the parser runs for real. Live typeperf (spawn/restart/stop) is covered in tests/telemetry/*.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'

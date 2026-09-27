@@ -59,7 +59,8 @@ describe('request validation (renderer → main trust boundary)', () => {
     expect(sanitizeRequest({ ...base, minDecodeTps: -1 }, roots)).toMatchObject({ ok: false })
   })
 
-  it('an existing model reached through a junction that points outside the root is rejected (W4 F11)', async () => {
+  // Windows integration (T13): NTFS junctions; the lexical checks above run everywhere.
+  it.skipIf(process.platform !== 'win32')('an existing model reached through a junction that points outside the root is rejected (W4 F11) [Windows: junctions]', async () => {
     const { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } = await import('node:fs')
     const { tmpdir } = await import('node:os')
     const { join } = await import('node:path')

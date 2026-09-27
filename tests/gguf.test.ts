@@ -157,7 +157,8 @@ describe('readGgufMetadata', () => {
   })
 
   const real = join(__dirname, '..', 'models', 'qwen2.5-0.5b-instruct-q8_0.gguf')
-  it.skipIf(!existsSync(real))('reads the real qwen2.5-0.5B header (DESIGN §2.6 values)', async () => {
+  // Local-model verification (T13): runs only where the 0.5B file exists; the synthetic headers above always run.
+  it.skipIf(!existsSync(real))(`reads the real qwen2.5-0.5B header (DESIGN §2.6 values)${existsSync(real) ? '' : ' — SKIPPED: models/qwen2.5-0.5b-instruct-q8_0.gguf not present'}`, async () => {
     const m = await readGgufMetadata(real)
     expect(m).toMatchObject({
       arch: 'qwen2', sizeLabel: '630M', contextLength: 32768, blockCount: 24, embeddingLength: 896, headCount: 14, headCountKv: 2,

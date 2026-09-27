@@ -1,3 +1,5 @@
+// Test scope: excerpts of the real chat templates on this machine (not the whole files), a temp sidecar file, and a
+// synthetic token stream. No network: generation_config.json fetching is checked by hand against huggingface.co.
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'

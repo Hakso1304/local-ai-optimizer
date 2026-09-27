@@ -1,3 +1,5 @@
+// Test scope: REAL node:sqlite on temp files and the real storage code; runs/quality rows are synthetic payloads (the
+// runner's shape, not measured data). The demo seed uses tests/fixtures/scoring.
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'

@@ -6,7 +6,7 @@ import { isAllowedDest, resolvedProbe } from '../src/main/hub-logic'
 import { rowId } from '../src/main/validate'
 
 describe('download destination (W4b F4/F19) and row ids', () => {
-  it('rejects a junction inside a model dir that points elsewhere; free space is read on the resolved volume', () => {
+  it.skipIf(process.platform !== 'win32')('rejects a junction inside a model dir that points elsewhere; free space is read on the resolved volume [Windows: junctions]', () => {
     const base = mkdtempSync(join(tmpdir(), 'lao-dest-'))
     try {
       const root = join(base, 'models'), outside = join(base, 'elsewhere')

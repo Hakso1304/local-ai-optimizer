@@ -1,3 +1,5 @@
+// Test scope: MOCKED — electron (safeStorage unavailable), node:fs, and the Hugging Face client. Proves only the
+// one-download lock ordering in main/hub.ts; says nothing about encryption, disk writes or the network.
 import { expect, it, vi } from 'vitest'
 vi.mock('electron', () => ({ BrowserWindow: vi.fn(), safeStorage: { isEncryptionAvailable: () => false } }))
 vi.mock('node:fs', () => ({

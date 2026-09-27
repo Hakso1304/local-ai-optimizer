@@ -1,3 +1,5 @@
+// Test scope: REAL — the built Electron app, its IPC handlers, sqlite and the single-instance lock, in a throwaway
+// user-data dir. Not covered: GPU/llama-server (no session is started).
 // Integrated main-process regression (W4c T01): the real built app (out/) with its real IPC handlers, driven over
 // CDP like the manual verification runs. Uses a throwaway --user-data-dir, never the real app data. Skipped when
 // there is no build or no Electron binary (run `npm run build` first).
@@ -60,7 +62,7 @@ describe.skipIf(!canRun)('main process (real Electron, real IPC)', { timeout: 12
       app.kill()
       await Promise.race([gone, sleep(15_000)]) // wait for the real exit before deleting its user-data dir
     }
-    rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 })
+    try { rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }) } catch { /* temp dir: a late file lock must not fail the suite */ }
   })
 
   it('marks a session left running by a previous run as interrupted on launch', async () => {
