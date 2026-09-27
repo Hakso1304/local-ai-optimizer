@@ -123,6 +123,37 @@ export interface ModelMeta {
   expertUsedCount?: number | null
   /** Generation knobs (filled by #2 from the chat template + optional HF generation_config.json). */
   genKnobs?: GenKnobs
+  /** Same base model across quantizations (I-7.5): `<repoId>#<file stem without quant>`, from the HF sidecar. */
+  baseModelId?: string
+  /** Other quantizations of this base in the linked repo (sidecar cache of listGgufFiles). */
+  siblingQuants?: SiblingQuant[]
+}
+
+/** One other quantization of the same base in the linked HF repo. */
+export interface SiblingQuant {
+  repoId: string
+  /** repo path of the file (first shard when split) */
+  path: string
+  quant: string
+  /** total bytes (all shards) */
+  sizeBytes: number
+  shards?: number
+}
+
+/** "not benchmarked: sibling quantization would fit better" — a structured, ESTIMATED planner suggestion. */
+export interface QuantSuggestion {
+  modelId: string
+  sibling: SiblingQuant
+  /** at the workload's target rung */
+  ctx: number
+  gpuLayers: number
+  layers: number
+  /** current file at the same ctx, for comparison */
+  currentGpuLayers: number
+  estVramBytes: Metric
+  /** full-gpu: every layer on the GPU; partial: some layers on the CPU (decode bound by them) */
+  speedClass: 'full-gpu' | 'partial'
+  text: string
 }
 
 /** What a model's chat template / model card lets us vary at generation time. */
@@ -246,6 +277,8 @@ export interface RejectedCandidate {
 export interface CandidateSet {
   candidates: CandidateConfig[]
   rejected: RejectedCandidate[]
+  /** Smaller sibling quantizations (not local) that would fit more layers on the GPU — estimated, not benchmarked. */
+  suggestions?: QuantSuggestion[]
 }
 
 /** Runner writes pass|fail|timeout|cancelled; 'degraded' = completed but runner-flagged (unstable/noisy).

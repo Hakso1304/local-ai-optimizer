@@ -17,6 +17,7 @@ import { runSession, type InstalledBackend, type SessionStorage } from '../core/
 import { applicableObservations, generateCandidates, machineFromProfile, planCandidates, rulesForRequest, vramBudgetKey, type PlannedBackend } from '../core/benchmark/candidates'
 import { findGgufModels, toModelMeta } from '../core/models/gguf'
 import { fetchGenerationConfig, readSidecar, writeSidecar } from '../core/hub/modelcard'
+import { refreshSiblings } from '../core/hub/quants'
 import { defaultLmStudioDirs, defaultOllamaRoot, listOllamaModels, toModelInfo as toOllamaModelInfo } from '../core/runtimes/ollama/models'
 import { readVramInUse, startSampler, stopAllSamplers, withNvidia } from '../core/telemetry/sampler'
 import { probeNvidiaSmi, startNvidiaSampler, type NvidiaProbe } from '../core/telemetry/nvidia'
@@ -74,6 +75,8 @@ async function listAllModels(): Promise<ModelInfo[]> {
 }
 /** Fetch + cache one model card (5 s timeout inside). Records the error instead of retrying forever. */
 async function fetchCard(path: string, repoId: string): Promise<{ generation?: unknown; error?: string }> {
+  // sibling quantizations of the linked repo (I-9.2 suggestions); a failure here never blocks the model card
+  if (!readSidecar(path)?.siblingsFetchedAt) await refreshSiblings(path, repoId).catch(() => writeSidecar(path, { siblingsFetchedAt: new Date().toISOString() }))
   try {
     const generation = await fetchGenerationConfig(repoId)
     writeSidecar(path, { generation: generation ?? undefined, fetchedAt: new Date().toISOString(), fetchError: generation ? undefined : 'repository has no generation_config.json' })
@@ -88,7 +91,7 @@ let cardRefresh: Promise<void> | null = null
 function refreshModelCards(ms: ModelInfo[]): void {
   if (cardRefresh) return
   const dirs = modelDirs()
-  const todo = ms.filter((m) => m.runtime === 'llamacpp' && dirs.some((d) => insideSomeRoot(m.path, [d])) && (() => { const s = readSidecar(m.path); return !!s?.repoId && !s.fetchedAt })())
+  const todo = ms.filter((m) => m.runtime === 'llamacpp' && dirs.some((d) => insideSomeRoot(m.path, [d])) && (() => { const s = readSidecar(m.path); return !!s?.repoId && (!s.fetchedAt || !s.siblingsFetchedAt) })())
   if (!todo.length) return
   cardRefresh = (async () => { for (const m of todo) await fetchCard(m.path, readSidecar(m.path)!.repoId!) })().finally(() => { cardRefresh = null })
 }

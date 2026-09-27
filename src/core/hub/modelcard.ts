@@ -1,7 +1,7 @@
 // Model-card sampling defaults (generation_config.json) and the per-model sidecar cache <file>.gguf.meta.json.
 // Never blocks model enumeration: callers fetch lazily, 5 s timeout, and read the cache synchronously.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import type { GenKnobs } from '../../shared/bench-types'
+import type { GenKnobs, SiblingQuant } from '../../shared/bench-types'
 
 const HF = 'https://huggingface.co'
 
@@ -13,6 +13,9 @@ export interface ModelSidecar {
   generation?: GenKnobs['recommended']
   fetchedAt?: string
   fetchError?: string
+  /** Other quantizations of the same base in repoId (refreshSiblings). */
+  siblings?: SiblingQuant[]
+  siblingsFetchedAt?: string
 }
 
 export const sidecarPath = (modelPath: string) => `${modelPath}.meta.json`

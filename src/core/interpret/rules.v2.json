@@ -64,6 +64,7 @@
     { "id": "I-8.2", "key": "gen.stochastic", "section": 8, "severity": "note", "metric": "gen", "origin": "policy", "params": {}, "text": "{model}: {gen} is sampled (seeded), n={samples} per item." },
     { "id": "I-8.3", "key": "gen.effort-saturation", "section": 8, "severity": "note", "metric": "gen", "origin": "policy", "params": {}, "text": "{model}: effort {hi} adds reasoning ({rhi} vs {rlo} tokens) with a quality difference {diff} whose interval includes 0 — prefer effort {lo}." },
 
+    { "id": "I-9.2", "key": "plan.sibling-quant", "section": 9, "severity": "note", "metric": "estVramBytes", "origin": "heuristic", "params": {}, "text": "{model}: {text}.", "action": "download" },
     { "id": "I-9.1", "key": "panel.actions", "section": 9, "severity": "info", "metric": "action", "origin": "policy", "params": {}, "text": "Warn/critical insights carry an action whose precondition holds." }
   ]
 }

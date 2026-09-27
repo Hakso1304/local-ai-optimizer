@@ -1,7 +1,7 @@
 // Candidate configs per model + memory estimates for pruning (DESIGN §2.7, §6). Pure, deterministic.
 // Estimates only prune; they are never shown as facts (kind 'estimated').
 import type {
-  CandidateConfig, CandidateSet, GpuBackendKind, KvType, MachineLimits, Metric, ModelMeta, PlannedSkip, PlanningSnapshot, RejectedCandidate, VramBudgetObservation, WorkloadProfile
+  CandidateConfig, CandidateSet, GpuBackendKind, KvType, MachineLimits, QuantSuggestion, Metric, ModelMeta, PlannedSkip, PlanningSnapshot, RejectedCandidate, VramBudgetObservation, WorkloadProfile
 } from '../../shared/bench-types'
 import type { SystemProfile } from '../../shared/types'
 import type { SessionRequest } from '../../shared/bench-events'
@@ -370,7 +370,8 @@ export function generateCandidates(
   if (!hasGpu || (candidates.length > 0 && !rules.heavyMode && model.paramCount !== null && model.paramCount <= rules.cpuOnlyMaxParams)) add(build(0, 'f16'))
 
   for (const c of candidates.splice(rules.maxPerModel)) rejected.push({ id: c.id, modelId: model.id, reason: `over the per-model cap of ${rules.maxPerModel}` })
-  return { candidates, rejected }
+  const suggestions = quantSuggestions(machine, model, workload, rules)
+  return { candidates, rejected, ...(suggestions.length ? { suggestions } : {}) }
 }
 
 /** One installed backend as the planner sees it: its own device id (Vulkan0 / ROCm0), build and budget observations. */
@@ -385,5 +386,44 @@ export function planCandidates(p: SystemProfile, model: ModelMeta, backends: Pla
     out.candidates.push(...(i === 0 ? set.candidates : set.candidates.filter((c) => c.gpuLayers > 0)))
     out.rejected.push(...(i === 0 ? set.rejected : set.rejected.filter((r) => !r.id.includes('|ngl=0|'))))
   })
+  return out
+}
+
+/** Smaller sibling quantizations (from the linked repo) that would put MORE layers on the GPU than this file at the
+ *  workload's target rung — only when this file does not fully offload there. Estimated (DESIGN §2.7 estimate vs the
+ *  planning budget, a measured per-process budget when qualified); `localFiles` (basenames) are skipped: a local
+ *  sibling is benchmarked as its own model. */
+export function quantSuggestions(machine: MachineLimits, model: ModelMeta, workload: WorkloadProfile, rules: CandidateRules = DEFAULT_CANDIDATE_RULES, localFiles: string[] = []): QuantSuggestion[] {
+  const vram = num(machine.vramBytes)
+  if (!model.siblingQuants?.length || vram === null || machine.gpuDevice === null) return []
+  const ladder = rules.ctxLadder.filter((c) => c <= (model.ctxTrain ?? rules.unknownCtxMax))
+  const ctx = ladder.filter((c) => c <= workload.targetContext).at(-1) ?? ladder[0]
+  if (ctx === undefined) return []
+  const adapter = vram - (num(machine.vramInUseBytes) ?? rules.vramInUseUnknownBytes) - rules.vramMarginBytes
+  const budget = (m: ModelMeta, ngl: number) => {
+    const e = estimateMemory(m, ngl, ctx, 'f16', rules.ubatch)
+    const b = budgetFor(machine, Math.max(e.vramWeightsBytes, e.vramKvBytes, e.vramOverheadBytes) || null)
+    return { e, cap: b.kind === 'measured' && b.value !== null ? Math.min(adapter, b.value) : adapter, perProcess: b.kind === 'measured' }
+  }
+  const maxNgl = (m: ModelMeta) => { for (let n = m.layers; n > 0; n--) { const { e, cap } = budget(m, n); if (e.vramBytes <= cap) return n } return 0 }
+  const current = maxNgl(model)
+  if (current >= model.layers) return []
+  const local = new Set(localFiles.map((f) => f.toLowerCase()))
+  const out: QuantSuggestion[] = []
+  for (const s of model.siblingQuants) {
+    const file = s.path.split('/').pop()!
+    if (s.sizeBytes >= model.fileBytes || local.has(file.toLowerCase())) continue
+    const m = { ...model, fileBytes: s.sizeBytes, quant: s.quant }
+    const n = maxNgl(m)
+    if (n <= current) continue
+    const full = n >= model.layers
+    const { e: { vramBytes: est }, perProcess } = budget(m, n)
+    const basis = perProcess ? 'measured per-process budget' : 'adapter budget; no measured per-process ceiling on this backend yet — it may be lower'
+    out.push({
+      modelId: model.id, sibling: s, ctx, gpuLayers: n, layers: model.layers, currentGpuLayers: current, speedClass: full ? 'full-gpu' : 'partial',
+      estVramBytes: { value: est, kind: 'estimated', source: `DESIGN §2.7 at ${ctxK(ctx)}, ${s.quant} ${gib(s.sizeBytes)}` },
+      text: `not benchmarked: sibling quantization ${file} (${gib(s.sizeBytes)}) would fit with ${n}/${model.layers} layers on GPU at ${ctxK(ctx)} (estimated vs the ${basis}; this file: ${current}/${model.layers})${full ? ' — full offload' : ''} — download to include`
+    })
+  }
   return out
 }

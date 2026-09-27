@@ -1,8 +1,9 @@
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { open, type FileHandle } from 'node:fs/promises'
 import { basename, join } from 'node:path'
-import type { GenKnobs, ModelMeta } from '../../shared/bench-types'
+import type { GenKnobs, ModelMeta, SiblingQuant } from '../../shared/bench-types'
 import { readSidecar } from '../hub/modelcard'
+import { quantStem } from '../hub/quants'
 import type { GgufMetadata, ModelInfo } from '../../shared/types'
 
 // GGUF v2/v3 header reader (docs/DESIGN.md §2.6). Streams through the file with a 1 MiB window:
@@ -291,12 +292,20 @@ export async function findGgufModels(dirs: string[]): Promise<ModelInfo[]> {
         // cached generation_config.json (fetched lazily elsewhere) and its repo; every caller (app, harness) sees them
         const sc = readSidecar(path)
         const knobs = { ...meta.genKnobs, ...(sc?.generation ? { recommended: sc.generation } : {}), ...(sc?.repoId ? { repoId: sc.repoId } : {}) }
-        return { ...base, meta: sc?.generation || sc?.repoId ? { ...meta, genKnobs: knobs } : meta }
+        // I-7.5 identity + sibling quants come from the linked repo only (never guessed from the file name alone).
+        const repo = sc?.repoId ? { baseModelId: `${sc.repoId}#${quantStem(path)}`, ...(sc.siblings ? { siblingQuants: sc.siblings } : {}) } : {}
+        return { ...base, meta: sc?.generation || sc?.repoId ? { ...meta, genKnobs: knobs, ...repo } : meta }
       } catch (e) {
         return { ...base, meta: null, metaError: (e as Error).message }
       }
     })
   )
+}
+
+/** Sidecar-derived identity attached by findGgufModels (not GGUF header facts). */
+const repoFacts = (g: object): Pick<ModelMeta, 'baseModelId' | 'siblingQuants'> => {
+  const x = g as { baseModelId?: string; siblingQuants?: SiblingQuant[] }
+  return { ...(x.baseModelId ? { baseModelId: x.baseModelId } : {}), ...(x.siblingQuants ? { siblingQuants: x.siblingQuants } : {}) }
 }
 
 /** GGUF facts → the scorer's ModelMeta. null (with reason) when a field the planner needs is missing. */
@@ -314,7 +323,8 @@ export function toModelMeta(info: ModelInfo): { meta: ModelMeta } | { meta: null
       headsKvPerLayer: g.headCountKvPerLayer, fullAttentionInterval: g.fullAttentionInterval, slidingWindowPattern: g.slidingWindowPattern,
       keyLengthSwa: g.keyLengthSwa, valueLengthSwa: g.valueLengthSwa, supportsThinking: g.supportsThinking,
       expertCount: g.expertCount, expertUsedCount: g.expertUsedCount,
-      genKnobs: g.genKnobs
+      genKnobs: g.genKnobs,
+      ...repoFacts(g)
     }
   }
 }

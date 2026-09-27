@@ -31,4 +31,11 @@ export type ActionType =
   | 'run-thorough-quality' | 'rerun-idle' | 'rerun-comparable' | 'retry-telemetry' | 'inspect-diagnostics'
   /** unload + fresh server + re-measure the rung once (placement spill, I-2.8) */
   | 'restart-runtime'
+  /** download a sibling quantization from the linked HF repo: "download <owner>/<repo>/<path in repo>" (I-9.2) */
+  | 'download'
 export const action = (type: ActionType, arg?: string): string => (arg ? `${type} ${arg}` : type)
+/** "download owner/repo/dir/file.gguf" → { repoId: 'owner/repo', path: 'dir/file.gguf' } (for the Hub page). */
+export function parseDownloadAction(a: string | undefined): { repoId: string; path: string } | null {
+  const m = /^download ([^/\s]+\/[^/\s]+)\/(\S.*)$/.exec(a ?? '')
+  return m ? { repoId: m[1], path: m[2] } : null
+}

@@ -4,7 +4,7 @@ import type { CandidateInput, Metric, QualityCategory } from '../../shared/bench
 import { fmtCtx, isUsable, val } from '../scoring/cliff'
 import { categoryFlags, type UncertaintyRow } from '../scoring/uncertainty'
 import { genLabel } from '../benchmark/gen'
-import { KV_Q8_OVER_F16 } from '../benchmark/candidates'
+import { KV_Q8_OVER_F16, quantSuggestions } from '../benchmark/candidates'
 import { DEFAULT_SCORING_CONFIG } from '../scoring/workloads'
 import { action, cite, P, rule, RULES_VERSION, tag, type Severity } from './catalog'
 import { difference, fmtDiff, type CandidateVerdict, type StoredRun, type Verdicts } from './verdicts'
@@ -319,6 +319,15 @@ export function interpret(v: Verdicts): Insight[] {
     const ceil = (c: typeof o) => { const xs = ok(c).map((r) => val(r.peakVramBytes)).filter((x): x is number => x !== null); return xs.length ? gib(Math.max(...xs)) : 'unavailable' }
     add('speed.backend', { other: 'HIP', base: 'Vulkan', config: id(b), dOther: t1(val(at(o).decodeTps, true)!), dBase: t1(val(at(b).decodeTps, true)!), ctx: fmtCtx(ctx), cOther: ceil(o), cBase: ceil(b) },
       [ev('decodeTps', at(o).decodeTps, ctx, id(o)), ev('decodeTps', at(b).decodeTps, ctx, id(b))], { configId: id(o) })
+  }
+  // I-9.2: a smaller sibling quantization of the linked repo would put more layers on the GPU (estimated, not run).
+  // Siblings present in this session are benchmarked as their own models and skipped here.
+  const localFiles = allInputs.map((c) => c.model.id.split(/[\\/]/).pop()!)
+  for (const m of [...new Map(allInputs.map((c) => [c.model.id, c.model])).values()]) {
+    for (const s of quantSuggestions(machine, m, profile, undefined, localFiles)) {
+      add('plan.sibling-quant', { model: m.name, text: s.text }, [ev('estVramBytes', s.estVramBytes, s.ctx), num('siblingSizeBytes', s.sibling.sizeBytes, 'declared')],
+        { action: action('download', `${s.sibling.repoId}/${s.sibling.path}`) })
+    }
   }
   for (const m of [...new Map(allInputs.map((c) => [c.model.id, c.model])).values()]) {
     if (m.expertCount && m.expertCount > 0) add('speed.moe-note', { model: m.name, used: m.expertUsedCount ?? '?', experts: m.expertCount }, [num('expertCount', m.expertCount, 'declared')])
