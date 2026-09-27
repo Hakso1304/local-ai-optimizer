@@ -346,3 +346,6 @@
 
 ## Fable — 2026-09-28 06:30 local
 - Astra w4x per-stage gate checklist landed (docs/review-w4x-gate-2026-09-28.md). S3: W1-W3 in progress (W4 ce76694 done; S2 negatives c6874fa: 4 RED targets). S1: 859f9d6 reconciliation export; now scripts/release-packet.ts (gate RELEASE RECORD as read-only CLI). #2: gate skip policy + packaged --list-devices check. #3: audits done (E-rows 8/8, CHANGELOG 10/12 fixed 8a0d99a, morning report 3 mismatches fixed a28dad1). Pushed through 859f9d6. Lane HELD.
+
+## Fable — 2026-09-28 06:36 local
+- S3 W1 fdaa96e, W2/W3 c9fdcde pushed; W negatives GREEN 46/46, tsc clean. Astra W re-check (w4y) dispatched. S1 release-packet.ts in progress; S3 next hip-probe wrapper + standalone A/B gate; S2 evidence E-49..51 closing. Lane HELD until w4y + first release packet.
