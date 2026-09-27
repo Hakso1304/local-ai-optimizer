@@ -211,3 +211,6 @@
 
 ## Fable — 2026-09-28 03:51 local
 - P1/P2 field contract fixed: row.renderProof {rowId, promptSha256, renderedSha256, counterfactualSha256, keys, status}, row.requestedSampling {…, seed}, row.promptSha256 = sha256 of the exact runPrompt string; replay tool stamps proof on a separate export payload with identity disclosure. S1 implementing, S2 testing.
+
+## Fable — 2026-09-28 03:53 local
+- 605dea8 pushed: 4 ordinary RED tests (P1 copied proof, P1 wrong prompt SHA, P2 seed mismatch, P3 null counterfactual) are the acceptance gate for S1's P1–P3 commit — master intentionally red until it lands. rowId = proofRowId(row) in src/core/benchmark/gen.ts; row.promptSha256 = sha256 of the exact runPrompt string.
