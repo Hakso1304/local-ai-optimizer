@@ -1,5 +1,5 @@
 // Core session runner E2E on real hardware, independent of the Electron/IPC wiring.
-// Usage: npx tsx scripts/run-session.ts <A|B|C|H> [--heavy] [--workload coding] [--models a,b] [--ladder 2048,8192] [--no-quality] [--ram-abort-gib 3]
+// Usage: npx tsx scripts/run-session.ts <A|B|C|H> [--heavy] [--workload coding] [--models a,b] [--ladder 2048,8192] [--no-quality] [--ram-abort-gib 5] [--required-ctx 131072]
 //   A  coding workload, qwen2.5-1.5b + llama-3.1-8b, quality on, default ladder/reps
 //   B  same session, abort ~20 s into the 8B ladder (cancel path)
 //   C  RAM floor 64 GiB (guard path: every step skipped_memory, no load)
@@ -104,6 +104,7 @@ async function main(): Promise<void> {
     workload: (flag('--workload') ?? 'coding') as SessionRequest['workload'], modelIds: models.map((m) => m.id),
     runQuality: scenario === 'A' || (scenario === 'H' && !process.argv.includes('--no-quality')),
     heavyMode: process.argv.includes('--heavy'),
+    ...(flag('--required-ctx') ? { requiredContext: Number(flag('--required-ctx')) } : {}),
     ...(flag('--ladder') ? { ladder: flag('--ladder')!.split(',').map(Number) } : {})
   }
   const pidFile = join(tmpdir(), `lao-session-${scenario}.pid`)
@@ -120,7 +121,7 @@ async function main(): Promise<void> {
     }, null, 1))
   }
   // Self-abort when system RAM runs low (heavy runs on a 31 GB box).
-  const ramAbortBytes = Number(flag('--ram-abort-gib') ?? 3) * GiB
+  const ramAbortBytes = Number(flag('--ram-abort-gib') ?? 5) * GiB // 5 GiB: shared box (several agents + builds)
   const watchdog = setInterval(() => {
     if (ctl.signal.aborted || freemem() >= ramAbortBytes) return
     ramAbort = `system RAM available ${(freemem() / GiB).toFixed(1)} GiB < ${(ramAbortBytes / GiB).toFixed(1)} GiB at ${el().trim()}`
