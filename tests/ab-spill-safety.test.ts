@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ChildProcess } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { assertNewArtifact, baseArgv, bounded, idle, launch, outputPathFor, ramFloor, reserveLoopbackPort, safeEnv, stopOwned, unifiedMemoryKeys, verifyProps, watchRam, type CollisionEvidence, type LaunchProbe } from '../scripts/ab-spill'
@@ -230,6 +231,50 @@ describe('ab-spill evidence from a fake Node child (no GPU)', { timeout: 15_000 
     expect(row.listenerOwnerPid).toBe(4242)
     expect(row.servedProps).toBeNull()
     expect(row.reps).toEqual([])
+  })
+
+  it('never accepts measurements from a replacement listener after the owned child exits during settle', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lao-ab-replacement-'))
+    const pidFile = join(dir, 'pid.txt'), previous = process.env.FAKE_AB_PID_FILE
+    process.env.FAKE_AB_PID_FILE = pidFile
+    let port = 0, requests = 0, replacementStarted = false
+    const replacement = createServer((req, res) => {
+      requests++
+      res.setHeader('content-type', 'application/json')
+      if (req.url === '/tokenize') return res.end(JSON.stringify({ tokens: Array(16).fill(1) }))
+      if (req.url === '/completion') return res.end(JSON.stringify({ content: 'foreign', timings: {
+        prompt_n: 16, prompt_ms: 12.5, prompt_per_second: 1280, predicted_per_second: 42 } }))
+      return res.end(JSON.stringify({ status: 'ok' }))
+    })
+    const gone = (pid: number) => { try { process.kill(pid, 0); return false } catch { return true } }
+    const monitor = setInterval(() => {
+      if (!port || !existsSync(pidFile) || replacementStarted) return
+      if (!gone(Number(readFileSync(pidFile, 'utf8')))) return
+      replacementStarted = true
+      replacement.listen(port, '127.0.0.1')
+    }, 5)
+    try {
+      const row = await launch('replacement', [fake, '-m', 'fake.gguf', '-c', '2048', '--fake-mode', 'exit-after-props'],
+        16, process.execPath, { ...probe, settleMs: 500,
+          reservePort: async () => (port = await reserveLoopbackPort()),
+          ownerOfPort: async () => {
+            if (replacement.listening) return 4242
+            if (existsSync(pidFile)) {
+              const pid = Number(readFileSync(pidFile, 'utf8'))
+              if (!gone(pid)) return pid
+            }
+            return null
+          } })
+      expect(row.error ?? '').toMatch(/server exited|listener|ownership|abort|cancel/i)
+      expect(row.reps).toEqual([])
+      expect(requests).toBe(0)
+    } finally {
+      clearInterval(monitor)
+      if (replacement.listening) await new Promise<void>((done) => replacement.close(() => done()))
+      if (previous === undefined) delete process.env.FAKE_AB_PID_FILE
+      else process.env.FAKE_AB_PID_FILE = previous
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('drains and preserves stdout plus stderr and parses buffer declarations from both streams', async () => {

@@ -19,10 +19,14 @@ if (mode === 'streams') {
 http.createServer((req, res) => {
   res.setHeader('content-type', 'application/json')
   if (req.url === '/health') return res.end(JSON.stringify({ status: 'ok' }))
-  if (req.url === '/props') return res.end(JSON.stringify({
-    model_path: mode === 'wrong-model' ? resolve('foreign.gguf') : resolve(arg('-m')),
-    default_generation_settings: { n_ctx: mode === 'wrong-ctx' ? Number(arg('-c')) + 1 : Number(arg('-c')) }
-  }))
+  if (req.url === '/props') {
+    res.end(JSON.stringify({
+      model_path: mode === 'wrong-model' ? resolve('foreign.gguf') : resolve(arg('-m')),
+      default_generation_settings: { n_ctx: mode === 'wrong-ctx' ? Number(arg('-c')) + 1 : Number(arg('-c')) }
+    }))
+    if (mode === 'exit-after-props') setTimeout(() => process.exit(0), 80)
+    return
+  }
   if (req.url === '/tokenize') return res.end(JSON.stringify({ tokens: Array(16).fill(1) }))
   if (req.url === '/completion') {
     req.resume()
