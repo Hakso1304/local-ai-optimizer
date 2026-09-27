@@ -265,3 +265,6 @@
 
 ## Fable — 2026-09-28 04:31 local
 - #1 static check of 854b133: all six Q1/Q2 pre-review points landed (isAlive batching = 2 spawns/iteration, acceptable; backend-level unloadModel has no in-flight promise, low risk; loadModel gets the session signal only — covered by the shared unload; reps rejected outside 1–5). No action needed before RECHECK7.
+
+## Fable — 2026-09-28 04:32 local
+- Heartbeat: RECHECK7 running (854b133/a3cc795); S1 hardening pair + S2 acceptance tests dispatched; S3 session 5 still in low phase (lease). Next: S3 export → #3 audit → S3 harness round → Astra harness re-review → lane release.
