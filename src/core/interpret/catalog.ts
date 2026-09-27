@@ -29,4 +29,6 @@ export const P = (key: string, name: string): number => rule(key).params[name]
 export type ActionType =
   | 'use-context' | 'enable-kv-q8' | 'enable-heavy-mode' | 'lower-required-context' | 'try-smaller-quant' | 'try-thinking-config'
   | 'run-thorough-quality' | 'rerun-idle' | 'rerun-comparable' | 'retry-telemetry' | 'inspect-diagnostics'
+  /** unload + fresh server + re-measure the rung once (placement spill, I-2.8) */
+  | 'restart-runtime'
 export const action = (type: ActionType, arg?: string): string => (arg ? `${type} ${arg}` : type)

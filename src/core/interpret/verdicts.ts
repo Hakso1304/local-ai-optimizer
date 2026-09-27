@@ -9,7 +9,7 @@ import { componentScores } from '../scoring/components'
 import { fmtCtx, val } from '../scoring/cliff'
 import { includesZero, pairedDifference, type UncertaintyRow } from '../scoring/uncertainty'
 import { DEFAULT_SCORING_CONFIG, effectiveProfile, withProfile, type ScoringConfig } from '../scoring/workloads'
-import { genLabel } from '../benchmark/gen'
+import { BASELINE_GEN, genLabel, templateKwargsFor } from '../benchmark/gen'
 import { cite, P, rule, RULES, RULES_VERSION, tag } from './catalog'
 
 export type StoredRun = BenchmarkRunResult & { runId?: string; supersededBy?: string; startedAt?: number; endedAt?: number }
@@ -145,35 +145,49 @@ function sessionVersionOf(runs: BenchmarkRunResult[]): string | null {
 
 type ContractRow = UncertaintyRow & { appliedTemplateKwargs?: Record<string, unknown>; templateHash?: string | null; runtimeVersion?: string | null; modelFingerprint?: string | null; acceptedSampling?: Record<string, unknown> | null }
 /** F5: what is missing for a generation config to be comparable with its baseline (empty = contract met). */
-function contractGaps(rows: ContractRow[], base: ContractRow[], gen?: GenQuality['gen']): string[] {
-  const gaps: string[] = []
-  if (!rows.length) return ['no rows']
-  if (!rows.every((r) => r.appliedTemplateKwargs && Object.keys(r.appliedTemplateKwargs).length > 0)) gaps.push('applied template kwargs not verified on every row')
+/** I-8.0 contract check for one generation config's rows: contradictions (errors — the rows say something other
+ *  than the config) are separated from absent proof (missing — not evaluable). kwargs are compared with what the
+ *  template should have received for this config (templateKwargsFor); a template without thinking = not applicable. */
+function contractCheck(rows: ContractRow[], base: ContractRow[], gen: GenQuality['gen'], expected: Record<string, unknown> | undefined): { errors: string[]; missing: string[] } {
+  const errors: string[] = [], missing: string[] = []
+  if (!rows.length) return { errors, missing: ['no rows'] }
+  if (expected) {
+    const applied = rows.filter((r) => r.appliedTemplateKwargs && Object.keys(r.appliedTemplateKwargs).length > 0)
+    const bad = applied.find((r) => Object.entries(expected).some(([k, x]) => r.appliedTemplateKwargs![k] !== x) || Object.keys(r.appliedTemplateKwargs!).some((k) => !(k in expected)))
+    if (bad) errors.push(`applied template kwargs ${JSON.stringify(bad.appliedTemplateKwargs)} differ from the config's ${JSON.stringify(expected)}`)
+    if (applied.length < rows.length) missing.push('applied template kwargs not verified on every row')
+  }
   for (const k of ['templateHash', 'runtimeVersion', 'modelFingerprint'] as const) {
-    const vals = new Set([...rows, ...base].map((r) => r[k]))
-    if (!rows.every((r) => !!r[k])) gaps.push(`${k} not recorded`)
-    else if (vals.size !== 1) gaps.push(`${k} not uniform across this config and its baseline (${[...vals].map((x) => x ?? 'missing').join(', ')})`)
+    const present = [...rows, ...base].filter((r) => !!r[k]).map((r) => r[k])
+    if (new Set(present).size > 1) errors.push(`${k} not uniform across this config and its baseline (${[...new Set(present)].join(', ')})`)
+    if (!rows.every((r) => !!r[k])) missing.push(`${k} not recorded`)
   }
-  if (!rows.every((r) => r.acceptedSampling && Object.keys(r.acceptedSampling).length > 0)) gaps.push('runtime-accepted sampling not recorded')
-  else if (gen) {
-    const want: [string, number | undefined][] = [['temperature', gen.temperature], ['top_p', gen.topP], ['top_k', gen.topK], ['min_p', gen.minP]]
-    for (const [k, x] of want) {
-      if (x === undefined) continue
-      if (!rows.every((r) => typeof r.acceptedSampling![k] === 'number' && Math.abs((r.acceptedSampling![k] as number) - x) < 1e-6)) { gaps.push(`accepted ${k} differs from the config's ${x}`); break }
-    }
+  const sampled = rows.filter((r) => r.acceptedSampling && Object.keys(r.acceptedSampling).length > 0)
+  const want: [string, number | undefined][] = [['temperature', gen.temperature], ['top_p', gen.topP], ['top_k', gen.topK], ['min_p', gen.minP]]
+  for (const [k, x] of want) {
+    if (x === undefined) continue
+    if (sampled.some((r) => typeof r.acceptedSampling![k] === 'number' && Math.abs((r.acceptedSampling![k] as number) - x) > 1e-6)) { errors.push(`accepted ${k} differs from the config's ${x}`); break }
   }
-  return gaps
+  if (sampled.length < rows.length) missing.push('runtime-accepted sampling not recorded')
+  return { errors, missing }
 }
 
 /** R3: the quality observation scope: one ctx, mixed ctxs, or unknown. */
 function qualityScope(v: CandidateVerdict): string {
-  const cs = [...new Set((v.qualityRows as (UncertaintyRow & { ctx?: number })[]).map((r) => r.ctx).filter((x): x is number => typeof x === 'number'))].sort((a, b) => a - b)
-  return cs.length === 0 ? 'unknown (quality ctx not recorded)' : cs.length === 1 ? `ctx ${cs[0]}` : `mixed (${cs.join(', ')})`
+  const all = (v.qualityRows as (UncertaintyRow & { ctx?: number })[]).map((r) => r.ctx)
+  const cs = [...new Set(all.filter((x): x is number => typeof x === 'number' && x > 0))].sort((a, b) => a - b)
+  const without = all.filter((x) => !(typeof x === 'number' && x > 0)).length
+  if (cs.length === 0) return 'unknown (quality ctx not recorded)'
+  if (cs.length > 1) return `mixed (${cs.join(', ')})${without ? `; ${without} of ${all.length} rows without ctx` : ''}`
+  return without ? `partial (${all.length - without} of ${all.length} rows carry ctx ${cs[0]})` : `ctx ${cs[0]}`
 }
 
 /** F3: the rung each component was actually observed at. */
 function basisRung(v: CandidateVerdict, k: ComponentId): number | null {
-  if (k === 'quality') { const cs = [...new Set((v.qualityRows as (UncertaintyRow & { ctx?: number })[]).map((r) => r.ctx).filter((x): x is number => typeof x === 'number'))]; return cs.length === 1 ? cs[0] : null }
+  if (k === 'quality') {
+    const ctxs = (v.qualityRows as (UncertaintyRow & { ctx?: number })[]).map((r) => r.ctx)
+    return ctxs.length > 0 && ctxs.every((x) => typeof x === 'number' && x > 0 && x === ctxs[0]) ? ctxs[0]! : null
+  }
   if (k === 'context') return v.coverage.largestCleanTested
   if (k === 'stability') return null
   return v.cs.referenceCtx
@@ -305,8 +319,12 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
       const lat = val(s.cs.components.latency.input, true)
       // F5 (I-8.0): the full application contract on every row — applied kwargs, template/runtime/model identity and
       // the sampling the runtime accepted — and the same identities as the baseline it is compared with.
-      const missing = contractGaps(gq.results as ContractRow[], (sortedGens.find((x) => !x.gen.thinking)?.results ?? input.quality) as ContractRow[], gq.gen)
-      const comparable = !gq.gen.thinking || missing.length === 0
+      // A (w4l): every config, the baseline included — a contradiction always excludes it; absent proof excludes
+      // only thinking configs (the baseline then stands, comparisons with it are not evaluable).
+      const base = (gq.gen.thinking ? (sortedGens.find((x) => !x.gen.thinking)?.results ?? input.quality) : []) as ContractRow[]
+      const chk = contractCheck(gq.results as ContractRow[], base, gq.gen, templateKwargsFor(input.model, gq.gen))
+      const missing = [...chk.errors, ...(gq.gen.thinking ? chk.missing : [])]
+      const comparable = missing.length === 0
       const quarantined = !!s.cs.components.quality.quarantined
       return {
         gq, cs: s.cs, total: s.total, comparable: comparable && !quarantined,
@@ -327,10 +345,15 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
     const chosen = gen ? { cs: gen.cs, breakdown: scoreOf(scored, machine, profile, cfg, gen.gq, scoringRung).breakdown, total: gen.total } : base
     const ref = scored.runs.find((r) => r.ctx === chosen.cs.referenceCtx)
     const q = chosen.cs.components.quality
+    // A (w4l): the rows the quality term comes from must not contradict the config they claim (sampling / kwargs).
+    const qConfig = gen?.gq.gen ?? BASELINE_GEN
+    const qRows = (gen ? gen.gq.results : input.quality) as ContractRow[]
+    const qErrors = contractCheck(qRows, [], qConfig, templateKwargsFor(input.model, qConfig)).errors
     // G01: a decisive term confirms only when MEASURED (declared / estimated / unavailable / quarantined never do).
     const undecided = (Object.keys(profile.weights) as ComponentId[])
       .filter((k) => profile.weights[k] > 0 && chosen.cs.components[k].input.kind !== 'measured')
       .map((k) => ({ component: k, kind: chosen.cs.components[k].quarantined ? 'quarantined' : chosen.cs.components[k].input.kind, reason: chosen.cs.components[k].input.reason ?? chosen.cs.components[k].input.source }))
+    if (qErrors.length && profile.weights.quality > 0) undecided.push({ component: 'quality', kind: 'contract-error', reason: qErrors.join('; ') })
     // G03: read at another rung than the common one (its ladder skipped it) → the speed comparison is not matched.
     // F2: any substitution (ladder skipped the rung, or a shorter ladder) leaves the speed/latency basis unmatched.
     if (scoringRung !== null && chosen.cs.referenceCtx !== scoringRung) {

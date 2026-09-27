@@ -14,7 +14,7 @@ import { detectCliffs, fmtCtx, isUsable, val } from '../scoring/cliff'
 import { recommend } from '../scoring/recommend'
 import { DEFAULT_SCORING_CONFIG, effectiveProfile, withProfile } from '../scoring/workloads'
 import { DEFAULT_CANDIDATE_RULES, estimateMemory, generateCandidates, machineFromProfile, rulesForRequest, type CandidateRules } from './candidates'
-import { LADDER_FILL, LADDER_FILL_TOLERANCE, LADDER_PREDICT, LADDER_SIZE_ROUNDS, PROMPT_VERSION, ladderPrompt } from './prompts'
+import { CHARACTER_PROMPT_VERSION, LADDER_FILL, LADDER_FILL_TOLERANCE, LADDER_PREDICT, LADDER_SIZE_ROUNDS, PROMPT_VERSION, ladderPrompt } from './prompts'
 import { RULES_VERSION, type InterpretData, type StoredRun } from '../interpret'
 import { BASELINE_GEN, genConfigsFor, genLabel, samplingFor, splitReasoning, summarizeGen, templateKwargsFor, type GenRow } from './gen'
 
@@ -87,6 +87,8 @@ export const DEFAULT_SESSION_CONFIG = {
   qualityTimeoutMs: 180_000,
   /** Thinking gen configs: maxTokens ×4 (at least this), timeout ×2 per test. */
   thinkingMinTokens: 1024,
+  /** I-2.8: dedicated VRAM free in the same window above which a spill is treated as placement (one restart + re-measure). */
+  placementFreeBytes: GiB,
   /** qualityMode 'thorough': seeded samples per test for stochastic (T > 0) gen configs. */
   thoroughSamples: 3,
   // Floor = max(4 GiB, 8 % of RAM), heavy mode included: a 27B CPU baseline drove available RAM to 1.0 GiB with a
@@ -203,6 +205,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   const send = (e: SessionEventBody) => emit({ sessionId, ...e })
   const log = (level: 'info' | 'warn' | 'error', msg: string) => send({ type: 'log', level, msg })
   const backend = deps.backend()
+  // The session's prompt procedure: tokenized ladder-2 only when the backend can tokenize (else character-sized ladder-1).
+  const sessionPromptVersion = backend.tokenize ? PROMPT_VERSION : CHARACTER_PROMPT_VERSION
   // ServerStuckError (runtimes/llamacpp, `.fatal`): unload couldn't confirm the server exited. That is a hard stop —
   // no more candidates, and no later cleanup that would clear its pid file.
   let stuck: Error | null = null
@@ -215,7 +219,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   signal?.addEventListener('abort', onAbort)
 
   try {
-    if (!sessionId) sessionId = await storage.createSession({ workload: req.workload, request: suite.suiteSeed === null ? req : { ...req, qualitySeed: suite.suiteSeed }, startedAt: clock.now(), versions: { benchmark: BENCHMARK_VERSION, prompts: PROMPT_VERSION } })
+    if (!sessionId) sessionId = await storage.createSession({ workload: req.workload, request: suite.suiteSeed === null ? req : { ...req, qualitySeed: suite.suiteSeed }, startedAt: clock.now(), versions: { benchmark: BENCHMARK_VERSION, prompts: sessionPromptVersion } })
     await storage.setSessionStatus(sessionId, 'running')
     // Resume re-runs steps that never really ran: cancelled ones and RAM-guard skips (memory may be free now).
     // retryFailed also re-runs fail/timeout steps (not config_drift: same config → same drift; a changed config has a
@@ -240,7 +244,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       const last = new Map<string, string>()
       for (const h of history) last.set(`${h.configId}@${h.ctx}`, h.runId!)
       const allRuns = history.map((h) => (h.supersededBy || last.get(`${h.configId}@${h.ctx}`) === h.runId ? h : { ...h, supersededBy: last.get(`${h.configId}@${h.ctx}`) }))
-      return { allRuns, planningSnapshot: { ramFloorBytes: ramFloor }, sessionVersions: { benchmark: BENCHMARK_VERSION, prompts: PROMPT_VERSION }, ...(stopReason ? { stopReason } : {}) }
+      return { allRuns, planningSnapshot: { ramFloorBytes: ramFloor }, sessionVersions: { benchmark: BENCHMARK_VERSION, prompts: sessionPromptVersion }, ...(stopReason ? { stopReason } : {}) }
     }
 
     // All candidates of all requested models, smallest estimated footprint first.
@@ -367,8 +371,25 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         if (run) {
           log('info', `${cand.id} @${ctx}: already measured in this session; reused`)
         } else {
-          const out = await runStep(cand, model, ctx, spillBase)
+          let out = await runStep(cand, model, ctx, spillBase)
           checkStuck()
+          // I-2.8: a spill while ≥ 1 GiB dedicated was free in the same window is driver placement, not capacity —
+          // restart the server once and re-measure the rung before recording a spill verdict (both rows persisted).
+          // Per-PID shared − pinned − baseline, not the saturation-gated spill (that is 0 below 80 % — exactly this case).
+          const free = val(out.run.adapterFreeAtSharedPeakBytes), rawSh = val(out.run.peakSharedGpuRawBytes)
+          const sh0 = rawSh === null ? val(out.run.peakSharedGpuBytes) : rawSh - (val(out.run.hostPinnedBytes) ?? 0) - spillBase
+          if (isUsable(out.run) && sh0 !== null && sh0 > DEFAULT_SCORING_CONFIG.cliff.sharedSpillBytes && free !== null && free >= cfg.placementFreeBytes && !signal?.aborted) {
+            await storage.saveRun(sessionId, out.run, out.detail)
+            recordAttempt(out.run, out.detail)
+            log('warn', `${cand.id} @${ctx}: ${(sh0 / GiB).toFixed(2)} GiB in shared memory with ${(free / GiB).toFixed(2)} GiB dedicated free — restarting the server and re-measuring once (I-2.8)`)
+            const first = out.run
+            await unload((e) => log('warn', `unload before placement retry: ${(e as Error).message}`))
+            checkStuck()
+            out = await runStep(cand, model, ctx, spillBase)
+            checkStuck()
+            out.run.placementRetry = true
+            out.run.placementFirst = { peakVramBytes: first.peakVramBytes, peakSharedGpuBytes: first.peakSharedGpuBytes, ...(first.peakSharedGpuRawBytes ? { peakSharedGpuRawBytes: first.peakSharedGpuRawBytes } : {}), ...(first.adapterFreeAtSharedPeakBytes ? { adapterFreeAtSharedPeakBytes: first.adapterFreeAtSharedPeakBytes } : {}), decodeTps: first.decodeTps }
+          }
           run = out.run
           await storage.saveRun(sessionId, run, out.detail)
           recordAttempt(run, out.detail)
@@ -446,25 +467,30 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   function loadCfg(cand: CandidateConfig, model: ModelMeta, ctx: number): LoadConfig { return { ...loadConfigFor(cand, model, ctx, rules), signal } }
 
   /** ladder-2: resize the filler with the loaded model's tokenizer until the prompt is LADDER_FILL·ctx tokens. */
-  async function sizedLadderPrompt(ctx: number): Promise<string> {
+  /** ladder-2: resize the filler with the loaded model's tokenizer until the prompt is LADDER_FILL·ctx tokens.
+   *  `sized` = the final prompt was verified within tolerance; otherwise the row is stamped ladder-1 (character-sized). */
+  async function sizedLadderPrompt(ctx: number): Promise<{ prompt: string; sized: boolean }> {
     const target = Math.floor(ctx * LADDER_FILL)
     let fill = LADDER_FILL
     let prompt = ladderPrompt(ctx, fill)
-    if (!backend.tokenize) return prompt
+    if (!backend.tokenize) return { prompt, sized: false }
     try {
-      for (let i = 0; i < LADDER_SIZE_ROUNDS; i++) {
+      for (let i = 0; i <= LADDER_SIZE_ROUNDS; i++) {
         const n = await backend.tokenize(prompt)
-        if (!(n > 0) || Math.abs(n - target) / target <= LADDER_FILL_TOLERANCE) break
+        if (!(n > 0)) break
+        if (Math.abs(n - target) / target <= LADDER_FILL_TOLERANCE) return { prompt, sized: true }
+        if (i === LADDER_SIZE_ROUNDS) break
         fill = Math.min(fill * (target / n), 2) // ponytail: proportional resize; converges in 1–2 rounds on word filler
         prompt = ladderPrompt(ctx, fill)
       }
     } catch (e) {
       log('warn', `tokenize failed at ${ctx}; ladder prompt stays character-sized: ${(e as Error).message}`)
     }
-    return prompt
+    return { prompt, sized: false }
   }
 
   async function runStep(cand: CandidateConfig, model: ModelMeta, ctx: number, spillBase = 0): Promise<{ run: BenchmarkRunResult; detail: RunDetail }> {
+    let promptVersionOfStep = sessionPromptVersion // until the step's prompt is built (pre-load skips keep the session's)
     let pinned = 0 // host-pinned bytes, known once the load log is parsed
     const startedAt = clock.now()
     send({ type: 'step:started', configId: cand.id, ctx })
@@ -476,7 +502,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         loadTimeMs: na('not loaded'), ttftMs: na('no request'), prefillTps: na('no request'), decodeTps: na('no request'), totalMs: na('no request'),
         peakVramBytes: na('no telemetry'), peakSharedGpuBytes: na('no telemetry'), peakRamBytes: na('no telemetry'),
         avgGpuUtil: na('no telemetry'), avgCpuUtil: na('no telemetry'), warm: false,
-        versions: { benchmark: BENCHMARK_VERSION, prompts: PROMPT_VERSION, quality: suite.suite, runtime: deps.runtimeVersion ?? null, rules: RULES_VERSION },
+        versions: { benchmark: BENCHMARK_VERSION, prompts: promptVersionOfStep, quality: suite.suite, runtime: deps.runtimeVersion ?? null, rules: RULES_VERSION },
         ramFloorBytes: ramFloor, ...extra
       },
       detail: {
@@ -597,7 +623,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       flush()
       return guard ? { status: 'fail' as const, kind: 'guard_abort' as const, reason: guard } : classify(error, timedOut)
     }
-    const prompt = await sizedLadderPrompt(ctx)
+    const { prompt, sized } = await sizedLadderPrompt(ctx)
+    promptVersionOfStep = sized ? PROMPT_VERSION : CHARACTER_PROMPT_VERSION
     const timeoutMs = cfg.promptTimeoutBaseMs + ctx * cfg.promptTimeoutPerCtxMs
     const reps: PromptResult[] = []
     const windows: [number, number][] = []
@@ -686,6 +713,13 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       totalMs: measured(median(reps.map((r) => r.totalMs)), 'client wall clock', 'no successful request'),
       peakVramBytes: tele(pk.max.procVramDedicatedBytes, 'procVramDedicatedBytes'),
       peakSharedGpuBytes: spillMetric(),
+      // I-2.8: same-window adapter free VRAM at the per-PID shared peak (placement vs capacity)
+      adapterFreeAtSharedPeakBytes: (() => {
+        const withShared = samples.filter((x) => x.procVramSharedBytes != null && x.vramDedicatedBytes != null)
+        if (!withShared.length || vramTotal === null) return { value: null, kind: 'unavailable' as const, reason: 'no same-window adapter reading' }
+        const peak = withShared.reduce((a, b) => (b.procVramSharedBytes! > a.procVramSharedBytes! ? b : a))
+        return { value: Math.max(0, vramTotal - peak.vramDedicatedBytes!), kind: 'measured' as const, source: 'VRAM total − adapter dedicated at the per-PID shared peak (typeperf)' }
+      })(),
       peakSharedGpuRawBytes: tele(pk.max.procVramSharedBytes, 'procVramSharedBytes'),
       hostPinnedBytes: { value: pinned, kind: 'declared', source: 'llama-server load log: host-side model/KV/compute buffers' },
       peakRamBytes: tele(pk.max.procRamPrivateBytes, 'procRamPrivateBytes'),

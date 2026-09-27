@@ -466,6 +466,36 @@ describe('runSession', () => {
     expect(n).not.toBe(tok(ladderPrompt(8192))) // resized, not the character-sized ladder-1 prompt
   })
 
+  it('ladder-2 stamp: rows are stamped ladder-2 only when tokenized sizing succeeded (else ladder-1, character-sized)', async () => {
+    const plain = await run(() => ({}), { ladder: [2048] })
+    expect(plain.s.runs[0].versions?.prompts).toBe('ladder-1')
+    const backend = () => { const b = fakeBackend(() => ({})); b.tokenize = async (t: string) => Math.round(t.length / 3.1); return b }
+    const sized = await run(() => ({}), { ladder: [2048] }, { backend })
+    expect(sized.s.runs[0].versions?.prompts).toBe('ladder-2')
+    const broken = () => { const b = fakeBackend(() => ({})); b.tokenize = async () => { throw new Error('no /tokenize') }; return b }
+    expect((await run(() => ({}), { ladder: [2048] }, { backend: broken })).s.runs[0].versions?.prompts).toBe('ladder-1')
+  })
+
+  it('I-2.8: shared residency with ≥ 1 GiB dedicated free → unload, fresh server, re-measure once; both observations kept', async () => {
+    // 8B f16 64K run-14 shape: 11.6 GiB dedicated (below saturation), 1.08 GiB per-PID shared, adapter 12.8 of 15.9 GiB.
+    let launches4k = 0
+    const sampler = (pid: number) => {
+      const ctx = pid - 1000, placed = ctx === 4096 && ++launches4k === 1
+      const v = [{ ...sample(ctx), procVramDedicatedBytes: 11.6 * GiB, vramDedicatedBytes: 12.8 * GiB, procVramSharedBytes: placed ? 1.08 * GiB : 0.02 * GiB }]
+      return { samples: v, unavailable: {}, stop: () => v }
+    }
+    const { s, backend } = await run(() => ({}), { ladder: [2048, 4096] }, { startSampler: sampler })
+    expect(ctxOf(backend)).toEqual([2048, 4096, 4096])
+    const r = s.runs.filter((x) => x.ctx === 4096)
+    expect(r).toHaveLength(2)
+    expect(r[0].adapterFreeAtSharedPeakBytes?.value).toBeGreaterThan(3 * GiB)
+    expect(r[1]).toMatchObject({ placementRetry: true, placementFirst: { peakSharedGpuRawBytes: { value: 1.08 * GiB } } })
+    expect(r[1].peakSharedGpuRawBytes?.value).toBe(0.02 * GiB)
+    // without a same-window adapter reading the rule is not evaluable → no retry
+    const noAdapter = (pid: number) => { const v = [{ ...sample(pid - 1000), vramDedicatedBytes: null, procVramSharedBytes: 1.08 * GiB }] as TelemetrySample[]; return { samples: v, unavailable: {}, stop: () => v } }
+    expect(ctxOf((await run(() => ({}), { ladder: [2048, 4096] }, { startSampler: noAdapter })).backend)).toEqual([2048, 4096])
+  })
+
   it('L1: spill saturation is taken against the effective budget (total − VRAM in use by other processes)', async () => {
     // 11 GiB dedicated on a 16 GiB card: 69 % of the total (not saturated), but 91 % of 12 GiB left by other processes.
     const at = (ctx: number) => [{ ...sample(ctx), procVramDedicatedBytes: 11 * GiB, procVramSharedBytes: ctx >= 4096 ? Math.round(2 * GiB) : Math.round(0.02 * GiB) }]

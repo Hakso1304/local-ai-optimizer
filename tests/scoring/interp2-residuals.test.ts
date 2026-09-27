@@ -217,3 +217,61 @@ describe('R1–R5 (review-w4k): scope, identity and version strictness', () => {
     expect(interpret(V([c])).find((x) => x.ruleId === 'I-2.3')!.action).toBe('enable-kv-q8')
   })
 })
+
+describe('A/B/C (review-w4l): generation contract strictness', () => {
+  const rowsFor = (id: string, over: Record<string, unknown> = {}) => quality(10, () => true).map((r) => ({ ...r, genId: id, templateHash: 'tpl', runtimeVersion: 'b1', modelFingerprint: 'm1', acceptedSampling: { temperature: 0 }, ...over } as QualityResult))
+  const gq = (id: string, thinking: boolean, results: QualityResult[]): GenQuality => ({ gen: { id, thinking, ...(thinking ? { effort: 'low' } : {}), temperature: 0, source: 'default' }, results, samples: 1, stochastic: false, answerTokens: m(100), reasoningTokens: m(thinking ? 20 : 0), effectiveAnswerLatencyMs: m(2000), effectiveTps: m(50), reasoningMs: m(thinking ? 400 : 0), rawTps: m(60) })
+  const thinkModel = (c: CandidateInput) => ({ ...c, model: { ...c.model, genKnobs: { supportsThinking: true, effortValues: ['low', 'high'] } } })
+  it('A: a T=0 baseline whose rows report accepted temperature 0.8 is not confirmed', () => {
+    const c = candidate('a')
+    c.quality = rowsFor('off', { acceptedSampling: { temperature: 0.8 } })
+    const v = V([c])
+    expect(v.winner).toBeNull()
+    expect(v.ranked[0].undecided.find((u) => u.component === 'quality')).toMatchObject({ kind: 'contract-error', reason: expect.stringMatching(/accepted temperature differs from the config's 0/) })
+  })
+  it('A: the same contradiction on an "off" gen option excludes it (not silently accepted)', () => {
+    const c = thinkModel(candidate('a'))
+    c.quality = rowsFor('off', { appliedTemplateKwargs: { enable_thinking: false } })
+    c.genQuality = [gq('off', false, rowsFor('off', { appliedTemplateKwargs: { enable_thinking: false }, acceptedSampling: { temperature: 0.8 } }))]
+    expect(V([c]).ranked[0].genOptions[0]).toMatchObject({ comparable: false, why: expect.stringMatching(/accepted temperature differs/) })
+  })
+  it('B: rows applied with {enable_thinking:false, reasoning_effort:"high"} do not count for a think-low config', () => {
+    const c = thinkModel(candidate('a'))
+    c.quality = rowsFor('off', { appliedTemplateKwargs: { enable_thinking: false } })
+    c.genQuality = [gq('off', false, c.quality), gq('think-low', true, rowsFor('think-low', { appliedTemplateKwargs: { enable_thinking: false, reasoning_effort: 'high' } }))]
+    const o = V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')!
+    expect(o.comparable).toBe(false)
+    expect(o.why).toMatch(/applied template kwargs .* differ from the config's \{"enable_thinking":true,"reasoning_effort":"low"\}/)
+  })
+  it('C: one row with ctx 2048 among rows without ctx is a partial scope, not a single measured rung', () => {
+    const c = candidate('a'); c.quality = c.quality.map((r, i) => (i === 0 ? { ...r, ctx: 2048 } as QualityResult : r))
+    const b = V([c]).trace.candidates[0].basis.find((x) => x.component === 'quality')!
+    expect(b.rung).toBeNull()
+    expect(b.scope).toBe('partial (1 of 60 rows carry ctx 2048)')
+  })
+})
+
+describe('I-2.8 placement spill', () => {
+  it('shared residency with ≥ 1 GiB dedicated free in the same window → placement insight with restart-runtime', () => {
+    const c = candidate('a', [2048, 4096])
+    // run-14 shape: dedicated below saturation → the gated spill is 0, the per-PID shared reading is 1.08 GiB
+    c.runs[1] = { ...c.runs[1], peakSharedGpuBytes: m(0), peakSharedGpuRawBytes: m(1.08 * GiB), adapterFreeAtSharedPeakBytes: m(3.1 * GiB) }
+    const i = interpret(V([c])).find((x) => x.ruleId === 'I-2.8')!
+    expect(i).toMatchObject({ severity: 'warn', action: 'restart-runtime' })
+    expect(i.text).toMatch(/1\.08 GiB of this process is resident in shared memory although 3\.10 GiB dedicated VRAM was free .* driver placement/)
+  })
+  it('without a same-window adapter reading, or with the card full, the rule is not evaluable / does not fire', () => {
+    const c = candidate('a', [2048, 4096])
+    c.runs[1] = { ...c.runs[1], peakSharedGpuRawBytes: m(1.08 * GiB) }
+    expect(interpret(V([c])).some((x) => x.ruleId === 'I-2.8')).toBe(false)
+    c.runs[1] = { ...c.runs[1], adapterFreeAtSharedPeakBytes: m(0.2 * GiB) }
+    expect(interpret(V([c])).some((x) => x.ruleId === 'I-2.8')).toBe(false)
+  })
+  it('a retried rung that came back clean is a note that records both observations', () => {
+    const c = candidate('a', [2048, 4096])
+    c.runs[1] = { ...c.runs[1], placementRetry: true, placementFirst: { peakVramBytes: m(11.6 * GiB), peakSharedGpuBytes: m(0), peakSharedGpuRawBytes: m(1.08 * GiB), adapterFreeAtSharedPeakBytes: m(3.1 * GiB), decodeTps: m(37) } }
+    const i = interpret(V([c])).find((x) => x.ruleId === 'I-2.8')!
+    expect(i.severity).toBe('note')
+    expect(i.text).toMatch(/after a fresh restart the rung measured 0\.00 GiB shared \(decode 40\.0 vs 37\.0 t\/s before\)/)
+  })
+})

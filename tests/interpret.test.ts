@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import type { BenchmarkRunResult, CandidateInput, GenConfig, MachineLimits, WorkloadId } from '../src/shared/bench-types'
 import { interpret, RULES, RULES_VERSION, verdicts, type Insight, type InterpretData } from '../src/core/interpret'
-import { summarizeGen, type GenRow } from '../src/core/benchmark/gen'
+import { summarizeGen, templateKwargsFor, type GenRow } from '../src/core/benchmark/gen'
 import { generateCandidates } from '../src/core/benchmark/candidates'
 import { recommend, recommendForWorkload } from '../src/core/scoring/recommend'
 import { WORKLOADS, effectiveProfile, withProfile, DEFAULT_SCORING_CONFIG } from '../src/core/scoring/workloads'
@@ -51,7 +51,8 @@ const pair = (rateA: number, rateB: number): CandidateInput[] => {
 // Generation configs: thinking at two efforts (applied template kwargs verified) vs the deterministic baseline.
 const genRows = (g: GenConfig, rate: number, reasoning: number, ms: number, applied = true): GenRow[] =>
   q5('m', rate).map((r) => ({ ...r, genId: g.id, sample: 1, answerTokens: 100, reasoningTokens: reasoning, totalMs: ms, tokenSource: 'runtime',
-    ...(applied ? { appliedTemplateKwargs: { enable_thinking: g.thinking }, templateHash: 'tpl-1', runtimeVersion: 'b11208', modelFingerprint: 'llama8b#1', acceptedSampling: { temperature: g.temperature } } : {}) }))
+    ...(applied ? { appliedTemplateKwargs: templateKwargsFor(THINK_MODEL, g), templateHash: 'tpl-1', runtimeVersion: 'b11208', modelFingerprint: 'llama8b#1', acceptedSampling: { temperature: g.temperature } } : {}) }))
+const THINK_MODEL = { genKnobs: { supportsThinking: true, effortValues: ['low', 'medium'] } } as CandidateInput['model']
 const OFF: GenConfig = { id: 'off', thinking: false, temperature: 0, source: 'default' }
 const LOW: GenConfig = { id: 'think-low-t1', thinking: true, effort: 'low', temperature: 1, source: 'default' }
 const MED: GenConfig = { id: 'think-medium-t1', thinking: true, effort: 'medium', temperature: 1, source: 'default' }

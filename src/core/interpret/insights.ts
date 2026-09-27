@@ -134,6 +134,21 @@ export function interpret(v: Verdicts): Insight[] {
           [num('peakSharedGpuBytes', spill.to, 'measured', spill.toCtx, id(c), { algorithm: 'adjusted-spill' })], { configId: id(c), action: act })
       }
     }
+    // I-2.8 placement spill: shared residency with free dedicated VRAM in the same window (else not evaluable)
+    // resident shared = per-PID shared − host-pinned (the saturation-gated spill is 0 exactly when dedicated was free)
+    const resident = (x: { peakSharedGpuRawBytes?: Metric; peakSharedGpuBytes: Metric }, pin: number) => { const raw = x.peakSharedGpuRawBytes ? val(x.peakSharedGpuRawBytes) : null; return raw === null ? val(x.peakSharedGpuBytes) : Math.max(0, raw - pin) }
+    for (const r of c.input.runs) {
+      const pin = val(r.hostPinnedBytes) ?? 0
+      const sh = resident(r, pin), fr = val(r.adapterFreeAtSharedPeakBytes)
+      const first = r.placementFirst, fsh = first ? resident(first, pin) : null, ffr = first ? val(first.adapterFreeAtSharedPeakBytes) : null
+      const obs = sh !== null && sh > v.cfg.cliff.sharedSpillBytes && fr !== null && fr >= P('ctx.placement-spill', 'freeBytes') ? { sh, fr, retried: false }
+        : fsh !== null && fsh > v.cfg.cliff.sharedSpillBytes && ffr !== null && ffr >= P('ctx.placement-spill', 'freeBytes') ? { sh: fsh, fr: ffr, retried: true } : null
+      if (!obs) continue
+      const retry = obs.retried ? `; after a fresh restart the rung measured ${sh === null ? 'no shared reading' : `${gib(sh)} shared`} (decode ${val(r.decodeTps, true) === null ? '?' : t1(val(r.decodeTps, true)!)} vs ${val(first!.decodeTps, true) === null ? '?' : t1(val(first!.decodeTps, true)!)} t/s before)` : r.placementRetry ? '' : ' — not yet re-measured'
+      add('ctx.placement-spill', { config: id(c), ctx: fmtCtx(r.ctx), shared: gib(obs.sh), free: gib(obs.fr), retry },
+        [ev('peakSharedGpuRawBytes', (obs.retried ? first!.peakSharedGpuRawBytes : r.peakSharedGpuRawBytes) ?? (obs.retried ? first!.peakSharedGpuBytes : r.peakSharedGpuBytes), r.ctx, id(c)), ev('adapterFreeAtSharedPeakBytes', obs.retried ? first!.adapterFreeAtSharedPeakBytes : r.adapterFreeAtSharedPeakBytes, r.ctx, id(c))],
+        { configId: id(c), action: obs.retried && (sh === null || sh <= v.cfg.cliff.sharedSpillBytes) ? null : action('restart-runtime'), severity: obs.retried && (sh === null || sh <= v.cfg.cliff.sharedSpillBytes) ? 'note' : 'warn' })
+    }
     // I-2.6 recovered dip; disclose skipped rungs between
     const u = [...c.scored.runs].filter(isUsable).sort((a, b) => a.ctx - b.ctx)
     for (let i = 1; i + 1 < u.length; i++) {

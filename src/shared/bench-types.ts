@@ -268,6 +268,11 @@ export interface BenchmarkRunResult {
   peakVramPlateauSamples?: number
   /** Algorithm of peakVramPlateauSamples; only 'pre-spill-1' rows support I-4.5 (older rows counted any sample). */
   peakVramPlateauVersion?: string
+  /** Adapter-wide free dedicated VRAM (total − adapter dedicated) in the sample where per-PID shared peaked (I-2.8). */
+  adapterFreeAtSharedPeakBytes?: Metric
+  /** I-2.8: this row is the re-measurement after a fresh server restart; `placementFirst` is the first observation. */
+  placementRetry?: boolean
+  placementFirst?: { peakVramBytes: Metric; peakSharedGpuBytes: Metric; peakSharedGpuRawBytes?: Metric; adapterFreeAtSharedPeakBytes?: Metric; decodeTps: Metric }
   /** Structured reason when the runner skipped the step before loading (live RAM pre-check). */
   skip?: PlannedSkip
   /** What produced this row (X17), all declared. runtime null = not reported by detect(). */

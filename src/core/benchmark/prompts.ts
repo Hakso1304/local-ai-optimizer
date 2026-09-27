@@ -3,6 +3,8 @@ import { generateFiller } from '../quality'
 
 /** Bump when ladderPrompt output changes for any ctx. */
 export const PROMPT_VERSION = 'ladder-2'
+/** Stamped when the prompt could not be tokenized to size (no tokenizer / failure): the character-sized procedure. */
+export const CHARACTER_PROMPT_VERSION = 'ladder-1'
 /** Share of the context the prompt fills, in the loaded model's tokens: the runner resizes the filler with the
  *  runtime tokenizer (ladder-2). ladder-1 relied on ≈4 chars/token and measured ≈ 0.56·ctx on Llama. */
 export const LADDER_FILL = 0.75
