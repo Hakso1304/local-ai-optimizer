@@ -75,7 +75,8 @@ export function splitReasoning(text: string): { reasoningChars: number; answerCh
 
 /** A graded quality row as stored: which gen config and sample produced it, plus that request's token/time counts. */
 export type GenRow = QualityResult & {
-  genId?: string; sample?: number; answerTokens?: number | null; reasoningTokens?: number | null; totalMs?: number | null
+  configId?: string; genId?: string; sample?: number; suiteSeed?: number
+  answerTokens?: number | null; reasoningTokens?: number | null; totalMs?: number | null
   /** Total decode is independent of a known reasoning/answer split. */
   totalTokens?: number | null; totalTokenSource?: 'runtime' | 'streamed' | null
   /** Data contract §12 (rules I-5.7 / I-5.8 / I-8.0). Absent in older rows (then: valid, not evaluable for I-8.0). */
@@ -89,11 +90,21 @@ export type GenRow = QualityResult & {
   requestedTemplateKwargs?: Record<string, unknown>
   /** Set only when the kwargs demonstrably changed the rendered prompt. */
   appliedTemplateKwargs?: Record<string, unknown>
-  /** First-item template-only counterfactuals; hashes disclose no rendered prompt text. */
+  /** Per-row template-only counterfactuals; hashes disclose no rendered prompt text. */
   templateKwargProof?: Record<string, {
     requested: unknown; counterfactual: unknown; requestedSha256: string; counterfactualSha256: string | null
     status: 'proved' | 'unchanged' | 'unavailable'
   }>
+  /** SHA-256 of the exact rendered prompt sent to runPrompt. */
+  promptSha256?: string
+  /** Row-bound proof: renderedSha256 is the requested-kwargs re-render of this row's messages. */
+  renderProof?: {
+    rowId: string; promptSha256: string; renderedSha256: string; counterfactualSha256: string | null
+    counterfactuals?: Record<string, string | null>
+    keys: string[]; status: 'proved' | 'unproved' | 'contradicted' | 'reconstructed'
+  }
+  requestedSampling?: { temperature: number; topP: number | null; topK: number | null; minP: number | null; seed: number }
+  proofProvenance?: { mode?: 'runtime' | 'live-template-replay'; originalPromptHashPresent: boolean; status?: 'original' | 'reconstructed'; sourceRowId?: number }
   /** I-8.0 application contract (F5): identities the comparison needs; absent → the gen config is not evaluable. */
   templateHash?: string | null
   runtimeVersion?: string | null
@@ -102,6 +113,19 @@ export type GenRow = QualityResult & {
   acceptedSampling?: Record<string, unknown> | null
   skillId?: string
   generatorSeed?: number | string
+}
+
+/** Stable row identity for template evidence, including repeated samples of the same item. */
+export function proofRowId(row: Pick<GenRow, 'configId' | 'genId' | 'testId' | 'sample' | 'suiteSeed' | 'generatorSeed'>): string {
+  return JSON.stringify([row.configId ?? null, row.genId ?? null, row.testId, row.sample ?? null,
+    row.suiteSeed ?? null, row.generatorSeed ?? null])
+}
+
+/** A valid one-key template counterfactual; undefined means this key has no known safe alternate. */
+export function templateAlternate(key: string, requested: unknown, effortKey: string, effortValues: string[]): unknown {
+  if (key === 'enable_thinking' && typeof requested === 'boolean') return !requested
+  if (key === effortKey && typeof requested === 'string') return effortValues.find((x) => x !== requested)
+  return undefined
 }
 
 const median = (xs: (number | null | undefined)[]): number | null => {

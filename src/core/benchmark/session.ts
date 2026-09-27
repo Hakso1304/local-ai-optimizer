@@ -17,7 +17,7 @@ import { DEFAULT_SCORING_CONFIG, effectiveProfile, withProfile } from '../scorin
 import { DEFAULT_CANDIDATE_RULES, applicableObservations, budgetFor, estimateMemory, machineFromProfile, planCandidates, vramBudgetKey, rulesForRequest, type CandidateRules } from './candidates'
 import { CHARACTER_PROMPT_VERSION, LADDER_FILL, LADDER_FILL_TOLERANCE, LADDER_PREDICT, LADDER_SIZE_ROUNDS, PROMPT_VERSION, ladderPrompt } from './prompts'
 import { RULES_VERSION, type InterpretData, type StoredRun } from '../interpret'
-import { BASELINE_GEN, genConfigsFor, genLabel, samplingFor, splitReasoning, summarizeGen, templateKwargsFor, type GenRow } from './gen'
+import { BASELINE_GEN, genConfigsFor, genLabel, proofRowId, samplingFor, splitReasoning, summarizeGen, templateAlternate, templateKwargsFor, type GenRow } from './gen'
 
 /** Bump when the runner's measurement procedure changes (warmup, reps, reduction, timeouts). */
 export const BENCHMARK_VERSION = 'bench-1.0.0'
@@ -1045,12 +1045,11 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     if (!g.ok) { log('error', `${cand.id}: ${g.reason}`); return [] }
     const prompts = buildQualityPrompts(suite, { fillerTokens: Math.min(cfg.qualityFillerMax, Math.floor(ctx * 0.6)), thinking: false })
     const done: GenQuality[] = []
+    const proofCache = new Map<string, { promptSha256: string; proof: NonNullable<GenRow['templateKwargProof']> }>()
     const sha256 = (s: string) => createHash('sha256').update(s).digest('hex')
     try {
       for (const { gen, samples } of gens) {
         const templateKwargs = templateKwargsFor(model, gen)
-        let proof: GenRow['templateKwargProof'] | null = null
-        let proofAttempted = false
         if (templateKwargs) log('info', `${model.name}: quality suite with ${genLabel(gen)}${samples > 1 ? `, ${samples} samples` : ''}`)
         const rows: GenRow[] = []
         let interrupted = false
@@ -1066,43 +1065,58 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
               ...(meta.skill ? { skillId: meta.skill } : {}),
               ...(suite.suiteSeed !== null ? { suiteSeed: suite.suiteSeed, generatorVersion: suite.generatorVersion } : {}),
               ...(meta.instanceSeed !== undefined ? { generatorSeed: meta.instanceSeed, instanceSeed: meta.instanceSeed } : {}) }
+            const s = samplingFor(gen)
+            const requestedSampling = { temperature: s.temperature, topP: s.top_p ?? null, topK: s.top_k ?? null, minP: s.min_p ?? null, seed: sample }
+            let proofOnError: Partial<GenRow> = {}
             try {
               const prompt = await backend.applyTemplate(p.messages, templateKwargs ? { templateKwargs } : undefined)
-              const s = samplingFor(gen)
+              const promptSha256 = sha256(prompt)
               const preq: PromptRequest & { topP?: number; topK?: number; minP?: number } = {
                 prompt, seed: sample, temperature: s.temperature, topP: s.top_p, topK: s.top_k, minP: s.min_p,
                 maxTokens: gen.thinking ? Math.max(p.maxTokens * 4, cfg.thinkingMinTokens) : p.maxTokens,
                 timeoutMs: gen.thinking ? cfg.qualityTimeoutMs * 2 : cfg.qualityTimeoutMs
               }
-              const r = await backend.runPrompt(preq)
-              // I-8.0: change one kwarg at a time on the SAME item, with all other
-              // kwargs held fixed. This is template-only; it sends no extra generation.
-              // An off/on difference alone cannot prove reasoning_effort was applied.
-              if (gens.length > 1 && templateKwargs && !proofAttempted && !r.error && !g.tripped() && !signal?.aborted && !deps.pauseSignal?.aborted && !backend.lastExit) {
-                proofAttempted = true
-                proof = {}
+              // I-8.0: change one kwarg at a time on this row's messages, with all others fixed.
+              // Template-only probes send no extra generation and cannot be borrowed by later items.
+              const cacheKey = JSON.stringify([test.id, gen.id, templateKwargs ?? {}])
+              const cached = proofCache.get(cacheKey)
+              const proof: NonNullable<GenRow['templateKwargProof']> = cached?.promptSha256 === promptSha256 ? cached.proof : {}
+              if ((!cached || cached.promptSha256 !== promptSha256) && templateKwargs && !g.tripped() && !signal?.aborted && !deps.pauseSignal?.aborted && !backend.lastExit) {
                 const effortKey = model.genKnobs?.effortKw ?? 'reasoning_effort'
                 for (const [key, requested] of Object.entries(templateKwargs)) {
-                  const alternate = key === 'enable_thinking' && typeof requested === 'boolean' ? !requested
-                    : key === effortKey ? model.genKnobs?.effortValues?.find((x) => x !== requested) : undefined
-                  const originalHash = sha256(prompt)
+                  const alternate = templateAlternate(key, requested, effortKey, model.genKnobs?.effortValues ?? [])
                   if (alternate === undefined) {
-                    proof[key] = { requested, counterfactual: null, requestedSha256: originalHash, counterfactualSha256: null, status: 'unavailable' }
+                    proof[key] = { requested, counterfactual: null, requestedSha256: promptSha256, counterfactualSha256: null, status: 'unavailable' }
                     continue
                   }
                   if (g.tripped() || signal?.aborted || deps.pauseSignal?.aborted || backend.lastExit) {
-                    proof[key] = { requested, counterfactual: alternate, requestedSha256: originalHash, counterfactualSha256: null, status: 'unavailable' }
+                    proof[key] = { requested, counterfactual: alternate, requestedSha256: promptSha256, counterfactualSha256: null, status: 'unavailable' }
                     continue
                   }
                   try {
                     const changed = await backend.applyTemplate(p.messages, { templateKwargs: { ...templateKwargs, [key]: alternate } })
-                    proof[key] = { requested, counterfactual: alternate, requestedSha256: originalHash,
+                    proof[key] = { requested, counterfactual: alternate, requestedSha256: promptSha256,
                       counterfactualSha256: sha256(changed), status: g.tripped() || signal?.aborted || deps.pauseSignal?.aborted || backend.lastExit ? 'unavailable' : changed === prompt ? 'unchanged' : 'proved' }
                   } catch {
-                    proof[key] = { requested, counterfactual: alternate, requestedSha256: originalHash, counterfactualSha256: null, status: 'unavailable' }
+                    proof[key] = { requested, counterfactual: alternate, requestedSha256: promptSha256, counterfactualSha256: null, status: 'unavailable' }
                   }
                 }
               }
+              if (!cached || cached.promptSha256 !== promptSha256) proofCache.set(cacheKey, { promptSha256, proof })
+              if (g.tripped() || signal?.aborted || deps.pauseSignal?.aborted || backend.lastExit) { interrupted = true; break }
+              const requestedKeys = Object.keys(templateKwargs ?? {})
+              const provedKeys = requestedKeys.filter((key) => proof[key]?.status === 'proved')
+              const renderProof: NonNullable<GenRow['renderProof']> = {
+                rowId: proofRowId({ ...tag, testId: test.id }), promptSha256, renderedSha256: promptSha256,
+                counterfactualSha256: requestedKeys.length ? proof[requestedKeys[0]]?.counterfactualSha256 ?? null : null,
+                counterfactuals: Object.fromEntries(requestedKeys.map((key) => [key, proof[key]?.counterfactualSha256 ?? null])),
+                keys: provedKeys, status: provedKeys.length === requestedKeys.length ? 'proved' : 'unproved'
+              }
+              proofOnError = { promptSha256, renderProof, requestedSampling,
+                proofProvenance: { mode: 'runtime', originalPromptHashPresent: true, status: 'original' },
+                ...(templateKwargs ? { requestedTemplateKwargs: templateKwargs, templateKwargProof: proof } : {}),
+                ...(templateKwargs && renderProof.status === 'proved' ? { appliedTemplateKwargs: templateKwargs } : {}) }
+              const r = await backend.runPrompt(preq)
               const split = splitReasoning(r.text ?? '')
               const toks = r.decodeTokens ?? r.streamedTokens ?? null
               const chars = split.reasoningChars + split.answerChars
@@ -1122,7 +1136,9 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
                 maxTokens: preq.maxTokens, checkerVersion: suite.suite, outputTruncated: truncated,
                 // A failed request is an infrastructure failure, never a wrong answer (rule I-5.7); a budget stop is truncation (I-5.8).
                 evaluationStatus: (r.error && !r.timedOut ? 'infra_error' : truncated ? 'truncated' : 'valid') as GenRow['evaluationStatus'],
-                ...(templateKwargs ? { requestedTemplateKwargs: templateKwargs } : {}),
+                ...(templateKwargs ? { requestedTemplateKwargs: templateKwargs, templateKwargProof: proof } : {}),
+                promptSha256, renderProof, requestedSampling, proofProvenance: { mode: 'runtime' as const, originalPromptHashPresent: true, status: 'original' as const },
+                ...(templateKwargs && renderProof.status === 'proved' ? { appliedTemplateKwargs: templateKwargs } : {}),
                 // F5 contract: identities + runtime-accepted sampling (null when the backend does not report them)
                 templateHash: backend.templateHash ?? null, runtimeVersion: cur.runtime, modelFingerprint: `${model.id}#${model.fileBytes}`,
                 acceptedSampling: (r as PromptResult & { acceptedSampling?: Record<string, unknown> | null }).acceptedSampling ?? null
@@ -1131,7 +1147,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
                 ? { testId: test.id, category: test.category, weight: test.weight, pass: false, score: 0, detail: `request failed: ${r.error}`, ...tag, ...counts }
                 : { ...(await evaluate(test, r.text)), ...tag, ...counts })
             } catch (e) {
-              rows.push({ testId: test.id, category: test.category, weight: test.weight, pass: false, score: 0, detail: `request failed: ${(e as Error).message}`, ...tag, evaluationStatus: 'infra_error', checkerVersion: suite.suite, ctx })
+              rows.push({ testId: test.id, category: test.category, weight: test.weight, pass: false, score: 0, detail: `request failed: ${(e as Error).message}`, ...tag, requestedSampling, ...proofOnError, evaluationStatus: 'infra_error', checkerVersion: suite.suite, ctx })
             }
           }
         }
@@ -1139,10 +1155,6 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         if (interrupted || rows.length < prompts.length * samples) {
           log('warn', `${cand.id}: quality suite (${gen.id}) incomplete (${rows.length}/${prompts.length * samples}); discarded`)
           break
-        }
-        if (proof) for (const r of rows) r.templateKwargProof = proof
-        if (templateKwargs && proof && Object.keys(templateKwargs).every((key) => proof[key]?.status === 'proved')) {
-          for (const r of rows) r.appliedTemplateKwargs = templateKwargs
         }
         done.push(summarizeGen(gen, rows, samples))
       }

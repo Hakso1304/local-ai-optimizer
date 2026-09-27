@@ -9,7 +9,7 @@ import { componentScores } from '../scoring/components'
 import { fmtCtx, val } from '../scoring/cliff'
 import { includesZero, pairedDifference, type UncertaintyRow } from '../scoring/uncertainty'
 import { DEFAULT_SCORING_CONFIG, effectiveProfile, withProfile, type ScoringConfig } from '../scoring/workloads'
-import { BASELINE_GEN, genLabel, templateKwargsFor, type GenRow } from '../benchmark/gen'
+import { BASELINE_GEN, genLabel, proofRowId, templateKwargsFor, type GenRow } from '../benchmark/gen'
 import { cite, P, rule, RULES, RULES_VERSION, tag } from './catalog'
 
 export type StoredRun = BenchmarkRunResult & { runId?: string; supersededBy?: string; startedAt?: number; endedAt?: number }
@@ -143,14 +143,40 @@ function sessionVersionOf(runs: BenchmarkRunResult[]): string | null {
   return [...count].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0]?.[0] ?? null
 }
 
-type ContractRow = UncertaintyRow & { appliedTemplateKwargs?: Record<string, unknown>; templateKwargProof?: GenRow['templateKwargProof']; templateHash?: string | null; runtimeVersion?: string | null; modelFingerprint?: string | null; acceptedSampling?: Record<string, unknown> | null }
+type ContractRow = UncertaintyRow & { configId?: string; suiteSeed?: number; appliedTemplateKwargs?: Record<string, unknown>; templateKwargProof?: GenRow['templateKwargProof']; promptSha256?: string; renderProof?: GenRow['renderProof']; proofProvenance?: GenRow['proofProvenance']; requestedSampling?: GenRow['requestedSampling']; templateHash?: string | null; runtimeVersion?: string | null; modelFingerprint?: string | null; acceptedSampling?: Record<string, unknown> | null }
 /** F5: what is missing for a generation config to be comparable with its baseline (empty = contract met). */
 /** I-8.0 contract check for one generation config's rows: contradictions (errors — the rows say something other
  *  than the config) are separated from absent proof (missing — not evaluable). kwargs are compared with what the
  *  template should have received for this config (templateKwargsFor); a template without thinking = not applicable. */
-function contractCheck(rows: ContractRow[], base: ContractRow[], gen: GenQuality['gen'], expected: Record<string, unknown> | undefined): { errors: string[]; missing: string[] } {
+function contractCheck(rows: ContractRow[], base: ContractRow[], gen: GenQuality['gen'], expected: Record<string, unknown> | undefined,
+  effort?: { key: string; values: string[] }): { errors: string[]; missing: string[] } {
   const errors: string[] = [], missing: string[] = []
   if (!rows.length) return { errors, missing: ['no rows'] }
+  const hash = (x: unknown) => typeof x === 'string' && /^[0-9a-f]{64}$/.test(x)
+  const validAlternate = (key: string, requested: unknown, alternate: unknown) => key === 'enable_thinking'
+    ? typeof requested === 'boolean' && alternate === !requested
+    : key === effort?.key ? typeof requested === 'string' && typeof alternate === 'string' && effort.values.includes(alternate) && alternate !== requested
+      : typeof requested === 'number' ? typeof alternate === 'number' && Number.isFinite(alternate) && alternate !== requested
+        : typeof requested === 'string' ? typeof alternate === 'string' && !!alternate && alternate !== requested
+          : typeof requested === 'boolean' && alternate === !requested
+  for (const r of rows) {
+    const p = r.renderProof
+    if (!p || !r.promptSha256) { missing.push('row-bound render proof or prompt hash not recorded on every row'); continue }
+    if (r.proofProvenance && !r.proofProvenance.originalPromptHashPresent) {
+      missing.push('reconstructed prompt is not row-bound to the original generation request')
+    }
+    if (p.status === 'contradicted' || p.rowId !== proofRowId(r) || !hash(r.promptSha256) ||
+      p.promptSha256 !== r.promptSha256 || p.renderedSha256 !== r.promptSha256 ||
+      !Array.isArray(p.keys) || p.keys.some((k) => typeof k !== 'string')) {
+      missing.push('row-bound render proof contradicts this row identity or prompt hash')
+    } else if (p.status !== 'proved') missing.push('row-bound render proof not verified on every row')
+    if (expected && Object.keys(expected).length > 0 && (Object.keys(expected).some((k) => !p.keys.includes(k)) ||
+      !hash(p.counterfactualSha256) || p.counterfactualSha256 === p.renderedSha256 ||
+      p.counterfactualSha256 !== r.templateKwargProof?.[Object.keys(expected)[0]]?.counterfactualSha256 ||
+      Object.keys(expected).some((key) => !hash(p.counterfactuals?.[key]) || p.counterfactuals?.[key] !== r.templateKwargProof?.[key]?.counterfactualSha256))) {
+      missing.push('row-bound counterfactual proof not verified for every requested key')
+    }
+  }
   if (expected) {
     const applied = rows.filter((r) => r.appliedTemplateKwargs && Object.keys(r.appliedTemplateKwargs).length > 0)
     const bad = applied.find((r) => Object.entries(expected).some(([k, x]) => r.appliedTemplateKwargs![k] !== x) || Object.keys(r.appliedTemplateKwargs!).some((k) => !(k in expected)))
@@ -165,11 +191,11 @@ function contractCheck(rows: ContractRow[], base: ContractRow[], gen: GenQuality
       const contradicts = rows.some((r) => {
         const p = r.templateKwargProof?.[key]
         return p && (p.requested !== requested || (p.status === 'unchanged' && r.appliedTemplateKwargs?.[key] === requested) ||
-          (p.status === 'proved' && (p.counterfactual === requested || !/^[0-9a-f]{64}$/.test(p.requestedSha256) ||
+          (p.status === 'proved' && (!validAlternate(key, requested, p.counterfactual) || p.requestedSha256 !== r.promptSha256 || !/^[0-9a-f]{64}$/.test(p.requestedSha256) ||
             !/^[0-9a-f]{64}$/.test(p.counterfactualSha256 ?? '') || p.requestedSha256 === p.counterfactualSha256)))
       })
       if (contradicts) {
-        errors.push(`per-key template proof for ${key} contradicts the config or render hashes`)
+        missing.push(`per-key template proof for ${key} contradicts this row's render or alternate value`)
       }
       if (evidence.some((p) => p?.status !== 'proved')) missing.push(`per-key template proof for ${key} not verified on every row`)
     }
@@ -187,6 +213,13 @@ function contractCheck(rows: ContractRow[], base: ContractRow[], gen: GenQuality
     if (got.some((g) => typeof g === 'number' && Number.isFinite(g) && Math.abs(g - x) > 1e-6)) errors.push(`accepted ${k} differs from the config's ${x}`)
     if (got.some((g) => !(typeof g === 'number' && Number.isFinite(g)))) missing.push(`runtime-accepted ${k} not recorded on every row`)
   }
+  const requestedSeeds = rows.map((r) => r.requestedSampling?.seed)
+  const acceptedSeeds = rows.map((r) => r.acceptedSampling?.seed)
+  if (requestedSeeds.some((s) => typeof s !== 'number' || !Number.isInteger(s)) ||
+    rows.some((r) => r.requestedSampling?.seed !== r.sample)) missing.push('requested sample seed not recorded or differs from row sample')
+  if (acceptedSeeds.some((s, i) => typeof s === 'number' && Number.isFinite(s) &&
+    typeof requestedSeeds[i] === 'number' && s !== requestedSeeds[i])) errors.push('runtime-accepted seed differs from requested sample seed')
+  if (acceptedSeeds.some((s) => typeof s !== 'number' || !Number.isFinite(s))) missing.push('runtime-accepted seed not recorded on every row')
   return { errors, missing }
 }
 
@@ -330,9 +363,16 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
     // chosen only when its paired quality difference vs the current choice excludes 0 (and it answers within tolerance).
     const thinkingModel = !!(input.model.genKnobs?.supportsThinking || input.model.supportsThinking)
     const efforts = input.model.genKnobs?.effortValues ?? []
+    const effort = { key: input.model.genKnobs?.effortKw ?? 'reasoning_effort', values: efforts }
     const order = (g: GenQuality) => (g.gen.thinking ? 1 + (g.gen.effort && efforts.includes(g.gen.effort) ? efforts.indexOf(g.gen.effort) : efforts.length) : 0)
     const sortedGens = [...(input.genQuality ?? [])].sort((a, b) => order(a) - order(b) || (a.gen.id < b.gen.id ? -1 : a.gen.id > b.gen.id ? 1 : 0))
-    const genOptions: GenOption[] = sortedGens.map((gq) => {
+    // A renderer can explicitly contradict one stored row. Quarantine that row
+    // in the read view; never rewrite history. Infrastructure failures still
+    // quarantine the whole quality result under I-5.7.
+    const provedView = (gq: GenQuality): GenQuality => ({ ...gq, results: gq.results.filter((r) =>
+      (r as ContractRow).renderProof?.status !== 'contradicted' || (r as ContractRow).evaluationStatus === 'infra_error') })
+    const genOptions: GenOption[] = sortedGens.map((storedGq) => {
+      const gq = provedView(storedGq)
       const s = scoreOf(scored, machine, profile, cfg, gq, scoringRung)
       const lat = val(s.cs.components.latency.input, true)
       // F5 (I-8.0): the full application contract on every row — applied kwargs, template/runtime/model identity and
@@ -340,12 +380,12 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
       // A (w4l): every config, the baseline included — a contradiction always excludes it; absent proof excludes
       // only thinking configs (the baseline then stands, comparisons with it are not evaluable).
       const off = sortedGens.find((x) => !x.gen.thinking)
-      const base = (gq.gen.thinking ? (off?.results ?? input.quality) : []) as ContractRow[]
-      const chk = contractCheck(gq.results as ContractRow[], base, gq.gen, templateKwargsFor(input.model, gq.gen))
+      const base = (gq.gen.thinking ? (off ? provedView(off).results : input.quality) : []) as ContractRow[]
+      const chk = contractCheck(gq.results as ContractRow[], base, gq.gen, templateKwargsFor(input.model, gq.gen), effort)
       // A thinking result is comparable only to a baseline whose own requested
       // sampling and template kwargs were verified on every row. The baseline
       // may still stand alone with missing proof, but it cannot prove a delta.
-      const offCheck = gq.gen.thinking ? contractCheck(base, [], off?.gen ?? BASELINE_GEN, templateKwargsFor(input.model, off?.gen ?? BASELINE_GEN)) : null
+      const offCheck = gq.gen.thinking ? contractCheck(base, [], off?.gen ?? BASELINE_GEN, templateKwargsFor(input.model, off?.gen ?? BASELINE_GEN), effort) : null
       const missing = [...chk.errors, ...(gq.gen.thinking ? chk.missing : [])]
       if (offCheck) missing.push(...offCheck.errors.map((x) => `baseline: ${x}`), ...offCheck.missing.map((x) => `baseline: ${x}`))
       const comparable = missing.length === 0
@@ -372,7 +412,12 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
     // explicit off sampling contract (which may be T=1), not the default T=0.
     const qConfig = gen?.gq.gen ?? sortedGens.find((x) => !x.gen.thinking)?.gen ?? BASELINE_GEN
     const qRows = (gen ? gen.gq.results : input.quality) as ContractRow[]
-    const qErrors = contractCheck(qRows, [], qConfig, templateKwargsFor(input.model, qConfig)).errors
+    const qExpected = templateKwargsFor(input.model, qConfig)
+    const qCheck = contractCheck(qRows, [], qConfig, qExpected, effort)
+    // Plain quality without template kwargs or a gen comparison retains its measured status.
+    // A requested/recorded seed contract, however, must be honoured even on that path.
+    const seedContractApplies = !!qExpected || sortedGens.length > 1 || sortedGens.some((x) => x.gen.thinking) || qRows.some((r) => !!r.requestedSampling)
+    const qErrors = [...qCheck.errors, ...(seedContractApplies ? qCheck.missing.filter((x) => x.includes('seed')) : [])]
     // A contradictory baseline cannot remain a measured quality contribution merely
     // because no alternative generation config was selected. Preserve the rows for
     // audit, but score this candidate with quality unavailable.

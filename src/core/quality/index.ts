@@ -45,6 +45,15 @@ export interface QualityResult {
   pass: boolean
   score: number
   detail: string
+  /** Exact prompt sent for this row; absent on historical observations. */
+  promptSha256?: string
+  renderProof?: {
+    rowId: string; promptSha256: string; renderedSha256: string; counterfactualSha256: string | null
+    counterfactuals?: Record<string, string | null>
+    keys: string[]; status: 'proved' | 'unproved' | 'contradicted' | 'reconstructed'
+  }
+  requestedSampling?: { temperature: number; topP: number | null; topK: number | null; minP: number | null; seed: number }
+  proofProvenance?: { mode?: 'runtime' | 'live-template-replay'; originalPromptHashPresent: boolean; status?: 'original' | 'reconstructed'; sourceRowId?: number }
 }
 
 export const defaultTestSet = suiteV1 as QualityTestSet
