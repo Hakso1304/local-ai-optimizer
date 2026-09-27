@@ -316,3 +316,6 @@
 
 ## Fable — 2026-09-28 05:44 local
 - Full run on clean HEAD (#1): 854/26 fail — (A) CRITICAL inspect() tick comparison fails on every real process (CIM µs truncation) → app cannot complete a session; (B) a3cc795 proofRequired voids standalone baseline quality on thinking-capable models. Guide I-8.0 scope corrected (standalone keeps MEASURED; proof for attribution/comparisons). Both routed to S1 (in the T-round) + S2 tests (real-process identity test).
+
+## Fable — 2026-09-28 05:45 local
+- 27f33bc pushed (S3 Q8 ab-spill port reservation + owner/props verification). Remaining S3: Q2/Q3/Q5–Q7. S1: T-round + A (CIM µs ticks) + B (standalone baseline measured) + gen-choice disclosure. S2: tests for all. Guide I-8.0 scope corrected.
