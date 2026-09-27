@@ -1,5 +1,6 @@
 // Core session runner E2E on real hardware, independent of the Electron/IPC wiring.
 // Usage: npx tsx scripts/run-session.ts <A|B|C|H> [--heavy] [--workload coding] [--models a,b] [--ladder 2048,8192] [--no-quality] [--ram-abort-gib 5] [--required-ctx 131072]
+//        [--gen-configs '[{...GenConfig}]'] [--gen-search] [--quality-mode quick|thorough] [--max-per-model 1]
 //   A  coding workload, qwen2.5-1.5b + llama-3.1-8b, quality on, default ladder/reps
 //   B  same session, abort ~20 s into the 8B ladder (cancel path)
 //   C  RAM floor 64 GiB (guard path: every step skipped_memory, no load)
@@ -105,6 +106,10 @@ async function main(): Promise<void> {
     runQuality: scenario === 'A' || (scenario === 'H' && !process.argv.includes('--no-quality')),
     heavyMode: process.argv.includes('--heavy'),
     ...(flag('--required-ctx') ? { requiredContext: Number(flag('--required-ctx')) } : {}),
+    ...(flag('--gen-configs') ? { genConfigs: JSON.parse(flag('--gen-configs')!) } : {}),
+    ...(process.argv.includes('--gen-search') ? { genSearch: true } : {}),
+    ...(flag('--quality-mode') ? { qualityMode: flag('--quality-mode') as 'quick' | 'thorough' } : {}),
+    ...(flag('--max-per-model') ? { candidateRules: { maxPerModel: Number(flag('--max-per-model')) } } : {}),
     ...(flag('--ladder') ? { ladder: flag('--ladder')!.split(',').map(Number) } : {})
   }
   const pidFile = join(tmpdir(), `lao-session-${scenario}.pid`)
