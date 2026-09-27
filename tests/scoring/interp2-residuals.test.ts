@@ -317,7 +317,7 @@ describe('A/B/C (review-w4l): generation contract strictness', () => {
     c.genQuality[1] = gq('think-low', true, reconstructed)
     expect(V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')).toMatchObject({ comparable: false })
   })
-  it('I-8.0 quarantines a request error or timeout row while comparing valid proved rows', () => {
+  it('I-5.7 excludes an infra error despite valid template proof; I-5.8 keeps a proved truncation comparable', () => {
     const c = thinkModel(candidate('a'))
     c.quality = bound(rowsFor('off'), { enable_thinking: false })
     const valid = bound(rowsFor('think-low'), { enable_thinking: true, reasoning_effort: 'low' })
@@ -326,8 +326,14 @@ describe('A/B/C (review-w4l): generation contract strictness', () => {
         ...(status === 'truncated' ? { outputTruncated: true } : {}) } as QualityResult : r)
       c.genQuality = [gq('off', false, c.quality), gq('think-low', true, rows)]
       const option = V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')!
-      expect(option.comparable).toBe(true)
-      expect(option.cs.components.quality.input.kind).toBe('measured')
+      if (status === 'infra_error') {
+        expect(option.comparable).toBe(false)
+        expect(option.why).toMatch(/quality quarantined \(infrastructure error\)/)
+        expect(option.cs.components.quality.input.kind).not.toBe('measured')
+      } else {
+        expect(option.comparable).toBe(true)
+        expect(option.cs.components.quality.input.kind).toBe('measured')
+      }
     }
   })
   it('I-8.0 quarantines one contradictory render row while valid rows remain comparable', () => {
