@@ -5,7 +5,7 @@ import { sectionOf, type Insight } from '../../shared/interpret-types'
 import { Prov, fmtCtx } from './ui'
 
 const SECTIONS: Record<number, string> = {
-  2: 'Context ladder and practical ceiling', 3: 'Speed', 4: 'Memory', 5: 'Quality', 6: 'Stability and reproducibility',
+  1: 'Provenance', 2: 'Context ladder and practical ceiling', 3: 'Speed', 4: 'Memory', 5: 'Quality', 6: 'Stability and reproducibility',
   7: 'Comparing candidates', 8: 'Generation configuration'
 }
 
@@ -56,7 +56,7 @@ export function InterpretPanel({ insights, actions, tag = '' }: { insights: Insi
   const groups = new Map<number, Insight[]>()
   for (const i of insights) { const s = sectionOf(i.ruleId) ?? 7; groups.set(s, [...(groups.get(s) ?? []), i]) }
   // §0: context (2) and quality (5) lead, then the rest in guide order.
-  const order = [2, 5, 3, 4, 6, 7, 8].filter((s) => groups.has(s))
+  const order = [2, 5, 3, 4, 6, 7, 8, 1].filter((s) => groups.has(s))
   return (
     <>
       <h2>Interpretation{tag}</h2>
@@ -87,6 +87,9 @@ export function InterpretPanel({ insights, actions, tag = '' }: { insights: Insi
     </>
   )
 }
+
+/** Rules version a recommendation was made with; null = before the rule engine (no insights stored). */
+export const rulesOf = (rec: unknown): string | null => (rec as { rulesVersion?: string } | null)?.rulesVersion ?? null
 
 /** Recommendation.insights (persisted with the recommendation by the interpretation engine); [] for older ones. */
 export const insightsOf = (rec: unknown): Insight[] => ((rec as { insights?: Insight[] } | null)?.insights ?? [])

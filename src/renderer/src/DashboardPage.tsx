@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { WorkloadId, WorkloadProfile } from '../../shared/bench-types'
 import type { SessionDetail, SystemProfile } from '../../shared/types'
-import { Reason, cardInsights, insightsOf } from './InterpretPanel'
+import { Reason, cardInsights, insightsOf, rulesOf } from './InterpretPanel'
+import type { Insight } from '../../shared/interpret-types'
 import { LARGE, LARGE_PRESET, LargeCodingCard, presetFor, type BenchPreset } from './LargeCodingCard'
 import { COMPONENT_LABEL, CtxPick, DemoBanner, M, ScoreBar, fmtCtx, gib } from './ui'
 
@@ -26,13 +27,22 @@ function SystemSummary() {
 
 function RecommendedCard({ d, go }: { d: SessionDetail; go: Go }) {
   const rec = d.recommendation
+  // A stored recommendation from before the rule engine has no insights: borrow a reinterpretation's for the card lines.
+  const [reinterp, setReinterp] = useState<Insight[] | null>(null)
+  useEffect(() => {
+    if (!rec || rulesOf(rec) !== null || d.session.demo) return setReinterp(null)
+    let live = true
+    window.api.computeRecommendation(d.session.id, d.session.workload).then((r) => { if (live) setReinterp(insightsOf(r?.recommendation)) }, () => {})
+    return () => { live = false }
+  }, [d.session.id, d.session.workload, rec, d.session.demo])
   const c = d.candidates.find((x) => x.config.id === rec?.best?.configId)
   return (
     <div className={`card${d.session.demo ? ' demo-card' : ''}`}>
       {d.session.demo && <DemoBanner what={`DEMO DATA (workload ${d.session.workload})`} />}
       <h2>Recommended configuration</h2>
       {!rec?.best || !c ? (
-        <><p>No candidate met this workload's requirements.</p><ul>{rec?.reasons.map((r) => <li key={r}><Reason text={r} /></li>)}</ul></>
+        <><p>No candidate met this workload's requirements.</p><ul>{rec?.reasons.map((r) => <li key={r}><Reason text={r} /></li>)}</ul>
+          {cardInsights(insightsOf(rec).length ? insightsOf(rec) : reinterp ?? []).alerts.map((i, k) => <p key={k} className={`sev-${i.severity}`}><span className={`sev sev-${i.severity}`}>{i.severity}</span> <Reason text={i.text} /></p>)}</>
       ) : (
         <>
           <table className="kv">
@@ -49,7 +59,7 @@ function RecommendedCard({ d, go }: { d: SessionDetail; go: Go }) {
             </tbody>
           </table>
           {(() => {
-            const ci = cardInsights(insightsOf(rec))
+            const ci = cardInsights(insightsOf(rec).length ? insightsOf(rec) : reinterp ?? [])
             const q = rec.best.score.breakdown.find((b) => b.component === 'quality') as ({ score: number; n?: number; ci95?: number; input: { kind: string } } | undefined)
             return (
               <div className="card-insights">

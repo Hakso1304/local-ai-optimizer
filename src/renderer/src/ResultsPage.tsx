@@ -6,7 +6,7 @@ import type { TelemetrySample } from '../../shared/bench-events'
 import { WORKLOADS } from '../../core/scoring/workloads'
 import { genLabel } from '../../core/benchmark/gen'
 import { ExportMenu } from './ExportMenu'
-import { InterpretPanel, Reason, insightsOf, type InsightActions } from './InterpretPanel'
+import { InterpretPanel, Reason, insightsOf, rulesOf, type InsightActions } from './InterpretPanel'
 import type { BenchPreset } from './LargeCodingCard'
 import { LineChart, type Band } from './LineChart'
 import { ParetoChart } from './ParetoChart'
@@ -215,9 +215,15 @@ export function ResultsPage({ sessionId, go }: { sessionId?: number; go: Go }) {
   useEffect(() => { setViewAs(null); setComputed(null) }, [sel])
   useEffect(() => {
     setComputed(null) // never show the previous session/workload's result while the new one is pending
-    if (!detail || !viewAs || viewAs === detail.session.workload) return
+    if (!detail) return
+    // Same workload as benchmarked: the stored recommendation is shown — unless it predates the rule engine, then it
+    // is reinterpreted with the current rules for display (the stored one is kept as is).
+    const own = !viewAs || viewAs === detail.session.workload
+    if (own && rulesOf(detail.recommendation) !== null) return
+    if (own && !detail.recommendation) return
+    const w = viewAs ?? detail.session.workload
     let live = true // stale-reply guard: a slower answer for an earlier session+workload is dropped (W4b F11)
-    window.api.computeRecommendation(detail.session.id, viewAs).then((r) => { if (live) setComputed(r) }, (e: Error) => { if (live) setErr(e.message) })
+    window.api.computeRecommendation(detail.session.id, w).then((r) => { if (live) setComputed(r) }, (e: Error) => { if (live) setErr(e.message) })
     return () => { live = false }
   }, [detail, viewAs])
   const shown: SessionDetail | null = detail && computed ? {
@@ -276,7 +282,9 @@ export function ResultsPage({ sessionId, go }: { sessionId?: number; go: Go }) {
               {Object.values(WORKLOADS).map((w) => <option key={w.id} value={w.id}>{w.label}{w.id === detail.session.workload ? ' (benchmarked)' : ''}</option>)}
             </select>
           </label>
-          {computed && <span className="pill warn-pill">{computed.label} — not the session's own recommendation</span>}
+          {computed && (computed.workload === detail.session.workload
+            ? <span className="pill warn-pill" title="The stored recommendation was made before the interpretation rules; the numbers are the same measurements">recommended with rules {rulesOf(detail.recommendation) ?? 'pre-interp'}; reinterpreted with rules {rulesOf(computed.recommendation) ?? '?'}</span>
+            : <span className="pill warn-pill">{computed.label} — not the session's own recommendation</span>)}
         </div>
       )}
       {shown && <Detail d={shown} go={go} onRerun={(configId) => act(window.api.resumeBench(shown.session.id, { rerunConfigIds: [configId] }))} />}
