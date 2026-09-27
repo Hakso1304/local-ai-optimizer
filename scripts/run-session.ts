@@ -20,7 +20,7 @@ import { pickDiscreteDevice } from '../src/core/runtimes/llamacpp/parse'
 import { scanSystem } from '../src/core/system/scanner'
 import { readVramInUse, startSampler } from '../src/core/telemetry/sampler'
 import { openDb } from '../src/core/storage/db'
-import { makeSessionStorage, type PlanFor } from '../src/core/storage/sessions'
+import { getSessionResume, makeSessionStorage, type PlanFor } from '../src/core/storage/sessions'
 import { generateCandidates, machineFromProfile, rulesForRequest } from '../src/core/benchmark/candidates'
 import { WORKLOADS } from '../src/core/scoring/workloads'
 import { val } from '../src/core/scoring/cliff'
@@ -136,7 +136,17 @@ async function main(): Promise<void> {
       candidates: models.flatMap((model) => generateCandidates(mach, model, { backend: 'vulkan' }, WORKLOADS[r.workload], rulesForRequest(r)).candidates.map((config) => ({ config, model })))
     }
   }
-  const appStorage = dbPath ? makeSessionStorage(openDb(dbPath), planFor) : null
+  const appDb = dbPath ? openDb(dbPath) : null
+  const appStorage = appDb ? makeSessionStorage(appDb, planFor) : null
+  // --resume <id> (needs --db): continue a stored session exactly like the app's Resume — stored request, scan and
+  // candidate plan; already measured (configId, ctx) steps are reused, cancelled/skipped ones re-run.
+  const resumeId = flag('--resume')
+  const stored = resumeId && appDb ? getSessionResume(appDb, Number(resumeId)) : null
+  if (resumeId && !stored) throw new Error(`session ${resumeId} not found in ${dbPath ?? '(no --db)'}`)
+  if (stored) {
+    Object.assign(req, stored.request, { resumeSessionId: resumeId })
+    console.log(`${el()} resuming session ${resumeId}: ${stored.request.workload}, ${stored.plan.length} planned configs`)
+  }
   if (dbPath) console.log(`${el()} persisting to ${dbPath}; vramInUse ${vr ? (vr.bytes / GiB).toFixed(2) + ' GiB' : 'unavailable'}`)
   const file = join('docs', `session-run-${scenario}${scenario === 'H' ? `-${req.workload}${req.heavyMode ? '-heavy' : ''}` : ''}-${new Date(t0).toISOString().replace(/[:.]/g, '-')}.json`)
   let rec: Recommendation | null = null
@@ -166,6 +176,7 @@ async function main(): Promise<void> {
     clock: { now: () => Date.now() },
     readRamAvailableBytes: () => freemem(), // Windows: GlobalMemoryStatusEx ullAvailPhys = "Available"
     signal: ctl.signal,
+    ...(stored ? { plan: stored.plan, machine: stored.machine ?? machine } : {}),
     config: scenario === 'C' ? { ramFloorMinBytes: 64 * GiB } : {}
   }, (e) => {
     events.push(e)
