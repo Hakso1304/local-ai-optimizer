@@ -58,6 +58,8 @@ const genRows = (g: GenConfig, rate: number, reasoning: number, ms: number, appl
     return { ...row, appliedTemplateKwargs: kwargs, templateHash: 'tpl-1', runtimeVersion: 'b11208', modelFingerprint: 'llama8b#1',
       promptSha256: hash, requestedSampling: { temperature: g.temperature ?? 0, topP: null, topK: null, minP: null, seed: 1 },
       acceptedSampling: { temperature: g.temperature ?? 0, seed: 1 },
+      proofProvenance: { mode: 'runtime', status: 'original', originalPromptHashPresent: true,
+        origin: { generationPromptHashPresent: true, firstReplayAt: null, lineage: [] } },
       renderProof: { rowId: proofRowId(row), promptSha256: hash, renderedSha256: hash, counterfactualSha256: alt,
         counterfactuals: Object.fromEntries(Object.keys(kwargs).map((key) => [key, alt])), keys: Object.keys(kwargs), status: 'proved' as const },
       templateKwargProof: Object.fromEntries(Object.entries(kwargs).map(([key, requested]) => [key, {
@@ -449,7 +451,7 @@ describe('§8 generation configs', () => {
   it('I-8.0 thinking configs without verified applied kwargs are not considered; verified ones are', () => {
     const v = verdicts({ candidates: withGens(1, 1, { applied: false }), machine: M }, 'general_chat')
     expect(v.winner!.gen!.gq.gen.id).toBe('off')
-    expect(text(interpret(v), 'I-8.0')).toMatch(/thinking on \(effort low, T=1\.0\) not comparable — application contract not met: row-bound render proof or prompt hash not recorded on every row/)
+    expect(text(interpret(v), 'I-8.0')).toMatch(/thinking on \(effort low, T=1\.0\) not comparable — application contract not met: .*row-bound render proof or prompt hash not recorded on every row/)
     expect(text(interpret(v), 'I-8.0')).toMatch(/applied template kwargs not verified on every row/)
     expect(has(panel(withGens(1, 1), 'reasoning'), 'I-8.0')).toBe(false)
   })
@@ -470,6 +472,23 @@ describe('§8 generation configs', () => {
   })
   it('a thinking config whose time to answer exceeds the tolerance is not chosen', () => {
     const slow = withGens(1, 1).map((c) => ({ ...c, genQuality: c.genQuality!.map((g) => (g.gen.thinking ? { ...g, reasoningMs: { value: 60000, kind: 'measured' as const } } : g)) }))
-    expect(verdicts({ candidates: slow, machine: M }, 'general_chat').winner!.gen!.gq.gen.id).toBe('off')
+    const v = verdicts({ candidates: slow, machine: M }, 'general_chat')
+    expect(v.winner!.gen!.gq.gen.id).toBe('off')
+    expect(v.ranked[0].genOptions.find((g) => g.gq.gen.id === LOW.id)).toMatchObject({ comparable: true, withinTolerance: false })
+    const step = v.trace.genChoices[0].steps.find((s) => s.startsWith(`${LOW.id}:`)) ?? ''
+    expect(step).toMatch(/\+\d+ \[\+\d+, \+\d+\]/) // paired quality interval is still evaluated
+    expect(step).toMatch(/[\d.]+× slower/) // answer-time ratio is disclosed despite the tolerance veto
+    expect(step).toMatch(/above tolerance/)
+  })
+  it('an estimated reasoning split leaves a thinking choice provisional with its answer-time reason', () => {
+    const estimated = withGens(1, 1).map((c) => ({ ...c, genQuality: c.genQuality!.map((g) => g.gen.id === LOW.id
+      ? { ...g, results: g.results.map((r) => ({ ...r, tokenSource: 'estimated' as const })),
+        effectiveAnswerLatencyMs: { value: 4000, kind: 'estimated' as const, source: 'SSE fragment split' } }
+      : g) }))
+    const v = verdicts({ candidates: estimated, machine: M }, 'general_chat')
+    const step = v.trace.genChoices[0].steps.find((s) => s.startsWith(LOW.id)) ?? ''
+    expect(step).toMatch(/provisional/i)
+    expect(step).toMatch(/estimated answer time/i)
+    expect(v.winner?.gen?.gq.gen.id).not.toBe(LOW.id)
   })
 })

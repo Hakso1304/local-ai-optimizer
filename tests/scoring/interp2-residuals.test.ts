@@ -319,7 +319,7 @@ describe('A/B/C (review-w4l): generation contract strictness', () => {
     c.genQuality[1] = gq('think-low', true, reconstructed)
     expect(V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')).toMatchObject({ comparable: false })
   })
-  it('RECHECK6 R2: OFF variants without row proof cannot compare or credit measured quality', () => {
+  it('RECHECK6 R2: OFF variants without row proof cannot compare, while standalone checker quality stays measured', () => {
     const c = thinkModel(candidate('off-options'))
     const off = rowsFor('off', { requestedSampling: { temperature: 0, seed: 1 }, acceptedSampling: { temperature: 0, seed: 1 },
       appliedTemplateKwargs: { enable_thinking: false } })
@@ -329,7 +329,11 @@ describe('A/B/C (review-w4l): generation contract strictness', () => {
     c.genQuality = [gq('off', false, off), gq('off-alt', false, alt)]
     const v = V([c])
     expect(v.ranked[0].genOptions.every((o) => !o.comparable)).toBe(true)
-    expect(v.ranked[0].genOptions.every((o) => o.cs.components.quality.input.kind !== 'measured')).toBe(true)
+    expect(v.ranked[0].qualityMeasured).toBe(true)
+    expect(v.ranked[0].cs.components.quality.input.kind).toBe('measured')
+    expect(interpret(v).some((insight) => /thinking state unverified/i.test(insight.text))).toBe(true)
+    const altAlone = { ...c, quality: alt, genQuality: [] }
+    expect(V([altAlone]).ranked[0].qualityMeasured).toBe(true)
     expect(v.winner?.gen ?? null).toBeNull()
     const provedOff = bound(rowsFor('off'), { enable_thinking: false })
     const provedAlt = bound(rowsFor('off-alt'), { enable_thinking: false })
