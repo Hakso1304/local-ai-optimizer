@@ -322,6 +322,15 @@ export class LlamaCppBackend implements InferenceBackend {
     if (r.error) throw new Error(`warmup failed: ${r.error}`)
   }
 
+  /** Apply the model's chat template (POST /apply-template) so chat-format prompts can go through runPrompt. */
+  async applyTemplate(messages: { role: string; content: string }[]): Promise<string> {
+    const res = await fetch(`http://127.0.0.1:${this.port}/apply-template`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages }), signal: AbortSignal.timeout(10_000)
+    })
+    if (!res.ok) throw new Error(`POST /apply-template -> HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`)
+    return ((await res.json()) as { prompt: string }).prompt
+  }
+
   /** /metrics (Prometheus text -> name:value) and /slots, whichever answer. */
   async getRuntimeStats(): Promise<RuntimeStats> {
     const base = `http://127.0.0.1:${this.port}`

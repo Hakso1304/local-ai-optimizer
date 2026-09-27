@@ -23,7 +23,8 @@ export interface SessionRequest {
 export type SessionPhase = 'load' | 'warmup' | 'measure' | 'ladder' | 'quality'
 export type CandidateStatus = 'done' | 'failed' | 'cancelled' | 'skipped'
 
-export type SessionEvent = { sessionId: string } & (
+/** Event payload without the session id (what the runner builds). */
+export type SessionEventBody =
   | { type: 'session:started'; workload: WorkloadId; modelIds: string[]; resumed: boolean }
   | { type: 'candidate:started'; configId: string; model: string; gpuLayers: number; ctxSteps: number[] }
   | { type: 'phase'; configId: string; ctx: number; phase: SessionPhase }
@@ -36,4 +37,5 @@ export type SessionEvent = { sessionId: string } & (
   | { type: 'session:done'; recommendation: Recommendation }
   | { type: 'session:cancelled' }
   | { type: 'session:failed'; error: string }
-)
+
+export type SessionEvent = { sessionId: string } & SessionEventBody

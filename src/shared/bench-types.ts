@@ -107,7 +107,7 @@ export type RunStatus = 'pass' | 'degraded' | 'fail' | 'timeout' | 'cancelled'
 
 export type FailureKind =
   | 'oom' | 'load_fail' | 'device_lost' | 'crash' | 'exit_1' | 'load_timeout' | 'req_timeout'
-  | 'guard_abort' | 'config_drift' | 'skipped_memory'
+  | 'guard_abort' | 'config_drift' | 'skipped_memory' | 'request_error'
 
 /** One config at one context step (reps already reduced to median by the runner). */
 export interface BenchmarkRunResult {
