@@ -163,3 +163,23 @@
 - S3's GPU job is active: llama-server 34276, typeperf 2388. I will not touch it.
 - Stage 2 O1 spill attribution stays UNVALIDATED.
 - Awaiting a fresh coordinator assignment. Available for non-GPU work: harness, tests, docs, review.
+
+## Astra handback to Fable - 2026-09-28 03:31 KST
+- Authority returned to Fable; Astra stands by as reviewer, no new dispatch unless Fable is silent for 20 minutes. Existing worker duties/lease continue.
+- LIVE sole GPU owner S3 term_4f3b104c-775a-4825-8843-2bbf25d69334: Qwen session5, launcher34256 -> tsx37640 -> runner3288; ladder server4972 exited/replaced by quality server34276. At03:30:52 off quality active, RAM12.26GiB; 8K ladder passed (~10t/s, TTFT8.58s).
+- Run snapshot842d3964d57ba6a106ee24e3725f0c7b28e116ec; C:\Users\hyuns\AppData\Local\Temp\s3-stage3-qwen-main-gate-6a5e5c972d6349f79632f222af270037\run; external launch-qwen-main.cjs. ZIP/launcher/runtime hashes in03:19/03:27 entries. Keep running unchanged.
+- Session5: Qwen3.8 ngl49/f16/8K,off-low-medium,T1,seed424242,thorough,540expectedrows;4GiB RAM floor/300000ms request cap/no unified env. xhigh/HIP and all further GPU stages HOLD.
+- S3 next: monitor current run to exit/reap; no-clobber export all DB attempts/quality/recs plus raw dump/launcher provenance; commit calibration artifacts, send S1/S2 audits. Only Fable releases next stage after review+60s idle+fresh gate.
+- S1 term_dc6fc058-c13f-4e05-95e5-c8e9f9c44c56 owns src; current fixes complete/clean, retained for session5 read-only interpretation replay/audit. No new source task outstanding.
+- S2 term_0e7ca5cb-fbb6-4497-baa5-dd0be8102d92 owns tests/review/EVIDENCE/ledger; Gemma audit complete, retained for session5 coverage/contracts/per-keyproof/truncation audit and evidence docs. No GPU/full suite.
+- RECHECK4 O1-O5 b02096f, O6-O9 e1ea388 closed with S2 negatives b17153a/d67da70/f70b832; dd760fa mixed-build/duplicate quality reuse + v2skill/seed; bb006ad long-needle infra/truncation classification. Historical rows untouched.
+- Later fixes:7166792 off-comparator contract + explicitT1 fallback;70c5c9e null token split/SSE-fragment provenance/actualT labels;842d396 controlled one-key template hashes and historical effort read gate. Tests dfb0859/18257e6/125b9d2/1c9d62c/06cdfcf; independent183 scoped pass,tsc clean.
+- Harness:81861f4/b868e3a bounded load/request/RAM/reap; c187b79/e5e2237 stdout+stderr/null fields/collision identity/-lm none;0efd0b9 exclusive artifact/export writes;4eee3e4 future-lv4. Safety/export fake16pass; futureargv regression298c67d.
+- Stage2 repaired5cases b45065d/bae31ee complete on3d12db1; missing buffer declarations/clientTTFT -> raw residency/prefill/decode ONLY, no capacity/O1/placement-origin promotion. Old partial1f413eb and setupENOENT202a08b preserved; EVIDENCE/ledger scope reconciled.
+- Gemma session4 e1190cc raw artifacts + b883be9/a2fd51a audits/narrative:360rows,23skills,180offvalid/179thinkvalid+1truncated; both contracts verified. CodingQ91.7/94.9,paired+3[-3,+11] includes0 -> offkept, no established think benefit.
+- Gemma frozen6bac split rates weak provenance (fragment counts); do not cite measured effective2.5t/s/reasoning time. Raw exportFA8F887F...121909, dumpE5351596...2209A4; current842 replay same fullrec hash6a4e329f...43a52. No RAMabort,minqualityRAM8.65GiB,teardownzero.
+- Residual risks: per-key proof covers one successful item, not every template branch; intervals heuristic; historical spill/split claims unvalidated; HIP untested. No currently reproduced unfixed source blocker; session5 evidence pending.
+- Software replays a44a567/2fd45cd: sessions1/3 deterministic; candidate permutations semantic-invariant (session3 genChoices trace order varies). SOFTWARE ONLY, not E1 hardware repeat.
+- Postfix nightly from5814270 at dist/nightly-2026-09-28-postfix-unvalidated; package idle gate803pass1skip,build/tscpass. It predates7166792/70c5c9e/842d396; rebuild later only on idle lane. Original pre-verdict artifacts preserved.
+- UNSAFE during lease: full npm test, Electron/E2E/system scanner, vendor --version/list-devices, live telemetry, runtime replacement/model installs or another GPU user. Prior Electron --version likely caused stage2 collision (PID unproven). Claude #3 must not auto-launch; #1 evidence ownership transferredS2.
+- All worker commits througha2fd51a pushed; STATUS/log current. Finish ordered handover queue via Fable (Qwen xhigh then HIP etc), morning report skeleton at07:00. Do not pull --rebase, rewrite DB recs, overwrite evidence, or kill foreign processes.
