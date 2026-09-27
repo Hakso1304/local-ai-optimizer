@@ -33,6 +33,29 @@ const previousReplay = artifact.rowProofReplay as { runId?: string } | undefined
 if (previousReplay && (typeof previousReplay.runId !== 'string' || !/^[0-9a-f]{64}$/.test(previousReplay.runId))) {
   throw new Error('input replay artifact has no valid run lineage id')
 }
+// The root generation record is immutable. Validate it before any template
+// request: a partial import must never be repaired into apparent proof.
+for (const q of artifact.qualityResults) {
+  const row = q.payload, prior = row.proofProvenance, origin = prior?.origin
+  if (previousReplay && (!origin || prior?.mode !== 'live-template-replay' ||
+      !Array.isArray(origin.lineage) || origin.lineage.at(-1) !== previousReplay.runId)) {
+    throw new Error(`row ${q.id}: incoherent replay lineage or origin provenance`)
+  }
+  if (!origin) {
+    if (prior?.mode === 'live-template-replay') throw new Error(`row ${q.id}: replay provenance without origin`)
+    continue // legacy: missing root record can only be reconstructed
+  }
+  const validTime = (x: unknown) => typeof x === 'string' && !Number.isNaN(Date.parse(x)) && new Date(x).toISOString() === x
+  const coherent = typeof origin.generationPromptHashPresent === 'boolean' &&
+    prior?.originalPromptHashPresent === origin.generationPromptHashPresent &&
+    prior.status === (origin.generationPromptHashPresent ? 'original' : 'reconstructed') &&
+    Array.isArray(origin.lineage) && origin.lineage.every((x) => typeof x === 'string' && /^[0-9a-f]{64}$/.test(x)) &&
+    (prior.mode === 'runtime'
+      ? origin.generationPromptHashPresent && origin.firstReplayAt === null && origin.lineage.length === 0 && !previousReplay
+      : prior.mode === 'live-template-replay' && validTime(origin.firstReplayAt) && origin.lineage.length > 0 && !!previousReplay) &&
+    (!origin.generationPromptHashPresent || typeof row.promptSha256 === 'string' && /^[0-9a-f]{64}$/.test(row.promptSha256))
+  if (!coherent) throw new Error(`row ${q.id}: incoherent or partial origin provenance`)
+}
 const expectedSession = flag('--session')
 if (expectedSession && Number(expectedSession) !== artifact.sessionId) throw new Error(`session mismatch: export is ${artifact.sessionId}`)
 const request = artifact.session.payload.request
@@ -101,7 +124,7 @@ for (const q of modelRows) {
   }
   if (!previousReplay && prior?.mode === 'live-template-replay') throw new Error(`row ${q.id}: replay provenance without artifact lineage`)
   const origin = prior?.origin ?? {
-    generationPromptHashPresent: prior?.mode === 'runtime' && prior.originalPromptHashPresent === true && !!row.promptSha256,
+    generationPromptHashPresent: false,
     firstReplayAt: null, lineage: [] as string[]
   }
   if (typeof origin.generationPromptHashPresent !== 'boolean' || !Array.isArray(origin.lineage) ||
