@@ -29,6 +29,16 @@ describe('typeperf parser', () => {
     })
   })
 
+  it('hasPidColumns: null before the header, true for a pid capture, false when the pid GPU instances are missing', () => {
+    const p = new TypeperfParser({ pid: 26768 })
+    expect(p.hasPidColumns).toBeNull()
+    for (const l of fx('llama-pid.csv')) p.line(l)
+    expect(p.hasPidColumns).toBe(true)
+    const q = new TypeperfParser({ pid: 1 }) // header captured with no pid instances (same shape as a too-early start)
+    for (const l of fx('idle-nopid.csv')) q.line(l)
+    expect(q.hasPidColumns).toBe(false)
+  })
+
   it('parses an idle capture without pid and reports per-process fields as unavailable', () => {
     const { p, samples } = run(fx('idle-nopid.csv'), {})
     expect(samples.length).toBeGreaterThanOrEqual(3)
@@ -95,7 +105,7 @@ describe('typeperf parser', () => {
   it('withNvidia merges nearest nvidia-smi temp/power into PDH samples and fills a missing GPU util', () => {
     const base = { cpuPct: 1, ramAvailBytes: 1, vramDedicatedBytes: 1, vramSharedBytes: 1, procRamPrivateBytes: 1, procVramDedicatedBytes: 1, procVramSharedBytes: 1 }
     const pdhSamples: TelemetrySample[] = [{ ts: 1000, gpuUtilPct: null, ...base }, { ts: 9000, gpuUtilPct: 50, ...base }]
-    const pdh = { samples: pdhSamples, unavailable: {}, errors: [], stop: () => pdhSamples }
+    const pdh = { samples: pdhSamples, unavailable: {}, errors: [], hasPidColumns: true, restart: () => {}, stop: () => pdhSamples }
     const nv = { samples: [{ ts: 1200, gpuUtilPct: 88, vramUsedBytes: 1, tempC: 71, powerW: 250 }], stop: () => [] }
     const m = withNvidia(pdh, nv)
     expect(m.samples[0]).toMatchObject({ tempC: 71, powerW: 250, gpuUtilPct: 88 })

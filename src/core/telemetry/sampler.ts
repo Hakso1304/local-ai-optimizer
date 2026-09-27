@@ -106,6 +106,12 @@ export class TypeperfParser {
     return this.sample(vals)
   }
 
+  /** null until the header arrived; with a pid: whether its GPU Process Memory columns exist. typeperf fixes the
+   *  instance set at start, so a sampler started before llama-server created its GPU instances never gets them. */
+  get hasPidColumns(): boolean | null {
+    return this.cols ? this.cols.some((c) => c?.object === 'GPU Process Memory') : null
+  }
+
   private checkHeader(): void {
     const has = (obj: string, ctr: string) => this.cols!.some((c) => c?.object === obj && c.counter === ctr)
     const need: [Field, boolean][] = [
@@ -196,8 +202,12 @@ export function peaks(samples: TelemetrySample[]): Peaks {
 export interface Sampler {
   readonly samples: TelemetrySample[]
   readonly unavailable: Partial<Record<Field, string>>
-  /** typeperf failures / early exit, human readable. */
+  /** typeperf failures / early exit, human readable. Survives restart(). */
   readonly errors: string[]
+  /** null until typeperf printed its header; false = pid-scoped GPU columns missing (call restart() once the model is loaded). */
+  readonly hasPidColumns: boolean | null
+  /** Respawn typeperf with the same counters (new instance set); samples collected so far are kept. */
+  restart(): void
   stop(): TelemetrySample[]
 }
 
@@ -212,33 +222,50 @@ export function stopAllSamplers(): void {
 const MAX_SAMPLES = 6 * 3600
 
 export function startSampler(o: SamplerOpts = {}): Sampler {
-  const parser = new TypeperfParser(o)
   const samples: TelemetrySample[] = []
   const errors: string[] = []
-  const tail: string[] = []
   const si = String(Math.max(1, Math.round((o.intervalMs ?? 1000) / 1000)))
   let stopped = false
-  const child: ChildProcess = spawn('typeperf', [...counterPaths(o), '-si', si, '-sc', String(MAX_SAMPLES)], { windowsHide: true })
-  const kill = () => { child.kill() }
-  active.add(kill)
-  child.on('close', () => active.delete(kill))
-  createInterface({ input: child.stdout! }).on('line', (l) => {
-    const s = parser.line(l)
-    if (s) samples.push(s)
-    else if (l.trim() && !l.startsWith('"')) tail.push(l.trim())
-  })
-  child.stderr?.on('data', (d: Buffer) => tail.push(d.toString().trim()))
-  child.on('error', (e) => errors.push(`typeperf failed to start: ${e.message}`))
-  child.on('close', (code) => {
-    if (stopped) return
-    // ponytail: typeperf messages are in the console codepage (cp949 here) and may read garbled; exit code is reliable.
-    errors.push(`typeperf exited early (code ${code}) after ${samples.length} samples: ${tail.slice(-3).join(' | ')}`)
-    if (!parser.cols) for (const f of FIELDS) parser.unavailable[f] ??= 'typeperf produced no header'
-  })
+  let parser = new TypeperfParser(o)
+  let child: ChildProcess
+
+  const spawnOne = () => {
+    const p = new TypeperfParser(o) // fresh header per process: the instance set can differ
+    parser = p
+    const tail: string[] = []
+    const c: ChildProcess = spawn('typeperf', [...counterPaths(o), '-si', si, '-sc', String(MAX_SAMPLES)], { windowsHide: true })
+    child = c
+    const kill = () => { c.kill() }
+    active.add(kill)
+    c.on('close', () => active.delete(kill))
+    createInterface({ input: c.stdout! }).on('line', (l) => {
+      const s = p.line(l)
+      if (s) samples.push(s)
+      else if (l.trim() && !l.startsWith('"')) tail.push(l.trim())
+    })
+    c.stderr?.on('data', (d: Buffer) => tail.push(d.toString().trim()))
+    c.on('error', (e) => errors.push(`typeperf failed to start: ${e.message}`))
+    c.on('close', (code) => {
+      if (stopped || child !== c) return // stopped or replaced by restart()
+      // ponytail: typeperf messages are in the console codepage (cp949 here) and may read garbled; exit code is reliable.
+      errors.push(`typeperf exited early (code ${code}) after ${samples.length} samples: ${tail.slice(-3).join(' | ')}`)
+      if (!p.cols) for (const f of FIELDS) p.unavailable[f] ??= 'typeperf produced no header'
+    })
+  }
+  spawnOne()
+
   return {
     samples,
-    unavailable: parser.unavailable,
     errors,
+    get unavailable() { return parser.unavailable },
+    get hasPidColumns() { return parser.hasPidColumns },
+    restart() {
+      if (stopped) return
+      const old = child
+      errors.push(`typeperf restarted after ${samples.length} samples (pid columns ${parser.hasPidColumns === false ? 'missing' : 'present'})`)
+      spawnOne()
+      old.kill()
+    },
     stop() {
       stopped = true
       child.kill()
@@ -267,7 +294,9 @@ export function withNvidia(pdh: Sampler, nv: { readonly samples: NvidiaSample[];
   }
   return {
     get samples() { return view() },
-    unavailable: pdh.unavailable,
+    get unavailable() { return pdh.unavailable },
+    get hasPidColumns() { return pdh.hasPidColumns },
+    restart: () => pdh.restart(),
     errors: pdh.errors,
     stop() {
       stopNv()
