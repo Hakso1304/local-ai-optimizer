@@ -228,9 +228,9 @@ This addendum indexes E-47 through E-51 in [EVIDENCE.md](EVIDENCE.md). It is a C
 | Finding | Software result and scope | Gate status |
 |---|---|---|
 | W4 session identity | `ce76694` anchors and reconciles session markers; `c6874fa` `tests/measurement-launcher.test.ts` two explicit markers and explicit-vs-event conflict controls were GREEN in the scoped W1-W4 run (E-47). | Closed in software; actual archived exporter execution remains unmeasured. |
-| Exported owned scan | `859f9d6` plus `3f784b1` direct `tests/runtime/owned-scan.test.ts` prove root-linked new child reap, unknown-child survivor detail and reused-PID non-kill; direct tests plus runtime lifecycle T1 were 29/29 GREEN (E-48). | Scoped reconciliation only; late-child W1 remains open. |
-| W1 late child | `c6874fa` `tests/owned-process.test.ts` late-child-at-root-kill case RED: stop reported success with child alive (E-49). | **PENDING S3 source fix**; no whole-tree hardware guarantee. |
-| W2 extracted source | `c6874fa` `tests/measurement-launcher.test.ts` unlisted `session.ts` tamper case RED: manifest verification resolved (E-50). | **PENDING S3 source fix**; no immutable extracted-tree claim. |
-| W3 command binding | `c6874fa` `tests/measurement-launcher.test.ts` changed `--backend hip` and `--models other.gguf` cases both RED: manifest verification resolved (E-51). | **PENDING S3 source fix**; no backend/model gate promotion. |
+| Exported owned scan | `859f9d6` plus `3f784b1` direct `tests/runtime/owned-scan.test.ts` prove root-linked new child reap, unknown-child survivor detail and reused-PID non-kill; direct tests plus runtime lifecycle T1 were 29/29 GREEN (E-48). | Scoped reconciliation; W1's later post-scan window is separately closed in software by E-49. |
+| W1 late child | Source `fdaa96e` and `c6874fa` `tests/owned-process.test.ts` late-child-at-root-kill negative, formerly RED, GREEN in scoped owned-process/measurement-launcher/runtime 46/46 after the fix (E-49). | **Closed in software**; no whole-tree vendor teardown claim. |
+| W2 extracted source | Source `c9fdcde` and `c6874fa` `tests/measurement-launcher.test.ts` unlisted `session.ts` tamper negative, formerly RED, GREEN in scoped 46/46 (E-50). | **Closed in software**; no actual archived hardware launch. |
+| W3 command binding | Source `c9fdcde` and `c6874fa` `tests/measurement-launcher.test.ts` changed `--backend hip` and `--models other.gguf` negatives, formerly RED, both GREEN in scoped 46/46 (E-51). | **Closed in software**; selected runtime/model binding awaits an actual archived launch. |
 
 No line here revises OVN-2P/2R, STAGE3-G4/Q5, I-2.8, or learned capacity.
