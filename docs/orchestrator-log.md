@@ -131,3 +131,7 @@
 - S3 session4 launched02:41:06: launcher29028 -> tsx30892 -> runner24980; ladder server11316 then quality server15112. Fresh RAM17.22GiB/adapter1.12GiB, zero competing/unified keys. 8K ngl19 ladder passed; off quality active, latest RAM9.73GiB above4GiB. Sole GPU S3; Qwen/HIP held.
 - Pushed7166792 plus S2dfb0859/18257e6: thinking comparison requires off sampling/kwargs proof; rejected explicit T1 baseline cannot be revalidated as defaultT0. Independent residual file39/39 pass. Current6bac783 artifact requires post-run dual-sided proof audit; stored recommendations unchanged.
 - S2 further identified reasoningTokens:null -> measured0 and hardcoded offT0 insight labels; assigned S1src/S2tests. Running Gemma remains unchanged; retain raw transcripts and mark token split provenance uncertain, not measured efficiency evidence.
+
+## Astra - 2026-09-28T02:52:22 local - token provenance repaired
+- Pushed70c5c9e/125b9d2: unknown thinking counts remain unknown, totals stored independently, SSE fragment fallback estimated (not measured tokenizer counts), actual explicit offT1 labels. Root scoped176/176 pass; S1 reports198 including fake inference and tsc. Historical rows/snapshot6bac unchanged; do not treat existing measured split labels as verified token counts.
+- Session4 off completed at381.7s, think active PID15112; S3 at02:51:31 reports RAM9.85GiB and no abort. S1/S2 retained for post-export audit; no package/full/Electron/live test while S3 lease active. Qwen next must use fresh snapshot with fixes after teardown/audit; not yet released.
