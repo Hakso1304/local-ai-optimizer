@@ -345,6 +345,12 @@ A requested flag is not proof it was honored (`appliedTemplateKwargs` is require
 and a per-key render proof covers only the template branches it exercised. A thinking
 delta is comparable only when the OFF baseline's own contract (applied kwargs, accepted
 sampling, template hash) is proven too; otherwise the comparison is not evaluable.
+Proof is ROW-BOUND: each quality row carries its own render proof (row id, prompt hash,
+rendered hash, counterfactual with a valid alternate value) obtained by re-rendering that
+row's prompt with its recorded kwargs; a proof copied from another item or template branch
+is not proof, and such rows are quarantined from comparisons. The accepted sampling must
+include the seed: the runtime-accepted seed is compared with the requested per-sample seed;
+a missing or different accepted seed makes the row unverified (disclosed), never proved.
 Rule I-8.1 (`gen.best-config`, info): per model: "thinking on (effort low, T=1.0):
 Q +17 [lo, hi] vs off; answers <k>× slower (effective <e> vs <d> t/s)".
 Rule I-8.2 (`gen.stochastic`, note): T > 0 → "sampled (seeded), n=<s> per item".
