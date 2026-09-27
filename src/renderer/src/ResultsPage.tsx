@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Metric } from '../../shared/bench-types'
 import type { SessionCandidate, SessionDetail, SessionSummary } from '../../shared/types'
+import { ExportMenu } from './ExportMenu'
 import { LineChart, type Band } from './LineChart'
 import { CtxPick, DemoBanner, M, Prov, fmtCtx, gib, num } from './ui'
 
@@ -17,20 +18,7 @@ function peak(c: SessionCandidate, k: 'peakVramBytes' | 'peakRamBytes'): Metric 
 const refRun = (c: SessionCandidate) => c.runs.find((r) => r.ctx === c.score?.referenceCtx)
 const comp = (c: SessionCandidate, id: string) => c.score?.breakdown.find((b) => b.component === id)
 
-/** llama-server CLI + JSON at the workload's recommendedCtx (falls back to the practical ceiling if unscored). */
-function exportText(c: SessionCandidate): string {
-  const ctx = c.score?.recommendedCtx ?? c.cliff.practicalContextCeiling.value
-  const args = [
-    '-m', `"${c.model.id}"`, '-c', String(ctx ?? 4096), '-ngl', c.config.gpuLayersAll ? '99' : String(c.config.gpuLayers),
-    ...(c.config.device ? ['--device', c.config.device] : []), '-t', String(c.config.threads),
-    '-ctk', c.config.kvType, '-ctv', c.config.kvType, '-fa', c.config.flashAttn ? 'on' : 'off', '-fit', 'off'
-  ]
-  const json = { configId: c.config.id, model: c.model.id, contextSize: ctx, gpuLayers: c.config.gpuLayers, device: c.config.device, threads: c.config.threads, kvType: c.config.kvType, flashAttn: c.config.flashAttn }
-  return `llama-server ${args.join(' ')}\n\n${JSON.stringify(json, null, 2)}\n`
-}
-
 function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) => void }) {
-  const [copied, setCopied] = useState<string | null>(null)
   const rec = d.recommendation
   const xs = [...new Set(d.candidates.flatMap((c) => c.runs.map((r) => r.ctx)))].sort((a, b) => a - b)
   const at = (c: SessionCandidate, f: (r: SessionCandidate['runs'][number]) => number | null) => xs.map((x) => { const r = c.runs.find((q) => q.ctx === x); return r ? f(r) : null })
@@ -39,10 +27,6 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
     const from = s?.reasons.find((r) => r.fromCtx != null)?.fromCtx
     return s && from != null ? [{ from, to: s.ctx, color: COLORS[i % COLORS.length], label: `${s.verdict} ${fmtCtx(s.ctx)}` }] : []
   })
-  const copy = async (c: SessionCandidate) => {
-    await navigator.clipboard.writeText(exportText(c))
-    setCopied(c.config.id)
-  }
   // Same model can appear with several configs, so always show the configId too.
   const name = (id: string | null) => (id ? `${d.candidates.find((c) => c.config.id === id)?.model.name ?? '?'} — ${id}` : '—')
   const tag = d.session.demo ? ' (DEMO DATA)' : ''
@@ -72,7 +56,6 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
                 <td><M m={peak(c, 'peakRamBytes')} fmt={gib} /></td>
                 <td>{st ? <>{st.score.toFixed(0)} <Prov kind={st.input.kind} /></> : '—'}</td>
                 <td className="bar">
-                  <button onClick={() => void copy(c)}>{copied === c.config.id ? 'Copied' : 'Export config'}</button>
                   {!d.session.demo && <button onClick={() => onRerun(c.config.id)} title="Re-run every step of this configuration">Rerun</button>}
                 </td>
               </tr>
@@ -122,6 +105,7 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
             </tbody>
           </table>
           {rec.excluded.map((e) => <p key={e.configId} className="err">Excluded {e.configId}: {e.reasons.join('; ')}</p>)}
+          {!d.session.demo && <><h3>Export</h3><ExportMenu rec={rec} cand={d.candidates.find((c) => c.config.id === rec.best?.configId)} sessionId={d.session.id} /></>}
         </div>
       ) : <p className="muted">No recommendation stored for this session.</p>}
     </>

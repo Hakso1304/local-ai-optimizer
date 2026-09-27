@@ -151,6 +151,8 @@ export interface RendererApi {
   listWorkloads(): Promise<WorkloadProfile[]>
   listSessions(): Promise<SessionSummary[]>
   getSession(id: number): Promise<SessionDetail | null>
+  /** OS save dialog for exported text; saved = chosen path, or null when cancelled. */
+  saveFile(defaultName: string, content: string): Promise<{ saved: string | null }>
   /** Raw telemetry samples of one benchmark_run row. */
   telemetryForRun(runId: number): Promise<TelemetrySample[]>
   latestRecommendation(w: WorkloadId): Promise<{ sessionId: number; recommendation: Recommendation } | null>

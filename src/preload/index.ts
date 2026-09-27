@@ -13,6 +13,7 @@ const api: RendererApi = {
   listWorkloads: () => ipcRenderer.invoke('workloads:list'),
   listSessions: () => ipcRenderer.invoke('sessions:list'),
   getSession: (id) => ipcRenderer.invoke('sessions:get', id),
+  saveFile: (name, content) => ipcRenderer.invoke('file:save', name, content),
   telemetryForRun: (runId) => ipcRenderer.invoke('telemetry:run', runId),
   latestRecommendation: (w) => ipcRenderer.invoke('recommendation:latest', w),
   startBench: (req) => ipcRenderer.invoke('bench:start', req),

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { freemem } from 'node:os'
 import type { DatabaseSync } from 'node:sqlite'
@@ -121,6 +121,16 @@ ipcMain.handle('settings:setWorkload', (_e, w: WorkloadId) => {
 ipcMain.handle('workloads:list', () => Object.values(WORKLOADS))
 ipcMain.handle('sessions:list', () => listSessions(needDb()))
 ipcMain.handle('sessions:get', (_e, id: number) => getSession(needDb(), Number(id)))
+/** Save exported text via the OS save dialog. Only the name and content come from the renderer; the user picks the path. */
+ipcMain.handle('file:save', async (e, name: string, content: string) => {
+  if (typeof name !== 'string' || typeof content !== 'string' || content.length > 1024 * 1024) throw new Error('bad export')
+  const win = BrowserWindow.fromWebContents(e.sender)
+  const opts = { defaultPath: name.replace(/[\\/:*?"<>|]/g, '_'), filters: [{ name: 'All files', extensions: ['*'] }] }
+  const r = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts)
+  if (r.canceled || !r.filePath) return { saved: null }
+  writeFileSync(r.filePath, content)
+  return { saved: r.filePath }
+})
 ipcMain.handle('telemetry:run', (_e, runId: number) => telemetryForRun(needDb(), Number(runId)))
 ipcMain.handle('recommendation:latest', (_e, w: WorkloadId) => latestRecommendation(needDb(), w))
 ipcMain.handle('bench:start', (_e, raw: unknown) => {
