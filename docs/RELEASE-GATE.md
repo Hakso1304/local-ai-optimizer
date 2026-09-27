@@ -18,7 +18,10 @@ Every box is checked by the orchestrator, citing a commit, file or output, befor
 - [ ] `npm run package` → `dist/BUILD-INFO.txt` shows:
   - the commit, **not DIRTY**;
   - the rules version `interp-2`;
-  - the test line reading `N/N passed`, with no FAILED.
+  - the test line reading `N/N passed`, or `P/N passed, K skipped` with P + K = N, with no FAILED;
+  - every skipped test is named on its own `skipped:` line (file :: test, with its reason); an unnamed skip is a stop;
+  - an `origin:` line with origin/master at build time; if origin is ahead of the built commit, the delta must be
+    docs-only (BUILD-INFO says so), otherwise stop.
 - [ ] `LAO_HIP_VERIFIED=1` is set **only if** S3 stage 4 (`llama-server --list-devices` shows ROCm0) **and** stage 5 (the Vulkan-vs-HIP A/B) both passed, with their rows in `calibration-overnight-2026-09-28.md`. Otherwise BUILD-INFO must say HIP unverified, and the HIP install stays opt-in.
 
 ## Docs and evidence
@@ -37,4 +40,5 @@ Every box is checked by the orchestrator, citing a commit, file or output, befor
 
 ## Tree
 - [ ] `git status --porcelain` is empty: no uncommitted or untracked files, and no stray `docs/review-*` drafts.
-- [ ] The orchestrator has pushed. `git log origin/main -1` equals the packaged commit.
+- [ ] The orchestrator has pushed. `git log origin/master -1` equals the packaged commit, or is a descendant of it whose
+  delta is docs-only (recorded in BUILD-INFO `origin:`; decided 2026-09-28).

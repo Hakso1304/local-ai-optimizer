@@ -43,9 +43,14 @@ const porcelain = git('status', '--porcelain')
 const dirty = porcelain.out.trim().split(/\r?\n/).filter(Boolean)
 item('tree: git status --porcelain is empty', porcelain.ok && dirty.length === 0, dirty.length ? `${dirty.length} entries, e.g. ${dirty.slice(0, 4).join('; ')}` : 'clean')
 
+// origin/master == HEAD, or origin is a descendant whose delta is docs-only (recorded in BUILD-INFO "origin:")
 const head = git('rev-parse', 'HEAD').out.trim(), remote = git('rev-parse', 'origin/master')
-item('pushed: origin/master == HEAD (local ref; the orchestrator fetches/pushes)', remote.ok && remote.out.trim() === head,
-  `HEAD ${head.slice(0, 7)}, origin/master ${remote.ok ? remote.out.trim().slice(0, 7) : 'unknown'}`)
+const rhead = remote.ok ? remote.out.trim() : ''
+const delta = rhead && rhead !== head ? git('diff', '--name-only', head, rhead).out.trim().split(/\r?\n/).filter(Boolean) : []
+const descendant = rhead && rhead !== head ? git('merge-base', '--is-ancestor', head, rhead).ok : true
+const docsOnly = delta.every((f) => f.startsWith('docs/'))
+item('pushed: origin/master == HEAD, or ahead by a docs-only delta', remote.ok && descendant && docsOnly,
+  `HEAD ${head.slice(0, 7)}, origin/master ${rhead.slice(0, 7) || 'unknown'}${delta.length ? ` (${delta.length} file(s) ahead${docsOnly ? ', docs-only' : `, CODE: ${delta.filter((f) => !f.startsWith('docs/')).slice(0, 3).join(', ')}`})` : ''}`)
 
 // ---- Docs and evidence ----
 for (const doc of ['docs/STATUS.md', 'docs/EVIDENCE.md']) {
@@ -79,8 +84,11 @@ if (full) {
   item('npm run package succeeds', p.ok, p.ok ? 'ok' : tail(p.out, 5))
   const bi = read('dist/BUILD-INFO.txt') ?? ''
   const commitOk = bi.includes(`commit:  ${head.slice(0, 7)}`) && !/DIRTY/.test(bi)
-  const testsOk = /tests:\s+(\d+)\/\1 passed\s*$/m.test(bi) && !/FAILED/.test(bi)
-  item('BUILD-INFO: packaged commit, not DIRTY, rules version, tests N/N passed', p.ok && commitOk && bi.includes(`rules:   ${rules}`) && testsOk,
+  // "P/T passed[, K skipped]" with P + K = T, no FAILED, and every skipped test named on a "skipped:" line
+  const tm = /^tests:\s+(\d+)\/(\d+) passed(?:, (\d+) skipped)?\s*$/m.exec(bi)
+  const named = (bi.match(/^skipped: \S.*$/gm) ?? []).length
+  const testsOk = !!tm && !/FAILED/.test(bi) && Number(tm[1]) + Number(tm[3] ?? 0) === Number(tm[2]) && named === Number(tm[3] ?? 0)
+  item('BUILD-INFO: packaged commit, not DIRTY, rules version, 0 failed, every skip named', p.ok && commitOk && bi.includes(`rules:   ${rules}`) && testsOk,
     bi ? bi.trim().split(/\r?\n/).join(' | ') : 'dist/BUILD-INFO.txt missing')
 } else {
   console.log('\n(lease-safe mode: full suite, build, package and BUILD-INFO checks run only with --full on an idle GPU lane)')
