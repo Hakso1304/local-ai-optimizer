@@ -1,10 +1,10 @@
 # Stage 3 generation sweep preflight (2026-09-28)
 
-Status: prepared, not run. GPU owner: Opus #3 until explicit handoff. The stage 2 A/B and its cleanup must finish before these commands start.
+Status: Gemma-only stage 3 prepared, not run. S3 owns the sole GPU lane; GPU HOLD until Astra explicitly releases this session. Repaired stage 2 completed and its server/harness teardown was verified. Qwen sessions remain separately held.
 
 ## Conditions
 
-- Use a fresh `git archive` of a committed HEAD that includes `b868e3a` and the required S1 source fixes. Record the full HEAD hash in each result. Never run from the shared mutable worktree.
+- Use a fresh `git archive` of a committed HEAD that includes the stage 2 source and S2's `-lv 4` argv regression. Record the full HEAD hash in `HEAD.txt` and each result. Never run from the shared mutable worktree. Add validated junctions to the ignored `vendor/llama.cpp` runtime and `node_modules`, then record resolved paths and hashes before release.
 - Confirm zero `llama-server.exe` and zero `run-session` / `ab-spill` harness processes, no other GPU owner, at least 4 GiB RAM available, and idle adapter use near the clean-host baseline (about 1.1–1.2 GiB). Record the observed value, including a higher value if the host is busy.
 - Reject every casing of `GGML_CUDA_ENABLE_UNIFIED_MEMORY` in the parent environment. The child environment must also omit every casing. All child processes use `windowsHide: true`.
 - Use `--request-cap-ms 300000 --ram-abort-gib 4 --quality-mode thorough`. Keep the agreed explicit `--quality-seed 424242` in all three sessions so the 13 generated qb-2.0.0 items are identical. Each T=1 config has three samples per item.
