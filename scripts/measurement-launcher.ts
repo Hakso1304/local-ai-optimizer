@@ -1,9 +1,11 @@
 /** Immutable hardware gate. Create a manifest offline, then verify it on both sides of one launch. */
 import { createHash } from 'node:crypto'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
-import { createReadStream, existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, lstatSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { freemem } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { createRequire } from 'node:module'
+import { DatabaseSync } from 'node:sqlite'
 import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
 import type { ProcessTree } from '../src/core/runtimes/llamacpp'
@@ -13,14 +15,18 @@ import { trackOwnedProcess, type OwnedProcess } from './owned-process'
 
 const GiB = 1024 ** 3
 const execFileAsync = promisify(execFile)
+const unzipper = createRequire(import.meta.url)('unzipper') as { Open: { file(path: string): Promise<{ files: { path: string; type: string; buffer(): Promise<Buffer> }[] }> } }
 const rolePaths = ['node', 'packageLock', 'installedLock', 'tsxCli', 'launcher', 'runner', 'exporter', 'runtimeExe', 'model', 'sourceZip'] as const
-export type FileRole = typeof rolePaths[number] | `dll:${string}`
+export type FileRole = typeof rolePaths[number] | `dll:${string}` | `model:${string}` | `source:${string}`
 export interface Fingerprint { role: FileRole; path: string; bytes: number; sha256: string }
 export interface MeasurementManifest {
   kind: 'local-ai-optimizer/measurement-gate-v1'
   createdAt: string
   snapshotHead: string
   command: { cwd: string; args: string[]; dbPath: string; exportOut: string }
+  commandSha256?: string
+  dependencyScope?: 'node_modules lockfile only; installed file contents not individually pinned'
+  sourceHead?: string
   files: Fingerprint[]
 }
 export interface ManifestConfig {
@@ -35,7 +41,47 @@ export interface ManifestConfig {
   exporter: string
   runtimeExe: string
   model: string
+  models?: string[]
   exportOut: string
+}
+const commandHash = (command: MeasurementManifest['command']) => createHash('sha256').update(JSON.stringify(command)).digest('hex').toUpperCase()
+const samePath = (a: string, b: string) => resolve(a).toLowerCase() === resolve(b).toLowerCase()
+function sourcePaths(cwd: string): string[] {
+  const out: string[] = []
+  const walk = (relative: string) => {
+    const absolute = join(cwd, relative)
+    if (!existsSync(absolute)) return
+    const stat = lstatSync(absolute)
+    if (stat.isSymbolicLink()) throw new Error(`source tree contains a link: ${relative}`)
+    if (stat.isFile()) { out.push(relative.replace(/\\/g, '/')); return }
+    if (!stat.isDirectory()) throw new Error(`source tree contains unsupported entry: ${relative}`)
+    for (const name of readdirSync(absolute).sort()) walk(join(relative, name))
+  }
+  for (const root of ['src', 'scripts', 'package.json']) walk(root)
+  return out.sort()
+}
+async function sourceStatus(cwd: string, head: string): Promise<string[]> {
+  const files = sourcePaths(cwd)
+  if (!existsSync(join(cwd, '.git'))) return files // git archive has no .git; the extracted tree is checked against its pinned ZIP below.
+  const run = async (args: string[]) => (await execFileAsync('git', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 5_000 })).stdout.trim()
+  const actualHead = await run(['rev-parse', 'HEAD'])
+  if (actualHead !== head) throw new Error(`source git HEAD ${actualHead} differs from manifest ${head}`)
+  const dirty = await run(['status', '--porcelain', '--untracked-files=all', '--', 'src', 'scripts', 'package.json'])
+  if (dirty) throw new Error(`source git status is not clean: ${dirty}`)
+  const tracked = (await execFileAsync('git', ['ls-files', '-z', '--', 'src', 'scripts', 'package.json'], { cwd, encoding: 'utf8', windowsHide: true, timeout: 5_000 })).stdout.split('\0').filter(Boolean).sort()
+  if (JSON.stringify(tracked) !== JSON.stringify(files)) throw new Error('source tree differs from git-tracked file list')
+  return tracked
+}
+async function verifyArchiveSource(zipPath: string, cwd: string, names: string[]): Promise<void> {
+  const archive = await unzipper.Open.file(zipPath)
+  const entries = archive.files.filter((e) => e.type === 'File' && (e.path === 'package.json' || e.path.startsWith('src/') || e.path.startsWith('scripts/')))
+  const archiveNames = entries.map((e) => e.path).sort()
+  if (JSON.stringify(archiveNames) !== JSON.stringify(names)) throw new Error('source archive file list differs from extracted source tree')
+  for (const entry of entries) {
+    const archived = createHash('sha256').update(await entry.buffer()).digest('hex').toUpperCase()
+    const extracted = await hashFile(join(cwd, entry.path))
+    if (archived !== extracted) throw new Error(`source archive differs from extracted ${entry.path}`)
+  }
 }
 
 export async function hashFile(path: string, signal?: AbortSignal): Promise<string> {
@@ -54,7 +100,38 @@ function checkCommand(manifest: MeasurementManifest): void {
   if (!isAbsolute(cwd) || !isAbsolute(dbPath) || !isAbsolute(exportOut) || !existsSync(cwd) || !existsSync(dirname(exportOut))) throw new Error('manifest cwd, DB and export path must be absolute with existing directories')
   if (existingDbPath(dbPath, true) !== resolve(dbPath) || flag(args, '--db') !== dbPath) throw new Error('launcher --db argument differs from existing manifest DB')
   validateHarnessLimits({ requestCapMs: Number(flag(args, '--request-cap-ms')), ramAbortGib: Number(flag(args, '--ram-abort-gib')) })
+  if (manifest.commandSha256 && commandHash(manifest.command) !== manifest.commandSha256) throw new Error('manifest command changed after creation')
   if (Object.keys(process.env).some((k) => k.toUpperCase() === 'GGML_CUDA_ENABLE_UNIFIED_MEMORY')) throw new Error('unified-memory environment variable is set')
+}
+function checkSelection(manifest: MeasurementManifest): void {
+  const { args, cwd } = manifest.command
+  if (args[0] !== 'H') return // fake fixtures and future non-session gates have no model selector.
+  const count = (flagName: string) => args.filter((a) => a === flagName).length
+  if (count('--backend') !== 1 || count('--models') > 1 || count('--resume') > 1) throw new Error('backend/model selector is absent or ambiguous')
+  const backend = flag(args, '--backend')
+  if (backend !== 'vulkan' && backend !== 'hip') throw new Error('manifest backend selection invalid')
+  const runtime = manifest.files.find((f) => f.role === 'runtimeExe')
+  const expectedRuntime = join(cwd, 'vendor', backend === 'hip' ? 'llama.cpp-hip' : 'llama.cpp', 'llama-server.exe')
+  if (!runtime || !samePath(runtime.path, expectedRuntime)) throw new Error(`manifest backend executable differs from ${backend} selection`)
+  const requested = flag(args, '--models')?.split(',').filter(Boolean) ?? []
+  const models = manifest.files.filter((f) => f.role === 'model' || f.role.startsWith('model:'))
+  const resume = flag(args, '--resume')
+  if (!requested.length && !resume) throw new Error('manifest model selection missing')
+  let selectedPaths = requested.map((name) => join(dirname(models[0]?.path ?? ''), name.toLowerCase().endsWith('.gguf') ? name : `${name}.gguf`))
+  if (resume) {
+    if (!/^\d+$/.test(resume)) throw new Error('manifest resume session ID invalid')
+    const db = new DatabaseSync(manifest.command.dbPath, { readOnly: true })
+    try {
+      const row = db.prepare('SELECT payload FROM benchmark_session WHERE id = ?').get(Number(resume)) as { payload: string } | undefined
+      const payload = row ? JSON.parse(row.payload) as { request?: { modelIds?: unknown } } : null
+      if (!Array.isArray(payload?.request?.modelIds) || !payload.request.modelIds.every((p) => typeof p === 'string')) throw new Error(`manifest resume session ${resume} has no model paths`)
+      selectedPaths = payload.request.modelIds as string[]
+    } finally { db.close() }
+  }
+  if (selectedPaths.length !== models.length) throw new Error('manifest model count differs from command')
+  for (let i = 0; i < selectedPaths.length; i++) {
+    if (!models[i] || !samePath(models[i].path, selectedPaths[i])) throw new Error(`manifest model path differs from selected ${selectedPaths[i]}`)
+  }
 }
 function fileMap(manifest: MeasurementManifest): Map<FileRole, Fingerprint> {
   const map = new Map(manifest.files.map((f) => [f.role, f]))
@@ -78,12 +155,23 @@ export async function createManifest(config: ManifestConfig, out: string): Promi
   }
   const files: Fingerprint[] = []
   for (const role of rolePaths) files.push(await fingerprint(role, paths[role]))
+  for (const [i, model] of (config.models ?? [config.model]).entries()) {
+    if (i === 0) { if (!samePath(model, config.model)) throw new Error('manifest first model differs from model role'); continue }
+    files.push(await fingerprint(`model:${i}`, model))
+  }
   const dllDir = dirname(resolve(config.runtimeExe))
   for (const name of readdirSync(dllDir).filter((n) => n.toLowerCase().endsWith('.dll')).sort()) files.push(await fingerprint(`dll:${name}`, join(dllDir, name)))
   if (!files.some((f) => f.role.startsWith('dll:'))) throw new Error('runtime has no DLLs to verify')
+  const sourceNames = await sourceStatus(cwd, config.snapshotHead)
+  if (args[0] === 'H' && !sourceNames.length) throw new Error('session snapshot has no tracked source files')
+  for (const name of sourceNames) files.push(await fingerprint(`source:${name}`, join(cwd, name)))
+  if (args[0] === 'H') await verifyArchiveSource(config.sourceZip, cwd, sourceNames)
+  const command = { cwd, args, dbPath, exportOut: resolve(config.exportOut) }
   const manifest: MeasurementManifest = { kind: 'local-ai-optimizer/measurement-gate-v1', createdAt: new Date().toISOString(), snapshotHead: config.snapshotHead,
-    command: { cwd, args, dbPath, exportOut: resolve(config.exportOut) }, files }
+    command, commandSha256: commandHash(command), sourceHead: config.snapshotHead,
+    dependencyScope: 'node_modules lockfile only; installed file contents not individually pinned', files }
   checkCommand(manifest)
+  checkSelection(manifest)
   const headFile = join(cwd, 'HEAD.txt')
   if (readFileSync(headFile, 'utf8').trim() !== config.snapshotHead) throw new Error('snapshot HEAD.txt differs from manifest')
   writeFileSync(out, JSON.stringify(manifest, null, 2), { flag: 'wx' })
@@ -92,6 +180,7 @@ export async function createManifest(config: ManifestConfig, out: string): Promi
 export async function verifyManifest(manifest: MeasurementManifest, signal?: AbortSignal): Promise<void> {
   if (manifest.kind !== 'local-ai-optimizer/measurement-gate-v1' || !/^[0-9a-f]{40}$/i.test(manifest.snapshotHead)) throw new Error('invalid measurement manifest')
   checkCommand(manifest)
+  checkSelection(manifest)
   const map = fileMap(manifest)
   if (resolve(map.get('node')!.path).toLowerCase() !== resolve(process.execPath).toLowerCase()) throw new Error('Node executable differs from manifest')
   if (readFileSync(join(manifest.command.cwd, 'HEAD.txt'), 'utf8').trim() !== manifest.snapshotHead) throw new Error('snapshot HEAD changed')
@@ -99,6 +188,13 @@ export async function verifyManifest(manifest: MeasurementManifest, signal?: Abo
   const actualDlls = readdirSync(dllDir).filter((n) => n.toLowerCase().endsWith('.dll')).sort()
   const recordedDlls = manifest.files.filter((f) => f.role.startsWith('dll:')).map((f) => f.role.slice(4)).sort()
   if (JSON.stringify(actualDlls) !== JSON.stringify(recordedDlls)) throw new Error('runtime DLL set changed')
+  const sourceNames = await sourceStatus(manifest.command.cwd, manifest.snapshotHead)
+  const recordedSources = manifest.files.filter((f) => f.role.startsWith('source:')).map((f) => f.role.slice(7)).sort()
+  if (JSON.stringify(sourceNames) !== JSON.stringify(recordedSources)) throw new Error('source tree file set changed')
+  if (manifest.command.args[0] === 'H') {
+    if (manifest.sourceHead !== manifest.snapshotHead || !manifest.commandSha256) throw new Error('source/command manifest identity missing')
+    await verifyArchiveSource(map.get('sourceZip')!.path, manifest.command.cwd, sourceNames)
+  }
   for (const original of manifest.files) {
     signal?.throwIfAborted()
     const current = await fingerprint(original.role, original.path, signal)
