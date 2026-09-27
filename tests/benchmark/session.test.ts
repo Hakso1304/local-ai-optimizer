@@ -532,6 +532,65 @@ describe('runSession', () => {
     expect(rec?.insights?.some((i) => i.ruleId === 'I-2.8') ?? false).toBe(false)
   })
 
+  describe('I-8.0 one-key template proof for effort settings', () => {
+    const off = { id: 'off', thinking: false, temperature: 0, source: 'default' as const }
+    const low = { id: 'low', thinking: true, effort: 'low', temperature: 0, source: 'default' as const }
+    const medium = { id: 'medium', thinking: true, effort: 'medium', temperature: 0, source: 'default' as const }
+    const xhigh = { id: 'xhigh', thinking: true, effort: 'xhigh', temperature: 0, source: 'default' as const }
+    const suite = async (gens: SessionRequest['genConfigs'], render: (kw: Record<string, unknown>) => string, effortValues = ['low', 'medium', 'xhigh']) => {
+      const m = { ...model, supportsThinking: true, genKnobs: { supportsThinking: true, effortValues } }
+      return run(() => ({}), { workload: 'coding', runQuality: true, qualityMode: 'quick', ladder: [2048], genConfigs: gens }, {
+        models: [m], runtimeVersion: 'b1', backend: () => {
+          const b = fakeBackend(() => ({}))
+          b.templateHash = 'tpl'
+          b.applyTemplate = async (msgs, opts) => `${msgs.map((x) => x.content).join('\n')}|${render(opts?.templateKwargs ?? {})}`
+          const rp = b.runPrompt.bind(b)
+          b.runPrompt = async (q) => ({ ...(await rp(q)), acceptedSampling: { temperature: q.temperature ?? 0 } })
+          return b
+        }
+      })
+    }
+    const rowsOf = (r: Awaited<ReturnType<typeof suite>>, id: string) => r.s.quality[0].results.filter((x) => (x as GenRow).genId === id) as GenRow[]
+
+    it('toggle honored but effort ignored leaves low and medium unverified', async () => {
+      const r = await suite([off, low, medium], (kw) => `think=${kw.enable_thinking}`)
+      expect(rowsOf(r, 'off')).toHaveLength(17)
+      for (const id of ['low', 'medium']) {
+        const rows = rowsOf(r, id)
+        expect(rows).toHaveLength(17)
+        expect(rows.every((x) => x.requestedTemplateKwargs?.reasoning_effort === id)).toBe(true)
+        expect(rows.every((x) => !x.appliedTemplateKwargs)).toBe(true)
+      }
+      expect(r.rec?.insights?.map((x) => x.text).join('\n')).toMatch(/\[I-8\.0\].*not comparable.*applied template kwargs/s)
+    })
+    it('toggle and effort honored verifies low and medium', async () => {
+      const r = await suite([off, low, medium], (kw) => `think=${kw.enable_thinking}|effort=${kw.reasoning_effort ?? 'none'}`)
+      for (const id of ['off', 'low', 'medium']) {
+        const rows = rowsOf(r, id)
+        expect(rows).toHaveLength(17)
+        expect(rows.every((x) => JSON.stringify(x.appliedTemplateKwargs) === JSON.stringify(x.requestedTemplateKwargs))).toBe(true)
+      }
+    })
+    it('off/xhigh alone requires a known-effort counterfactual before xhigh is verified', async () => {
+      const ignored = await suite([off, xhigh], (kw) => `think=${kw.enable_thinking}`)
+      expect(rowsOf(ignored, 'xhigh')).toHaveLength(17)
+      expect(rowsOf(ignored, 'xhigh').every((x) => !x.appliedTemplateKwargs)).toBe(true)
+      const honored = await suite([off, xhigh], (kw) => `think=${kw.enable_thinking}|effort=${kw.reasoning_effort ?? 'none'}`)
+      expect(rowsOf(honored, 'xhigh').every((x) => x.appliedTemplateKwargs?.reasoning_effort === 'xhigh')).toBe(true)
+    })
+    it('an unknown or failed effort probe stays not evaluable without invalidating quality rows', async () => {
+      const r = await suite([off, xhigh], (kw) => {
+        if (kw.reasoning_effort && kw.reasoning_effort !== 'xhigh') throw new Error('counterfactual template probe failed')
+        return `think=${kw.enable_thinking}|effort=${kw.reasoning_effort ?? 'none'}`
+      })
+      expect(rowsOf(r, 'xhigh')).toHaveLength(17)
+      expect(rowsOf(r, 'xhigh').every((x) => x.evaluationStatus === 'valid' && !x.appliedTemplateKwargs)).toBe(true)
+      const unknown = await suite([off, xhigh], (kw) => `think=${kw.enable_thinking}|effort=${kw.reasoning_effort ?? 'none'}`, ['xhigh'])
+      expect(rowsOf(unknown, 'xhigh')).toHaveLength(17)
+      expect(rowsOf(unknown, 'xhigh').every((x) => x.evaluationStatus === 'valid' && !x.appliedTemplateKwargs)).toBe(true)
+    })
+  })
+
   it('reasoning provenance: null runtime count stays unknown while total decode rate remains measured; zero is known', async () => {
     const m = { ...model, supportsThinking: true, genKnobs: { supportsThinking: true } }
     const off = { id: 'off', thinking: false, temperature: 0, source: 'default' as const }
