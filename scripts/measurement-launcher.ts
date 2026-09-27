@@ -4,22 +4,23 @@ import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { createReadStream, existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { freemem } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
-import { windowsProcessTree, type ProcessTree } from '../src/core/runtimes/llamacpp'
+import type { ProcessTree } from '../src/core/runtimes/llamacpp'
 import { existingDbPath } from './harness-paths'
 import { validateHarnessLimits } from './harness-limits'
 import { trackOwnedProcess, type OwnedProcess } from './owned-process'
 
 const GiB = 1024 ** 3
 const execFileAsync = promisify(execFile)
-const rolePaths = ['node', 'packageLock', 'installedLock', 'tsxCli', 'launcher', 'runner', 'runtimeExe', 'model', 'sourceZip'] as const
+const rolePaths = ['node', 'packageLock', 'installedLock', 'tsxCli', 'launcher', 'runner', 'exporter', 'runtimeExe', 'model', 'sourceZip'] as const
 export type FileRole = typeof rolePaths[number] | `dll:${string}`
 export interface Fingerprint { role: FileRole; path: string; bytes: number; sha256: string }
 export interface MeasurementManifest {
   kind: 'local-ai-optimizer/measurement-gate-v1'
   createdAt: string
   snapshotHead: string
-  command: { cwd: string; args: string[]; dbPath: string }
+  command: { cwd: string; args: string[]; dbPath: string; exportOut: string }
   files: Fingerprint[]
 }
 export interface ManifestConfig {
@@ -31,8 +32,10 @@ export interface ManifestConfig {
   tsxCli: string
   launcher: string
   runner: string
+  exporter: string
   runtimeExe: string
   model: string
+  exportOut: string
 }
 
 export async function hashFile(path: string): Promise<string> {
@@ -47,8 +50,8 @@ async function fingerprint(role: FileRole, path: string): Promise<Fingerprint> {
 }
 const flag = (args: string[], name: string) => { const i = args.indexOf(name); return i < 0 ? undefined : args[i + 1] }
 function checkCommand(manifest: MeasurementManifest): void {
-  const { cwd, args, dbPath } = manifest.command
-  if (!isAbsolute(cwd) || !isAbsolute(dbPath) || !existsSync(cwd)) throw new Error('manifest cwd and DB must be existing absolute paths')
+  const { cwd, args, dbPath, exportOut } = manifest.command
+  if (!isAbsolute(cwd) || !isAbsolute(dbPath) || !isAbsolute(exportOut) || !existsSync(cwd) || !existsSync(dirname(exportOut))) throw new Error('manifest cwd, DB and export path must be absolute with existing directories')
   if (existingDbPath(dbPath, true) !== resolve(dbPath) || flag(args, '--db') !== dbPath) throw new Error('launcher --db argument differs from existing manifest DB')
   validateHarnessLimits({ requestCapMs: Number(flag(args, '--request-cap-ms')), ramAbortGib: Number(flag(args, '--ram-abort-gib')) })
   if (Object.keys(process.env).some((k) => k.toUpperCase() === 'GGML_CUDA_ENABLE_UNIFIED_MEMORY')) throw new Error('unified-memory environment variable is set')
@@ -61,6 +64,9 @@ function fileMap(manifest: MeasurementManifest): Map<FileRole, Fingerprint> {
 }
 export async function createManifest(config: ManifestConfig, out: string): Promise<MeasurementManifest> {
   if (!out) throw new Error('manifest output path required')
+  if (!config.exportOut) throw new Error('manifest exportOut required')
+  if (!isAbsolute(config.exportOut)) throw new Error('manifest exportOut must be absolute')
+  if (existsSync(config.exportOut)) throw new Error(`refusing to overwrite session export: ${config.exportOut}`)
   const cwd = resolve(config.cwd), dbPath = existingDbPath(config.dbPath, true)!
   const args = [...config.args]
   const argDb = existingDbPath(flag(args, '--db'), true)
@@ -68,7 +74,7 @@ export async function createManifest(config: ManifestConfig, out: string): Promi
   args[args.indexOf('--db') + 1] = dbPath // shell:false never expands %APPDATA% itself
   const paths: Record<typeof rolePaths[number], string> = {
     node: process.execPath, packageLock: join(cwd, 'package-lock.json'), installedLock: join(cwd, 'node_modules', '.package-lock.json'),
-    tsxCli: config.tsxCli, launcher: config.launcher, runner: config.runner, runtimeExe: config.runtimeExe, model: config.model, sourceZip: config.sourceZip
+    tsxCli: config.tsxCli, launcher: config.launcher, runner: config.runner, exporter: config.exporter, runtimeExe: config.runtimeExe, model: config.model, sourceZip: config.sourceZip
   }
   const files: Fingerprint[] = []
   for (const role of rolePaths) files.push(await fingerprint(role, paths[role]))
@@ -76,7 +82,7 @@ export async function createManifest(config: ManifestConfig, out: string): Promi
   for (const name of readdirSync(dllDir).filter((n) => n.toLowerCase().endsWith('.dll')).sort()) files.push(await fingerprint(`dll:${name}`, join(dllDir, name)))
   if (!files.some((f) => f.role.startsWith('dll:'))) throw new Error('runtime has no DLLs to verify')
   const manifest: MeasurementManifest = { kind: 'local-ai-optimizer/measurement-gate-v1', createdAt: new Date().toISOString(), snapshotHead: config.snapshotHead,
-    command: { cwd, args, dbPath }, files }
+    command: { cwd, args, dbPath, exportOut: resolve(config.exportOut) }, files }
   checkCommand(manifest)
   const headFile = join(cwd, 'HEAD.txt')
   if (readFileSync(headFile, 'utf8').trim() !== config.snapshotHead) throw new Error('snapshot HEAD.txt differs from manifest')
@@ -110,7 +116,7 @@ export interface LaunchDeps {
   readRam?: () => number
   verify?: typeof verifyManifest
 }
-export async function launchManifest(manifest: MeasurementManifest, deps: LaunchDeps = {}): Promise<{ exitCode: number; minRamGiB: number }> {
+export async function launchManifest(manifest: MeasurementManifest, deps: LaunchDeps = {}): Promise<{ exitCode: number; sessionId: string; sessionStartLine: string; minRamGiB: number }> {
   const readRam = deps.readRam ?? freemem, count = deps.countNamed ?? countNamed, verify = deps.verify ?? verifyManifest
   const controller = new AbortController()
   const minRam = { bytes: readRam() }
@@ -118,6 +124,7 @@ export async function launchManifest(manifest: MeasurementManifest, deps: Launch
   let owned: OwnedProcess | null = null
   let closed: Promise<number> | null = null
   let exitCode = 1
+  let sessionId: string | null = null, sessionStartLine: string | null = null
   let launchError: unknown = null
   const checkRam = () => {
     const free = readRam(); minRam.bytes = Math.min(minRam.bytes, free)
@@ -137,7 +144,27 @@ export async function launchManifest(manifest: MeasurementManifest, deps: Launch
     controller.signal.throwIfAborted()
     const map = fileMap(manifest), cwd = manifest.command.cwd
     child = (deps.spawnFn ?? spawn)(process.execPath, [map.get('tsxCli')!.path, map.get('runner')!.path, ...manifest.command.args], { cwd, shell: false, windowsHide: true,
-      env: Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toUpperCase() !== 'GGML_CUDA_ENABLE_UNIFIED_MEMORY')), stdio: 'inherit' })
+      env: Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toUpperCase() !== 'GGML_CUDA_ENABLE_UNIFIED_MEMORY')), stdio: ['inherit', 'pipe', 'pipe'] })
+    const forward = (stream: NodeJS.ReadableStream | null, dest: NodeJS.WriteStream, parse: boolean) => {
+      if (!stream) return
+      createInterface({ input: stream }).on('line', (line) => {
+        dest.write(`${line}\n`)
+        if (!parse) return
+        const explicit = /\bSESSION_ID=(\d+)\b/.exec(line)
+        if (explicit) { sessionId = explicit[1]; sessionStartLine = line; return }
+        const at = line.indexOf('{')
+        if (at < 0) return
+        try {
+          const event = JSON.parse(line.slice(at)) as { type?: string; sessionId?: string }
+          if (event.type === 'session:started' && /^\d+$/.test(event.sessionId ?? '')) {
+            if (sessionId && sessionId !== event.sessionId) throw new Error('multiple session IDs in runner output')
+            sessionId = event.sessionId!; sessionStartLine = line
+          }
+        } catch (e) { if ((e as Error).message === 'multiple session IDs in runner output') controller.abort(e) }
+      })
+    }
+    forward(child.stdout, process.stdout, true)
+    forward(child.stderr, process.stderr, false)
     closed = new Promise<number>((resolve, reject) => { child!.once('close', (code) => resolve(code ?? 1)); child!.once('error', reject) })
     void closed.catch(() => {})
     owned = await trackOwnedProcess(child, deps.tree)
@@ -148,6 +175,7 @@ export async function launchManifest(manifest: MeasurementManifest, deps: Launch
     exitCode = await Promise.race([closed, aborted])
     controller.signal.throwIfAborted()
     if (exitCode !== 0) throw new Error(`runner exited ${exitCode}`)
+    if (!sessionId || !sessionStartLine) throw new Error('runner exited without a session:started ID in its own log')
   } catch (e) { launchError = e; throw e }
   finally {
     const errors: unknown[] = []
@@ -167,7 +195,7 @@ export async function launchManifest(manifest: MeasurementManifest, deps: Launch
     process.off('SIGINT', sigint); process.off('SIGTERM', sigterm); process.off('SIGBREAK', sigbreak)
     if (errors.length) throw new AggregateError(launchError === null ? errors : [launchError, ...errors], 'measurement gate failed after execution')
   }
-  return { exitCode, minRamGiB: +(minRam.bytes / GiB).toFixed(2) }
+  return { exitCode, sessionId: sessionId!, sessionStartLine: sessionStartLine!, minRamGiB: +(minRam.bytes / GiB).toFixed(2) }
 }
 
 async function main(): Promise<void> {
@@ -178,6 +206,13 @@ async function main(): Promise<void> {
   if (mode === '--verify') { await verifyManifest(manifest); console.log(`manifest verified ${manifest.snapshotHead}`); return }
   if (mode !== '--launch') throw new Error(`unknown mode ${mode}`)
   const result = await launchManifest(manifest)
+  if (existsSync(manifest.command.exportOut)) throw new Error(`refusing to overwrite session export: ${manifest.command.exportOut}`)
+  const files = fileMap(manifest)
+  const { stdout } = await execFileAsync(process.execPath, [files.get('tsxCli')!.path, files.get('exporter')!.path, '--session', result.sessionId,
+    '--db', manifest.command.dbPath, '--head', manifest.snapshotHead, '--out', manifest.command.exportOut],
+  { cwd: manifest.command.cwd, windowsHide: true, timeout: 120_000, env: Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toUpperCase() !== 'GGML_CUDA_ENABLE_UNIFIED_MEMORY')) })
+  process.stdout.write(stdout)
+  console.log(`export SHA256 ${await hashFile(manifest.command.exportOut)}`)
   console.log(`measurement launcher done ${JSON.stringify(result)}`)
 }
 if (process.argv[1] && /(?:^|[\\/])measurement-launcher\.ts$/i.test(process.argv[1])) void main().catch((e) => { console.error(e); process.exitCode = 1 })

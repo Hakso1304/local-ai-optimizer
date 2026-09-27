@@ -294,6 +294,7 @@ async function run(dump: SessionDump<Record<string, unknown>>): Promise<void> {
       setTimeout(() => { abortAt = Date.now(); console.log(`${el()} >>> ABORT`); ctl.abort() }, 20_000)
     }
     if (e.type === 'session:cancelled') cancelledAt = Date.now()
+    if (e.type === 'session:started') console.log(`${el()} SESSION_ID=${e.sessionId}`)
     const short = e.type === 'step:done'
       ? `step:done ${e.configId.split('\\').pop()} @${e.ctx} ${e.verdict} ${e.result.status}${e.result.failureKind ? `/${e.result.failureKind}` : ''} pp=${e.result.prefillTps.value?.toFixed(0) ?? 'n/a'} tg=${e.result.decodeTps.value?.toFixed(1) ?? 'n/a'} ttft=${e.result.ttftMs.value?.toFixed(0) ?? 'n/a'} vram=${e.result.peakVramBytes.value != null ? (e.result.peakVramBytes.value / GiB).toFixed(2) : 'n/a'} shr=${e.result.peakSharedGpuBytes.value != null ? (e.result.peakSharedGpuBytes.value / GiB).toFixed(2) : 'n/a'}`
       : e.type === 'session:done' ? `session:done best=${e.recommendation.best?.configId ?? 'none'}`
