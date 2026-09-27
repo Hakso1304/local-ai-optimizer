@@ -1,6 +1,7 @@
 // Results → "Interpretation" (docs/INTERPRETATION.md §10): insights grouped by guide section 2–8, evidence
 // expandable, actions as buttons where the app can execute them. Also the [I-x.y] tag tooltips used in reasons.
-import type { ReactNode } from 'react'
+import { createContext, useContext, type ReactNode } from 'react'
+import { RULES_VERSION } from '../../core/interpret/catalog'
 import { sectionOf, type Insight } from '../../shared/interpret-types'
 import { Prov, fmtCtx } from './ui'
 
@@ -9,17 +10,22 @@ const SECTIONS: Record<number, string> = {
   7: 'Comparing candidates', 8: 'Generation configuration'
 }
 
-// Rule texts for the [I-x.y] tooltips. Eager glob: empty (no tooltip text) if the engine's rules file isn't there.
-const ruleFiles = import.meta.glob<{ version?: string; rules?: { id: string; text: string; section: number }[] }>('../../core/interpret/rules.v1.json', { eager: true, import: 'default' })
-const RULE_TEXT = new Map((Object.values(ruleFiles)[0]?.rules ?? []).map((r) => [r.id, r.text] as const))
+// Rule texts for the [I-x.y] tooltips, per catalog version: a citation means what its record's rules version said
+// (interp-1 records keep v1 meanings); unversioned text is read with the active catalog.
+const ruleFiles = import.meta.glob<{ version: string; rules: { id: string; text: string }[] }>('../../core/interpret/rules.v*.json', { eager: true, import: 'default' })
+const RULE_TEXT = new Map(Object.values(ruleFiles).map((f) => [f.version, new Map(f.rules.map((r) => [r.id, r.text] as const))] as const))
+/** Rules version the enclosed citations were written under (null = the active one). */
+export const RulesVersion = createContext<string | null>(null)
 
 /** Renders a reason/insight string; a leading "[I-x.y]" becomes a tag whose tooltip is the guide rule. */
-export function Reason({ text }: { text: string }) {
+export function Reason({ text, rules }: { text: string; rules?: string | null }) {
   const m = /^\[(I-\d+\.\d+)\]\s*/.exec(text)
   if (!m) return <>{text}</>
   const s = sectionOf(m[1])
-  const rule = RULE_TEXT.get(m[1])?.replace(/\{\w+\}/g, '…')
-  const tip = `Guide rule ${m[1]} (docs/INTERPRETATION.md §${s ?? '?'})${rule ? `: ${rule}` : ''}`
+  const inherited = useContext(RulesVersion)
+  const v = rules ?? inherited ?? ENGINE_RULES
+  const rule = RULE_TEXT.get(v)?.get(m[1])?.replace(/\{\w+\}/g, '…')
+  const tip = `Guide rule ${m[1]} (rules ${v}, docs/INTERPRETATION.md §${s ?? '?'})${rule ? `: ${rule}` : ''}`
   return <><span className="rule-tag" title={tip}>{m[1]}</span> {text.slice(m[0].length)}</>
 }
 
@@ -54,20 +60,21 @@ function actionButton(i: Insight, a: InsightActions): ReactNode {
 
 const SEV_ORDER = { critical: 0, warn: 1, note: 2, info: 3 } as const
 
-export function InterpretPanel({ insights, actions, tag = '' }: { insights: Insight[]; actions: InsightActions; tag?: string }) {
+/** rulesVersion: the catalog the insights were computed with (tooltips resolve against it). */
+export function InterpretPanel({ insights, actions, tag = '', rulesVersion = null }: { insights: Insight[]; actions: InsightActions; tag?: string; rulesVersion?: string | null }) {
   if (!insights.length) return null
-  const groups = new Map<number, Insight[]>()
-  for (const i of insights) { const s = sectionOf(i.ruleId) ?? 7; groups.set(s, [...(groups.get(s) ?? []), i]) }
-  // §0: context (2) and quality (5) lead, then the rest in guide order.
-  const order = [2, 5, 3, 4, 6, 7, 8, 1].filter((s) => groups.has(s))
+  // §0.1: every critical first (whatever its section), then context (2), quality (5) and the rest in guide order.
+  const groups = new Map<number | 'critical', Insight[]>()
+  for (const i of insights) { const s = i.severity === 'critical' ? 'critical' : sectionOf(i.ruleId) ?? 7; groups.set(s, [...(groups.get(s) ?? []), i]) }
+  const order = (['critical', 2, 5, 3, 4, 6, 7, 8, 1] as const).filter((s) => groups.has(s))
   return (
-    <>
+    <RulesVersion.Provider value={rulesVersion}>
       <h2>Interpretation{tag}</h2>
       {order.map((s) => (
         <div key={s} className="interp-group">
-          <h3>§{s} {SECTIONS[s] ?? ''}</h3>
+          <h3>{s === 'critical' ? 'Critical' : `§${s} ${SECTIONS[s] ?? ''}`}</h3>
           <ul>
-            {groups.get(s)!.sort((x, y) => SEV_ORDER[x.severity] - SEV_ORDER[y.severity]).map((i, k) => (
+            {[...groups.get(s)!].sort((x, y) => SEV_ORDER[x.severity] - SEV_ORDER[y.severity]).map((i, k) => (
               <li key={`${i.ruleId}-${k}`} className={`sev-${i.severity}${i.evaluable === false ? ' not-evaluable' : ''}`}>
                 <span className={`sev sev-${i.severity}`}>{i.severity}</span> <Reason text={i.text} />
                 {i.evaluable === false ? <span className="muted"> (not evaluable from stored data)</span> : actionButton(i, actions)}
@@ -88,12 +95,12 @@ export function InterpretPanel({ insights, actions, tag = '' }: { insights: Insi
           </ul>
         </div>
       ))}
-    </>
+    </RulesVersion.Provider>
   )
 }
 
 /** The rules version this build's engine uses (null if the rules file isn't there). */
-export const ENGINE_RULES: string | null = (Object.values(ruleFiles)[0] as { version?: string } | undefined)?.version ?? null
+export const ENGINE_RULES: string = RULES_VERSION
 
 /** Rules version a recommendation was made with; null = before the rule engine (no insights stored). */
 export const rulesOf = (rec: unknown): string | null => (rec as { rulesVersion?: string } | null)?.rulesVersion ?? null

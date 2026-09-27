@@ -31,7 +31,7 @@ function RecommendedCard({ d, go }: { d: SessionDetail; go: Go }) {
   const [reinterp, setReinterp] = useState<Insight[] | null>(null)
   const [provisionalNow, setProvisionalNow] = useState(false)
   useEffect(() => {
-    if (!rec || d.session.demo || (rulesOf(rec) !== null && rulesOf(rec) === ENGINE_RULES)) { setProvisionalNow(false); return setReinterp(null) }
+    if (!rec || d.session.demo || rulesOf(rec) === ENGINE_RULES) { setProvisionalNow(false); return setReinterp(null) }
     let live = true
     window.api.computeRecommendation(d.session.id, d.session.workload).then((r) => { if (live) { setReinterp(insightsOf(r?.recommendation)); setProvisionalNow(!r?.recommendation?.best && !!r?.recommendation?.provisionalBest) } }, () => {})
     return () => { live = false }
@@ -46,11 +46,11 @@ function RecommendedCard({ d, go }: { d: SessionDetail; go: Go }) {
         <><p>No candidate met this workload's requirements.</p>{rec?.provisionalBest && (
             <div className="provisional">
               <p><span className="pill warn-pill">provisional — not a recommendation</span> {rec.provisionalBest.headline}</p>
-              <p className="muted"><Reason text={rec.provisionalBest.reason} /></p>
+              <p className="muted"><Reason text={rec.provisionalBest.reason} rules={rulesOf(rec)} /></p>
             </div>
           )}
-          <ul>{rec?.reasons.map((r) => <li key={r}><Reason text={r} /></li>)}</ul>
-          {cardInsights(reinterp ?? insightsOf(rec)).alerts.map((i, k) => <p key={k} className={`sev-${i.severity}`}><span className={`sev sev-${i.severity}`}>{i.severity}</span> <Reason text={i.text} /></p>)}</>
+          <ul>{rec?.reasons.map((r) => <li key={r}><Reason text={r} rules={rulesOf(rec)} /></li>)}</ul>
+          {cardInsights(reinterp ?? insightsOf(rec)).alerts.map((i, k) => <p key={k} className={`sev-${i.severity}`}><span className={`sev sev-${i.severity}`}>{i.severity}</span> <Reason text={i.text} rules={reinterp ? ENGINE_RULES : rulesOf(rec)} /></p>)}</>
       ) : (
         <>
           <table className="kv">
@@ -71,10 +71,10 @@ function RecommendedCard({ d, go }: { d: SessionDetail; go: Go }) {
             const q = rec.best.score.breakdown.find((b) => b.component === 'quality') as ({ score: number; n?: number; ci95?: number; input: { kind: string } } | undefined)
             return (
               <div className="card-insights">
-                {ci.ceiling && <p><Reason text={ci.ceiling.text} /></p>}
+                {ci.ceiling && <p><Reason text={ci.ceiling.text} rules={reinterp ? ENGINE_RULES : rulesOf(rec)} /></p>}
                 {q && <p>Quality {q.score.toFixed(0)}{q.ci95 != null ? ` ± ${q.ci95.toFixed(0)}` : ''}{q.n != null ? ` (n ${q.n})` : ''} <span className="muted">({q.input.kind})</span></p>}
-                {ci.decode && <p><Reason text={ci.decode.text} /></p>}
-                {ci.alerts.map((i, k) => <p key={k} className={`sev-${i.severity}`}><span className={`sev sev-${i.severity}`}>{i.severity}</span> <Reason text={i.text} /></p>)}
+                {ci.decode && <p><Reason text={ci.decode.text} rules={reinterp ? ENGINE_RULES : rulesOf(rec)} /></p>}
+                {ci.alerts.map((i, k) => <p key={k} className={`sev-${i.severity}`}><span className={`sev sev-${i.severity}`}>{i.severity}</span> <Reason text={i.text} rules={reinterp ? ENGINE_RULES : rulesOf(rec)} /></p>)}
               </div>
             )
           })()}

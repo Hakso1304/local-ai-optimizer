@@ -1,6 +1,6 @@
 // Results → "How this was decided": the engine's decision trace (interp-2), rendered as recorded. Read-only.
 import type { Recommendation } from '../../shared/bench-types'
-import { Reason } from './InterpretPanel'
+import { Reason, RulesVersion } from './InterpretPanel'
 import { fmtCtx } from './ui'
 
 type Trace = NonNullable<Recommendation['decisionTrace']>
@@ -9,6 +9,7 @@ const v = (x: unknown) => (x == null ? '—' : typeof x === 'number' ? String(Ma
 export function DecisionTrace({ trace }: { trace: Trace }) {
   const t = trace
   return (
+    <RulesVersion.Provider value={t.rulesVersion}>
     <details className="trace">
       <summary><b>How this was decided</b> <span className="muted">(rules {t.rulesVersion}, scoring {t.scoringVersion})</span></summary>
       <p>Scoring rung: <b>{t.scoringRung != null ? fmtCtx(t.scoringRung) : '—'}</b> <span className="muted">— {t.scoringRungWhy}</span></p>
@@ -56,5 +57,6 @@ export function DecisionTrace({ trace }: { trace: Trace }) {
       <h3>Thresholds used</h3>
       <p className="muted">{Object.entries(t.thresholdsUsed).map(([k, x]) => `${k} ${v(x)}`).join(' · ')}</p>
     </details>
+    </RulesVersion.Provider>
   )
 }

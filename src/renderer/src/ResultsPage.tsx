@@ -7,7 +7,7 @@ import { WORKLOADS } from '../../core/scoring/workloads'
 import { genLabel, type GenRow } from '../../core/benchmark/gen'
 import { ExportMenu } from './ExportMenu'
 import { DecisionTrace } from './DecisionTrace'
-import { ENGINE_RULES, InterpretPanel, Reason, insightsOf, rulesOf, type InsightActions } from './InterpretPanel'
+import { ENGINE_RULES, InterpretPanel, Reason, RulesVersion, insightsOf, rulesOf, type InsightActions } from './InterpretPanel'
 import type { BenchPreset } from './LargeCodingCard'
 import { LineChart, type Band } from './LineChart'
 import { ParetoChart } from './ParetoChart'
@@ -116,10 +116,12 @@ function Detail({ d, onRerun, go }: { d: SessionDetail; onRerun: (configId: stri
   const onSlo = useCallback((p: SloCheck) => setSlo(() => p), [])
   const [tele, setTele] = useState<{ key: string; samples: TelemetrySample[] } | null>(null)
 
+  // Stored reasons cite the recording's rules; a reinterpretation's insights/trace carry the current ones.
+  const insightRules = (rec as { reinterpretedWith?: string } | null)?.reinterpretedWith ?? rulesOf(rec)
   return (
-    <>
+    <RulesVersion.Provider value={rulesOf(rec)}>
       {d.session.demo && <DemoBanner />}
-      {insightsOf(rec).length > 0 && <InterpretPanel insights={insightsOf(rec)} actions={actions} tag={tag} />}
+      {insightsOf(rec).length > 0 && <InterpretPanel insights={insightsOf(rec)} actions={actions} tag={tag} rulesVersion={insightRules} />}
       <h2>Comparison — {d.session.workload}{tag}</h2>
       <PlanningLine d={d} />
       <SloFilter session={d.session} candidates={d.candidates} onChange={onSlo} />
@@ -244,7 +246,7 @@ function Detail({ d, onRerun, go }: { d: SessionDetail; onRerun: (configId: stri
           {!d.session.demo && <><h3>Export</h3><ExportMenu rec={rec} cand={d.candidates.find((c) => c.config.id === rec.best?.configId)} sessionId={d.session.id} ctx={exportCtx} />{exportCtx && <p className="muted">Export uses -c {exportCtx} (from an interpretation action). <button className="mini" onClick={() => setExportCtx(null)}>reset</button></p>}</>}
         </div>
       ) : <p className="muted">No recommendation stored for this session.</p>}
-    </>
+    </RulesVersion.Provider>
   )
 }
 
@@ -264,7 +266,7 @@ export function ResultsPage({ sessionId, go }: { sessionId?: number; go: Go }) {
     // Same workload as benchmarked: the stored recommendation is shown — unless it predates the rule engine, then it
     // is reinterpreted with the current rules for display (the stored one is kept as is).
     const own = !viewAs || viewAs === detail.session.workload
-    if (own && (rulesOf(detail.recommendation) === ENGINE_RULES || ENGINE_RULES === null) && rulesOf(detail.recommendation) !== null) return
+    if (own && rulesOf(detail.recommendation) === ENGINE_RULES) return
     if (own && !detail.recommendation) return
     const w = viewAs ?? detail.session.workload
     let live = true // stale-reply guard: a slower answer for an earlier session+workload is dropped (W4b F11)
@@ -277,9 +279,11 @@ export function ResultsPage({ sessionId, go }: { sessionId?: number; go: Go }) {
   const shown: SessionDetail | null = detail && computed && reinterpreting && detail.recommendation
     ? { ...detail, recommendation: {
         ...detail.recommendation, insights: insightsOf(computed.recommendation),
-        // the current rules' trace and eligibility lists (labelled "reinterpreted" above); best/ranking stay as recorded
-        decisionTrace: computed.recommendation?.decisionTrace, unmetAlternatives: computed.recommendation?.unmetAlternatives
-      } as typeof detail.recommendation }
+        // the current rules' insights, trace and eligibility lists together (never new insights beside an old trace);
+        // best/ranking/reasons stay as recorded, under their own rules version
+        decisionTrace: computed.recommendation?.decisionTrace, unmetAlternatives: computed.recommendation?.unmetAlternatives,
+        reinterpretedWith: rulesOf(computed.recommendation) ?? ENGINE_RULES
+      } as unknown as typeof detail.recommendation }
     : detail && computed ? {
     ...detail,
     session: { ...detail.session, workload: computed.workload },
@@ -337,7 +341,7 @@ export function ResultsPage({ sessionId, go }: { sessionId?: number; go: Go }) {
             </select>
           </label>
           {computed && (computed.workload === detail.session.workload
-            ? <span className="pill warn-pill" title="The stored recommendation was made before the interpretation rules; the numbers are the same measurements">recommended with rules {rulesOf(detail.recommendation) ?? 'pre-interp'}; reinterpreted with rules {rulesOf(computed.recommendation) ?? '?'}</span>
+            ? <span className="pill warn-pill" title="The stored recommendation (ranking, reasons) is shown as recorded; insights and the decision trace come from the current rules on the same measurements">recommended with rules {rulesOf(detail.recommendation) ?? 'pre-interp'}; reinterpreted with rules {rulesOf(computed.recommendation) ?? '?'}</span>
             : <span className="pill warn-pill">{computed.label} — not the session's own recommendation</span>)}
         </div>
       )}
