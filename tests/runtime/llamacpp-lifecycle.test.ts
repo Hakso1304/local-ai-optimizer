@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { finished } from 'node:stream/promises'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { LlamaCppBackend } from '../../src/core/runtimes/llamacpp'
+import { LlamaCppBackend, ServerStuckError, type ProcessTree } from '../../src/core/runtimes/llamacpp'
 
 // Fake llama-server child: the adapter only sees this object (spawnFn seam) plus a real HTTP server we control.
 // Odd pid: Windows pids are multiples of 4, so a taskkill escalation can never hit a real process.
@@ -70,7 +70,13 @@ beforeAll(async () => {
 afterAll(() => { server.closeAllConnections(); server.close() })
 beforeEach(() => {
   child = new FakeChild()
-  b = new LlamaCppBackend('unused', { pidFile, spawnFn: () => child as unknown as ChildProcess })
+  const spawned: FakeChild[] = []
+  const processTree: ProcessTree = {
+    descendants: async () => [],
+    kill: async (pid) => { spawned.find((p) => p.pid === pid)?.kill() },
+    isAlive: async (pid) => { const p = spawned.find((x) => x.pid === pid); return !!p && p.exitCode === null && p.signalCode === null }
+  }
+  b = new LlamaCppBackend('unused', { pidFile, spawnFn: () => { spawned.push(child); return child as unknown as ChildProcess }, processTree })
 })
 afterEach(async () => {
   child.exitOnKill = true
@@ -92,7 +98,8 @@ describe('loadModel', () => {
     expect(Date.now() - t0).toBeLessThan(3000)
     expect(b.lastExit).toMatchObject({ code: 3, reason })
     expect(b.lastExit!.tail).toEqual(expect.arrayContaining(lines))
-    expect(existsSync(pidFile)).toBe(false)
+    // The root identity remains until unload so descendants of an exited parent can still be found.
+    expect(existsSync(pidFile)).toBe(true)
   })
 
   it('writes the pid file while running', async () => {
@@ -197,16 +204,18 @@ describe('unloadModel', () => {
     const descendantPid = 424245
     let descendantAlive = true
     const calls: number[] = []
-    const processTree = {
-      descendants: (pid: number) => { expect(pid).toBe(child.pid); return [descendantPid] },
-      kill: (pid: number) => { calls.push(pid); if (pid === descendantPid) descendantAlive = false },
-      isAlive: (pid: number) => pid === descendantPid && descendantAlive
+    const startedAt = new Date().toISOString()
+    const processTree: ProcessTree = {
+      descendants: async (pid) => { expect(pid).toBe(child.pid); return [{ pid: descendantPid, name: 'fake-child', startedAt }] },
+      kill: async (pid, opts) => { expect(opts).toEqual({ tree: true, force: true }); calls.push(pid); if (pid === descendantPid) descendantAlive = false },
+      isAlive: async (pid) => pid === descendantPid && descendantAlive
     }
-    b = new LlamaCppBackend('unused', { pidFile, spawnFn: () => child as unknown as ChildProcess, processTree } as ConstructorParameters<typeof LlamaCppBackend>[1])
+    b = new LlamaCppBackend('unused', { pidFile, spawnFn: () => child as unknown as ChildProcess, processTree })
     handler = healthy()
     await load()
+    await child.exit(0)
     await b.unloadModel()
-    expect(child.kills).toBeGreaterThan(0)
+    expect(child.kills).toBe(0)
     expect(calls).toContain(descendantPid)
     expect(descendantAlive).toBe(false)
     expect(existsSync(pidFile)).toBe(false)
@@ -215,16 +224,18 @@ describe('unloadModel', () => {
   it('Q2: reports a surviving descendant after parent exit and retains cleanup identity', async () => {
     const descendantPid = 424245
     let descendantAlive = true
-    const processTree = {
-      descendants: () => [descendantPid],
-      kill: () => {},
-      isAlive: (pid: number) => pid === descendantPid && descendantAlive
+    const startedAt = new Date().toISOString()
+    const processTree: ProcessTree = {
+      descendants: async () => [{ pid: descendantPid, name: 'fake-child', startedAt }],
+      kill: async () => {},
+      isAlive: async (pid) => pid === descendantPid && descendantAlive
     }
-    b = new LlamaCppBackend('unused', { pidFile, spawnFn: () => child as unknown as ChildProcess, processTree } as ConstructorParameters<typeof LlamaCppBackend>[1])
+    b = new LlamaCppBackend('unused', { pidFile, spawnFn: () => child as unknown as ChildProcess, processTree })
     handler = healthy()
     await load()
+    await child.exit(0)
     try {
-      await expect(b.unloadModel()).rejects.toThrow(/surviv|descendant|still alive/i)
+      await expect(b.unloadModel()).rejects.toBeInstanceOf(ServerStuckError)
       expect(existsSync(pidFile)).toBe(true)
     } finally {
       descendantAlive = false // fake process is released before the shared cleanup hook
@@ -255,6 +266,7 @@ describe('unloadModel', () => {
     await load()
     const first = child
     child = new FakeChild()
+    child.pid = 424247
     await load()
     expect(first.kills).toBe(1)
   })

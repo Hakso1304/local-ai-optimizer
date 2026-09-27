@@ -1,9 +1,12 @@
 // Test scope: REAL typeperf output captured on the dev box (tests/fixtures/telemetry/*.csv) and synthetic rows for
 // edge shapes; the parser runs for real. Live typeperf (spawn/restart/stop) is covered in tests/telemetry/*.
 import { readFileSync } from 'node:fs'
+import type { ChildProcess } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
+import { PassThrough } from 'node:stream'
 import { describe, expect, it } from 'vitest'
-import { TypeperfParser, counterPaths, parseColumn, peaks, withNvidia, type TelemetrySample } from '../src/core/telemetry/sampler'
+import { TypeperfParser, counterPaths, parseColumn, peaks, startSampler, withNvidia, type TelemetrySample } from '../src/core/telemetry/sampler'
 
 // Real typeperf output from the dev box (RX 9070 XT luid ..16058, iGPU ..190BD); hostname replaced by HOST.
 const fx = (name: string) => readFileSync(join(__dirname, 'fixtures', 'telemetry', name), 'utf8').split('\n').filter(Boolean)
@@ -107,21 +110,47 @@ describe('typeperf parser', () => {
     expect(peaks([{ ...samples[0], gpuUtilPct: null }]).meanGpuUtilPct).toBeNull()
   })
 
-  it('withNvidia merges nearest nvidia-smi temp/power into PDH samples and fills a missing GPU util', () => {
+  it('withNvidia merges nearest nvidia-smi temp/power into PDH samples and fills a missing GPU util', async () => {
     const base = { cpuPct: 1, ramAvailBytes: 1, vramDedicatedBytes: 1, vramSharedBytes: 1, procRamPrivateBytes: 1, procVramDedicatedBytes: 1, procVramSharedBytes: 1 }
     const pdhSamples: TelemetrySample[] = [{ ts: 1000, gpuUtilPct: null, ...base }, { ts: 9000, gpuUtilPct: 50, ...base }]
-    const pdh = { samples: pdhSamples, unavailable: {}, errors: [], hasPidColumns: true, restart: () => {}, stop: () => pdhSamples }
+    const pdh = { samples: pdhSamples, unavailable: {}, errors: [], hasPidColumns: true, restart: () => {}, stop: async () => pdhSamples }
     const nv = { samples: [{ ts: 1200, gpuUtilPct: 88, vramUsedBytes: 1, tempC: 71, powerW: 250 }], stop: () => [] }
     const m = withNvidia(pdh, nv)
     expect(m.samples[0]).toMatchObject({ tempC: 71, powerW: 250, gpuUtilPct: 88 })
     expect(m.samples[1].tempC).toBeUndefined() // no nvidia sample within 1.5 s: left absent, not invented
-    expect(peaks(m.stop()).max.tempC).toBe(71)
+    expect(peaks(await m.stop()).max.tempC).toBe(71)
     expect(withNvidia(pdh, null)).toBe(pdh)
     // settled rows are enriched once and the same object is returned on later reads (no O(n·m) re-map per poll)
     const nv2 = { samples: [{ ts: 1100, gpuUtilPct: 1, vramUsedBytes: 1, tempC: 60, powerW: 1 }, { ts: 20000, gpuUtilPct: 1, vramUsedBytes: 1, tempC: 61, powerW: 1 }], stop: () => [] }
     const w = withNvidia(pdh, nv2)
     expect(w.samples[0]).toBe(w.samples[0])
     expect(w.samples[0].tempC).toBe(60)
+  })
+
+  it('Q2: sampler.stop waits for the fake typeperf child to close', async () => {
+    const fake = new EventEmitter() as EventEmitter & { stdout: PassThrough; stderr: PassThrough; exitCode: number | null; signalCode: string | null; kill: () => boolean }
+    fake.stdout = new PassThrough()
+    fake.stderr = new PassThrough()
+    fake.exitCode = null
+    fake.signalCode = null
+    let closed = false
+    fake.kill = () => {
+      setTimeout(() => {
+        closed = true
+        fake.exitCode = 0
+        fake.stdout.end()
+        fake.stderr.end()
+        fake.emit('close', 0)
+      }, 25)
+      return true
+    }
+    const sampler = startSampler({ spawnFn: () => fake as unknown as ChildProcess })
+    let settled = false
+    const stopping = Promise.resolve(sampler.stop()).then((rows) => { settled = true; return rows })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    expect(await stopping).toEqual([])
+    expect(closed).toBe(true)
   })
 
   it('H7 shape: every row one cell short of the header (an instance vanished) is counted as misaligned in a row', () => {
