@@ -6,7 +6,7 @@ import type { TelemetrySample } from '../../shared/bench-events'
 import { WORKLOADS } from '../../core/scoring/workloads'
 import { genLabel } from '../../core/benchmark/gen'
 import { ExportMenu } from './ExportMenu'
-import { InterpretPanel, Reason, insightsOf, rulesOf, type InsightActions } from './InterpretPanel'
+import { ENGINE_RULES, InterpretPanel, Reason, insightsOf, rulesOf, type InsightActions } from './InterpretPanel'
 import type { BenchPreset } from './LargeCodingCard'
 import { LineChart, type Band } from './LineChart'
 import { ParetoChart } from './ParetoChart'
@@ -219,14 +219,19 @@ export function ResultsPage({ sessionId, go }: { sessionId?: number; go: Go }) {
     // Same workload as benchmarked: the stored recommendation is shown — unless it predates the rule engine, then it
     // is reinterpreted with the current rules for display (the stored one is kept as is).
     const own = !viewAs || viewAs === detail.session.workload
-    if (own && rulesOf(detail.recommendation) !== null) return
+    if (own && (rulesOf(detail.recommendation) === ENGINE_RULES || ENGINE_RULES === null) && rulesOf(detail.recommendation) !== null) return
     if (own && !detail.recommendation) return
     const w = viewAs ?? detail.session.workload
     let live = true // stale-reply guard: a slower answer for an earlier session+workload is dropped (W4b F11)
     window.api.computeRecommendation(detail.session.id, w).then((r) => { if (live) setComputed(r) }, (e: Error) => { if (live) setErr(e.message) })
     return () => { live = false }
   }, [detail, viewAs])
-  const shown: SessionDetail | null = detail && computed ? {
+  // Own workload, reinterpreted: the stored recommendation (ranking, reasons, scores) stays as recorded; only the
+  // insights come from the current rules. Another workload: the recomputed recommendation replaces it.
+  const reinterpreting = !!(detail && computed && computed.workload === detail.session.workload)
+  const shown: SessionDetail | null = detail && computed && reinterpreting && detail.recommendation
+    ? { ...detail, recommendation: { ...detail.recommendation, insights: insightsOf(computed.recommendation) } as typeof detail.recommendation }
+    : detail && computed ? {
     ...detail,
     session: { ...detail.session, workload: computed.workload },
     recommendation: computed.recommendation,

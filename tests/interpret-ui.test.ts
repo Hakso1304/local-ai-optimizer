@@ -11,11 +11,11 @@ describe('interpretation UI helpers (INTERPRETATION.md §10)', () => {
     expect(sectionOf('bogus')).toBeNull()
   })
 
-  it('cardInsights: ceiling line, decode band, and at most 2 warn/critical alerts', () => {
-    const c = cardInsights([ins('I-3.1', 'info'), ins('I-2.1', 'info', 'ctx.ceiling'), ins('I-4.2', 'warn'), ins('I-5.3', 'critical'), ins('I-6.1', 'warn')])
+  it('cardInsights: ceiling line, decode band, every critical then at most 2 warnings', () => {
+    const c = cardInsights([ins('I-3.1', 'info'), ins('I-2.1', 'info', 'ctx.ceiling'), ins('I-4.2', 'warn'), ins('I-5.3', 'critical'), ins('I-6.1', 'warn'), ins('I-6.3', 'critical'), ins('I-4.4', 'warn')])
     expect(c.ceiling?.ruleId).toBe('I-2.1')
     expect(c.decode?.ruleId).toBe('I-3.1')
-    expect(c.alerts.map((i) => i.ruleId)).toEqual(['I-4.2', 'I-5.3'])
+    expect(c.alerts.map((i) => i.ruleId)).toEqual(['I-5.3', 'I-6.3', 'I-4.2', 'I-6.1']) // criticals never capped
     expect(cardInsights(undefined)).toEqual({ ceiling: null, decode: null, alerts: [] })
   })
 })

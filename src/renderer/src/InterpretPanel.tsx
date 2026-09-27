@@ -10,7 +10,7 @@ const SECTIONS: Record<number, string> = {
 }
 
 // Rule texts for the [I-x.y] tooltips. Eager glob: empty (no tooltip text) if the engine's rules file isn't there.
-const ruleFiles = import.meta.glob<{ rules?: { id: string; text: string; section: number }[] }>('../../core/interpret/rules.v1.json', { eager: true, import: 'default' })
+const ruleFiles = import.meta.glob<{ version?: string; rules?: { id: string; text: string; section: number }[] }>('../../core/interpret/rules.v1.json', { eager: true, import: 'default' })
 const RULE_TEXT = new Map((Object.values(ruleFiles)[0]?.rules ?? []).map((r) => [r.id, r.text] as const))
 
 /** Renders a reason/insight string; a leading "[I-x.y]" becomes a tag whose tooltip is the guide rule. */
@@ -88,6 +88,9 @@ export function InterpretPanel({ insights, actions, tag = '' }: { insights: Insi
   )
 }
 
+/** The rules version this build's engine uses (null if the rules file isn't there). */
+export const ENGINE_RULES: string | null = (Object.values(ruleFiles)[0] as { version?: string } | undefined)?.version ?? null
+
 /** Rules version a recommendation was made with; null = before the rule engine (no insights stored). */
 export const rulesOf = (rec: unknown): string | null => (rec as { rulesVersion?: string } | null)?.rulesVersion ?? null
 
@@ -100,6 +103,7 @@ export function cardInsights(insights: Insight[] | undefined) {
   return {
     ceiling: list.find((i) => sectionOf(i.ruleId) === 2 && /ceiling/i.test(i.key ?? i.metric)) ?? list.find((i) => sectionOf(i.ruleId) === 2) ?? null,
     decode: list.find((i) => i.ruleId === 'I-3.1') ?? null,
-    alerts: list.filter((i) => i.severity === 'warn' || i.severity === 'critical').slice(0, 2)
+    // every critical insight, then at most 2 warnings (W4f: criticals are never capped)
+    alerts: [...list.filter((i) => i.severity === 'critical'), ...list.filter((i) => i.severity === 'warn').slice(0, 2)]
   }
 }

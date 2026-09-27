@@ -96,6 +96,9 @@ describe('session storage', () => {
     const cand = getSession(db, Number(id))!.candidates[0]
     expect(cand.runs.map((r) => `${r.ctx}:${r.status}`)).toEqual(['2048:pass', '4096:pass'])
     expect(cand.runIds).toEqual([1, 3]) // row ids of the surviving rows, for telemetryForRun
+    // the superseded attempt stays in history, pointing at its replacement (W4f: a failed attempt still surfaces)
+    expect(cand.history.map((r) => [r.rowId, r.status, r.supersededBy])).toEqual([[1, 'pass', null], [2, 'fail', 3], [3, 'pass', null]])
+    expect(sessionInputs(db, Number(id))!.inputs[0]).toMatchObject({ history: expect.arrayContaining([expect.objectContaining({ rowId: 2, supersededBy: 3 })]) })
     db.close()
   })
 

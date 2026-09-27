@@ -113,6 +113,17 @@ export function getSession(db: DatabaseSync, id: number): SessionDetail | null {
     const { detail: _d, ...run } = json<BenchmarkRunResult & { detail?: unknown }>(r.payload)
     return { rowId: r.id, run }
   })
+  // Every persisted row, oldest first: a retried/rerun step supersedes its earlier row(s), which stay visible as
+  // history (a device loss or guard abort in a superseded attempt must still surface; W4f / I-6.3).
+  const all = (db.prepare('SELECT id, created_at, payload FROM benchmark_run WHERE session_id = ? ORDER BY id').all(id) as { id: number; created_at: string; payload: string }[])
+    .map((r) => {
+      const p = json<BenchmarkRunResult & { detail?: { samplerErrors?: string[]; startedAt?: number; endedAt?: number } }>(r.payload)
+      const { detail, ...run } = p
+      return { ...run, rowId: r.id, recordedAt: r.created_at, supersededBy: null as number | null, samplerErrors: detail?.samplerErrors ?? [], startedAt: detail?.startedAt ?? null, endedAt: detail?.endedAt ?? null }
+    })
+  const latest = new Map<string, number>()
+  for (const r of all) latest.set(`${r.configId}@${r.ctx}`, r.rowId)
+  for (const r of all) { const l = latest.get(`${r.configId}@${r.ctx}`)!; if (l !== r.rowId) r.supersededBy = l }
   const quality = db.prepare('SELECT model_id, payload FROM quality_result WHERE session_id = ? ORDER BY id').all(id) as { model_id: string; payload: string }[]
   const recRow = db.prepare('SELECT payload FROM recommendation WHERE session_id = ? ORDER BY id DESC LIMIT 1').get(id) as { payload: string } | undefined
   const recommendation = recRow ? json<Recommendation>(recRow.payload) : null
@@ -123,6 +134,7 @@ export function getSession(db: DatabaseSync, id: number): SessionDetail | null {
       const mine = rows.filter((r) => r.run.configId === config.id)
       return {
         config, model, runs: mine.map((r) => r.run), runIds: mine.map((r) => r.rowId),
+        history: all.filter((r) => r.configId === config.id),
         cliff: detectCliffs(mine.map((r) => r.run), p.vramBytes),
         score: recommendation?.ranked.find((s) => s.configId === config.id) ?? null,
         quality: quality.filter((q) => q.model_id === model.id).map((q) => json<QualityResult>(q.payload)),
@@ -142,7 +154,7 @@ export function sessionInputs(db: DatabaseSync, id: number): { inputs: Candidate
   return {
     // Baseline rows feed `quality`; every gen config (baseline included) feeds genQuality, like the runner does.
     inputs: d.candidates.map((c) => ({
-      config: c.config, model: c.model, runs: c.runs,
+      config: c.config, model: c.model, runs: c.runs, history: c.history,
       quality: c.quality.filter((q) => ((q as GenRow).genId ?? BASELINE_GEN.id) === BASELINE_GEN.id),
       ...(c.genQuality?.length ? { genQuality: c.genQuality } : {})
     })),

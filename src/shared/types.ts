@@ -256,10 +256,24 @@ export interface SessionSummary {
   bestConfigId: string | null
 }
 
+/** One persisted benchmark_run row with its bookkeeping (read side). */
+export type RunRecord = BenchmarkRunResult & {
+  rowId: number
+  /** benchmark_run.created_at (UTC, sqlite datetime). */
+  recordedAt: string
+  /** Row id of the later attempt of the same (configId, ctx) that replaced this one; null = this is the scored row. */
+  supersededBy: number | null
+  samplerErrors: string[]
+  startedAt: number | null
+  endedAt: number | null
+}
+
 export interface SessionCandidate {
   config: CandidateConfig
   model: ModelMeta
   runs: BenchmarkRunResult[]
+  /** Every attempt of every step, oldest first (superseded ones included). `runs` is the scored subset. */
+  history: RunRecord[]
   /** benchmark_run row ids, parallel to runs (for telemetryForRun). */
   runIds: number[]
   /** Recomputed from the stored runs on read (pure scoring code), not stored. */
