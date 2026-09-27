@@ -151,6 +151,69 @@ const defaultProcessTree: ProcessTree = {
 /** Windows PID + creation-time inspection for supervised external process trees. */
 export const windowsProcessTree: ProcessTree = defaultProcessTree
 
+const sameProcess = (a: ProcessIdentity | null, b: ProcessIdentity) => !!a && a.pid === b.pid && a.startedAt === b.startedAt &&
+  (a.parentPid === undefined || b.parentPid === undefined || a.parentPid === b.parentPid)
+
+export interface OwnedScanOptions {
+  tree: ProcessTree
+  root: number
+  rootIdentity: ProcessIdentity | null
+  children: Map<number, ProcessIdentity>
+  rootWasLive: boolean
+  ownedExitAt: number | null
+}
+
+/** Reconcile a fresh scan against identities captured while the root lived.
+ *  Call reap() only after checking the caller's deadline. Unknown ancestry fails closed. */
+export async function reconcileOwnedProcessScan(options: OwnedScanOptions): Promise<{
+  remaining: ProcessIdentity[]
+  reap(): Promise<void>
+}> {
+  const { tree, root, rootIdentity, children, rootWasLive, ownedExitAt } = options
+  const scan = () => tree.descendants(root)
+  const stillOwned = async (record: ProcessIdentity) => {
+    if (tree.inspect) return sameProcess(await tree.inspect(record.pid), record)
+    if (!await tree.isAlive(record.pid)) return false
+    // Legacy injected seam: production uses inspect + killVerified.
+    return (await scan()).some((current) => sameProcess(current, record))
+  }
+  const ancestryValid = async (record: ProcessIdentity, seen = new Set<number>()): Promise<boolean> => {
+    if (record.parentPid === undefined || record.parentPid === root) return true
+    if (seen.has(record.pid)) return false
+    seen.add(record.pid)
+    const parent = children.get(record.parentPid)
+    return !!parent && await stillOwned(parent) && await ancestryValid(parent, seen)
+  }
+  const found = await scan()
+  for (const child of found) {
+    const known = children.get(child.pid)
+    if (known && sameProcess(child, known)) continue
+    if (known && !sameProcess(child, known) && !rootWasLive) continue // recorded PID now belongs to a foreign process
+    if (!known && rootWasLive && rootIdentity && tree.inspect &&
+        sameProcess(await tree.inspect(root), rootIdentity) &&
+        sameProcess(await tree.inspect(child.pid), child) &&
+        (child.parentPid === root || (child.parentPid !== undefined &&
+          children.has(child.parentPid) && sameProcess(await tree.inspect(child.parentPid), children.get(child.parentPid)!) &&
+          await ancestryValid(children.get(child.parentPid)!)))) {
+      children.set(child.pid, child)
+      continue
+    }
+    const born = Date.parse(child.startedAt)
+    if (!rootWasLive && Number.isFinite(born) && ownedExitAt !== null && born > ownedExitAt) continue
+    throw new ServerStuckError(`llama-server pid ${root} has unverified descendant ${child.pid}`)
+  }
+  const remaining: ProcessIdentity[] = []
+  for (const child of children.values()) if (await stillOwned(child)) remaining.push(child)
+  return { remaining, async reap() {
+    for (const record of remaining) {
+      if (!await ancestryValid(record)) throw new ServerStuckError(`descendant pid ${record.pid} lost its verified parent identity`)
+      if (!await stillOwned(record)) continue
+      if (tree.killVerified) await tree.killVerified(record)
+      else if ((await scan()).some((current) => sameProcess(current, record))) await tree.kill(record.pid, { tree: true, force: true })
+    }
+  } }
+}
+
 /** The child's environment: the parent's minus GGML_CUDA_ENABLE_UNIFIED_MEMORY. Managed memory lets a CUDA/HIP
  *  build oversubscribe VRAM into system RAM, which would make "fits in VRAM" unmeasurable (docs/HIP-BACKEND.md). */
 export function serverEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -499,62 +562,21 @@ export class LlamaCppBackend implements InferenceBackend {
       return
     }
     if (p) this.unloading = p
-    const same = (a: ProcessIdentity | null, b: ProcessIdentity) => !!a && a.pid === b.pid && a.startedAt === b.startedAt &&
-      (a.parentPid === undefined || b.parentPid === undefined || a.parentPid === b.parentPid)
     const children = new Map(this.ownedChildren)
-    const scan = () => this.processTree.descendants(root)
-    const reconcile = async (found: ProcessIdentity[], rootWasLive: boolean) => {
-      for (const child of found) {
-        const known = children.get(child.pid)
-        if (known && same(child, known)) continue
-        if (known && !same(child, known) && !rootWasLive) continue // the recorded child exited; its PID is now foreign
-        if (!known && rootWasLive && this.ownedRootIdentity && this.processTree.inspect &&
-            same(await this.processTree.inspect(root), this.ownedRootIdentity) &&
-            same(await this.processTree.inspect(child.pid), child) &&
-            (child.parentPid === root || (child.parentPid !== undefined &&
-              children.has(child.parentPid) && same(await this.processTree.inspect(child.parentPid), children.get(child.parentPid)!) &&
-              await ancestryValid(children.get(child.parentPid)!)))) {
-          // A child discovered during unload is still owned if the live root
-          // and every observed ancestry edge retain their creation identity.
-          children.set(child.pid, child)
-          this.ownedChildren.set(child.pid, child)
-          continue
-        }
-        const born = Date.parse(child.startedAt)
-        if (!rootWasLive && Number.isFinite(born) && this.ownedExitAt !== null && born > this.ownedExitAt) continue
-        throw new ServerStuckError(`llama-server pid ${root} has unverified descendant ${child.pid}`)
-      }
-    }
-    const stillOwned = async (record: ProcessIdentity) => {
-      if (this.processTree.inspect) return same(await this.processTree.inspect(record.pid), record)
-      if (!await this.processTree.isAlive(record.pid)) return false
-      // Legacy injected seam: re-read ancestry after the liveness check, which
-      // may itself race a PID reuse. Production uses inspect + killVerified.
-      return (await scan()).some((current) => same(current, record))
-    }
-    const ancestryValid = async (record: ProcessIdentity, seen = new Set<number>()): Promise<boolean> => {
-      if (record.parentPid === undefined || record.parentPid === root) return true
-      if (seen.has(record.pid)) return false
-      seen.add(record.pid)
-      const parent = children.get(record.parentPid)
-      return !!parent && await stillOwned(parent) && await ancestryValid(parent, seen)
-    }
-    const killChild = async (record: ProcessIdentity) => {
-      if (!await ancestryValid(record)) throw new ServerStuckError(`descendant pid ${record.pid} lost its verified parent identity`)
-      if (!await stillOwned(record)) return
-      if (this.processTree.killVerified) await this.processTree.killVerified(record)
-      else if ((await scan()).some((current) => same(current, record))) await this.processTree.kill(record.pid, { tree: true, force: true })
-    }
+    const reconcile = (rootWasLive: boolean) => reconcileOwnedProcessScan({
+      tree: this.processTree, root, rootIdentity: this.ownedRootIdentity,
+      children, rootWasLive, ownedExitAt: this.ownedExitAt
+    })
     try {
       const rootLive = !!p && alive(p)
-      if (rootLive && this.processTree.inspect && (!this.ownedRootIdentity || !same(await this.processTree.inspect(root), this.ownedRootIdentity))) {
+      if (rootLive && this.processTree.inspect && (!this.ownedRootIdentity || !sameProcess(await this.processTree.inspect(root), this.ownedRootIdentity))) {
         throw new ServerStuckError(`llama-server pid ${root} identity changed before unload`)
       }
-      const initial = await scan() // enumeration failure is a fatal inability to verify cleanup
-      await reconcile(initial, rootLive)
+      const initial = await reconcile(rootLive) // enumeration failure is a fatal inability to verify cleanup
+      for (const [pid, child] of children) this.ownedChildren.set(pid, child)
       // After the parent exits, only children captured while it was alive are
       // owned. A new child of the same numeric parent PID is foreign.
-      for (const child of children.values()) await killChild(child)
+      await initial.reap()
       if (rootLive) {
         if (this.processTree.killVerified) await this.processTree.killVerified(this.ownedRootIdentity!)
         else await this.processTree.kill(root, { tree: true, force: true })
@@ -562,12 +584,10 @@ export class LlamaCppBackend implements InferenceBackend {
       }
       const deadline = Date.now() + 3_000
       while (true) {
-        await reconcile(await scan(), false) // every scan is evidence; unknown survivors cannot be discarded
-        const remaining: ProcessIdentity[] = []
-        for (const child of children.values()) if (await stillOwned(child)) remaining.push(child)
-        if (!remaining.length) break
-        if (Date.now() >= deadline) throw new ServerStuckError(`llama-server pid ${root} left descendants alive: ${remaining.map((x) => x.pid).join(', ')}`)
-        for (const child of remaining) await killChild(child)
+        const verified = await reconcile(false) // every scan is evidence; unknown survivors cannot be discarded
+        if (!verified.remaining.length) break
+        if (Date.now() >= deadline) throw new ServerStuckError(`llama-server pid ${root} left descendants alive: ${verified.remaining.map((x) => x.pid).join(', ')}`)
+        await verified.reap()
         await new Promise((r) => setTimeout(r, 100))
       }
     } catch (e) {
