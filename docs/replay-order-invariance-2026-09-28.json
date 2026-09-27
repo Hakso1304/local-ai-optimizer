@@ -1,0 +1,2916 @@
+{
+  "label": "SOFTWARE-ONLY ADVERSARIAL ORDER REPLAY",
+  "sourceHead": "70e17479176dd58ba80359a13a04fefe054439f0",
+  "database": {
+    "location": "%APPDATA%/local-ai-optimizer-dev/optimizer.db",
+    "sizeBytes": 1069056,
+    "connection": "DatabaseSync readOnly; PRAGMA query_only=ON; one read transaction"
+  },
+  "method": {
+    "permutationCountPerSession": 20,
+    "seedAlgorithm": "xorshift32; seed = (0xA19D2026 XOR (sessionId * 0x9E3779B9) XOR (permutationNumber * 0x85EBCA6B)) unsigned 32-bit",
+    "shuffled": [
+      "candidate order",
+      "each candidate latest unique-rung runs order",
+      "baseline quality rows",
+      "each generation-config quality results order"
+    ],
+    "preserved": [
+      "chronological allRuns",
+      "each candidate attempt history"
+    ],
+    "semanticComparison": [
+      "winner",
+      "ranked IDs/scores/breakdowns",
+      "confirmed/provisional",
+      "per-config gates/undecided terms"
+    ],
+    "hashMethod": "SHA-256 of UTF-8 JSON.stringify output; fresh JSON.parse(JSON.stringify(input)) before each permutation"
+  },
+  "sessions": [
+    {
+      "sessionId": 1,
+      "workload": "large_coding",
+      "inputSha256": "66736A0F29004FE818A2CE1666DC16E7AC502B8BBD6E68BD7DAA5C044B0B1B53",
+      "inputScope": {
+        "candidateCount": 2,
+        "latestRunCount": 13,
+        "chronologicalAttemptCount": 14,
+        "baselineQualityRows": 60,
+        "generationConfigGroups": 1,
+        "storedMachineAndRequest": true
+      },
+      "baseline": {
+        "semanticHash": "DBBB310988778B72732D419B09DA6CACED36CAE661891FAA6E3F55094EE35F1C",
+        "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+        "traceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+        "normalizedRecommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+        "normalizedTraceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+        "decisions": {
+          "winner": null,
+          "recommendationBest": null,
+          "provisionalWinner": null,
+          "recommendationProvisional": false,
+          "fallback": false,
+          "ranked": [
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+              "total": 87.73836782903028,
+              "eligible": false,
+              "gateFailures": [
+                "[I-2.5] largest clean context 64K < required 128K (spill)"
+              ],
+              "referenceCtx": 65536,
+              "recommendedCtx": 65536,
+              "gen": null,
+              "breakdown": [
+                {
+                  "component": "quality",
+                  "score": 77.67925290590901,
+                  "contribution": 31.071701162363606,
+                  "inputKind": "estimated"
+                },
+                {
+                  "component": "genSpeed",
+                  "score": 100,
+                  "contribution": 10,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "prefillSpeed",
+                  "score": 100,
+                  "contribution": 10,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "latency",
+                  "score": 91.5993381704748,
+                  "contribution": 0,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "memory",
+                  "score": 100,
+                  "contribution": 5,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "stability",
+                  "score": 100,
+                  "contribution": 15,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "context",
+                  "score": 83.33333333333334,
+                  "contribution": 16.666666666666668,
+                  "inputKind": "measured"
+                }
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "total": 79.99999999999999,
+              "eligible": false,
+              "gateFailures": [
+                "[I-2.5] largest clean context 32K < required 128K (spill)"
+              ],
+              "referenceCtx": 32768,
+              "recommendedCtx": 32768,
+              "gen": "off",
+              "breakdown": [
+                {
+                  "component": "quality",
+                  "score": 66.66666666666666,
+                  "contribution": 26.666666666666664,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "genSpeed",
+                  "score": 100,
+                  "contribution": 10,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "prefillSpeed",
+                  "score": 100,
+                  "contribution": 10,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "latency",
+                  "score": 0,
+                  "contribution": 0,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "memory",
+                  "score": 100,
+                  "contribution": 5,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "stability",
+                  "score": 100,
+                  "contribution": 15,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "context",
+                  "score": 66.66666666666666,
+                  "contribution": 13.333333333333332,
+                  "inputKind": "measured"
+                }
+              ]
+            }
+          ],
+          "perConfig": [
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "eligible": false,
+              "confirmed": false,
+              "provisional": false,
+              "total": 79.99999999999999,
+              "failures": [
+                {
+                  "ruleId": "I-2.5",
+                  "text": "[I-2.5] largest clean context 32K < required 128K (spill)",
+                  "user": true,
+                  "hard": true,
+                  "notVerified": null
+                }
+              ],
+              "undecided": [
+                {
+                  "component": "genSpeed",
+                  "kind": "unmatched-rung",
+                  "reason": "measured at 32K, not at the common rung 64K"
+                },
+                {
+                  "component": "prefillSpeed",
+                  "kind": "unmatched-rung",
+                  "reason": "measured at 32K, not at the common rung 64K"
+                }
+              ],
+              "selectedGen": "off"
+            },
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+              "eligible": false,
+              "confirmed": false,
+              "provisional": false,
+              "total": 87.73836782903028,
+              "failures": [
+                {
+                  "ruleId": "I-2.5",
+                  "text": "[I-2.5] largest clean context 64K < required 128K (spill)",
+                  "user": true,
+                  "hard": true,
+                  "notVerified": null
+                }
+              ],
+              "undecided": [
+                {
+                  "component": "quality",
+                  "kind": "estimated",
+                  "reason": "prior from 8.0B params at 4.9 bits/weight"
+                }
+              ],
+              "selectedGen": null
+            }
+          ]
+        }
+      },
+      "permutations": [
+        {
+          "number": 1,
+          "seed": 3124859892,
+          "candidateOrder": [
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                2048,
+                16384,
+                65536,
+                32768,
+                4096,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+              "ctx": [
+                32768,
+                65536,
+                4096,
+                131072,
+                2048,
+                8192,
+                16384
+              ]
+            }
+          ],
+          "qualityOrderSha256": "F4B6ECFEF725ACC0A2CFA470D7A157E6EA4726B4611683DB026680B1E366CEAE",
+          "semanticHash": "DBBB310988778B72732D419B09DA6CACED36CAE661891FAA6E3F55094EE35F1C",
+          "semanticEqual": true,
+          "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+          "fullRecommendationEqual": true,
+          "traceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 2,
+          "seed": 880659785,
+          "candidateOrder": [
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+              "ctx": [
+                65536,
+                4096,
+                16384,
+                8192,
+                131072,
+                2048,
+                32768
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                8192,
+                65536,
+                4096,
+                2048,
+                16384,
+                32768
+              ]
+            }
+          ],
+          "qualityOrderSha256": "E694705A28A1CFF1778BF9AC0A31BB1A205A49462CA4252F50B25583F5A608FF",
+          "semanticHash": "DBBB310988778B72732D419B09DA6CACED36CAE661891FAA6E3F55094EE35F1C",
+          "semanticEqual": true,
+          "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+          "fullRecommendationEqual": true,
+          "traceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 3,
+          "seed": 2926118622,
+          "candidateOrder": [
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+              "ctx": [
+                8192,
+                4096,
+                32768,
+                2048,
+                16384,
+                131072,
+                65536
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                2048,
+                65536,
+                8192,
+                32768,
+                4096,
+                16384
+              ]
+            }
+          ],
+          "qualityOrderSha256": "4FAAB0DA4908044CE6E94682A63394B939E8A7FC608F57CB03352FCF835047D4",
+          "semanticHash": "DBBB310988778B72732D419B09DA6CACED36CAE661891FAA6E3F55094EE35F1C",
+          "semanticEqual": true,
+          "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+          "fullRecommendationEqual": true,
+          "traceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 4,
+          "seed": 671445043,
+          "candidateOrder": [
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+              "ctx": [
+                8192,
+                131072,
+                32768,
+                65536,
+                4096,
+                2048,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                4096,
+                8192,
+                65536,
+                2048,
+                32768,
+                16384
+              ]
+            }
+          ],
+          "qualityOrderSha256": "2E6C2DB8AA9D12D60A485FD355DB0E861796D48723DF7B6FAA681615D3D49B73",
+          "semanticHash": "DBBB310988778B72732D419B09DA6CACED36CAE661891FAA6E3F55094EE35F1C",
+          "semanticEqual": true,
+          "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+          "fullRecommendationEqual": true,
+          "traceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 5,
+          "seed": 2721099144,
+          "candidateOrder": [
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+              "ctx": [
+                4096,
+                131072,
+                65536,
+                2048,
+                8192,
+                16384,
+                32768
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                32768,
+                2048,
+                8192,
+                65536,
+                4096,
+                16384
+              ]
+            }
+          ],
+          "qualityOrderSha256": "AC7AAE4183211271C897AC94A3A701827A5A53C0827700A27261D53AA6D5F628",
+          "semanticHash": "DBBB310988778B72732D419B09DA6CACED36CAE661891FAA6E3F55094EE35F1C",
+          "semanticEqual": true,
+          "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+          "fullRecommendationEqual": true,
+          "traceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 6,
+          "seed": 472704797,
+          "candidateOrder": [
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                4096,
+                32768,
+                8192,
+                2048,
+                16384,
+                65536
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+              "ctx": [
+                2048,
+                131072,
+                16384,
+                65536,
+                8192,
+                32768,
+                4096
+              ]
+            }
+          ],
+          "qualityOrderSha256": "1EDA5EF758244E5DA9DF6B85EE464A30042F79701BB74BF0E69AC4FC873F7A00",
+          "semanticHash": "DBBB310988778B72732D419B09DA6CACED36CAE661891FAA6E3F55094EE35F1C",
+          "semanticEqual": true,
+          "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+          "fullRecommendationEqual": true,
+          "traceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 7,
+          "seed": 2530791794,
+          "candidateOrder": [
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+              "ctx": [
+                32768,
+                131072,
+                8192,
+                16384,
+                65536,
+                4096,
+                2048
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                8192,
+                65536,
+                4096,
+                32768,
+                16384,
+                2048
+              ]
+            }
+          ],
+          "qualityOrderSha256": "213AB629183BDE6E1F9777D5F45146B71F91604F4C69C1F7C1168F271F9AA13D",
+          "semanticHash": "DBBB310988778B72732D419B09DA6CACED36CAE661891FAA6E3F55094EE35F1C",
+          "semanticEqual": true,
+          "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+          "fullRecommendationEqual": true,
+          "traceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 8,
+          "seed": 284428999,
+          "candidateOrder": [
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                4096,
+                16384,
+                2048,
+                65536,
+                8192,
+                32768
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+              "ctx": [
+                4096,
+                2048,
+                16384,
+                32768,
+                8192,
+                65536,
+                131072
+              ]
+            }
+          ],
+          "qualityOrderSha256": "0B8B215B4B565B71EC4931759544D35B9C09E76C7F39FB132ECA5BC48525E08A",
+          "semanticHash": "DBBB310988778B72732D419B09DA6CACED36CAE661891FAA6E3F55094EE35F1C",
+          "semanticEqual": true,
+          "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+          "fullRecommendationEqual": true,
+          "traceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 9,
+          "seed": 2329953372,
+          "candidateOrder": [
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                8192,
+                4096,
+                16384,
+                32768,
+                2048,
+                65536
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+              "ctx": [
+                8192,
+                2048,
+                65536,
+                4096,
+                131072,
+                16384,
+                32768
+              ]
+            }
+          ],
+          "qualityOrderSha256": "EEFF82F2E3E5920858D46414152D6D6DC61C97E26E6CF1A5343E7F2CA9C01BAB",
+          "semanticHash": "DBBB310988778B72732D419B09DA6CACED36CAE661891FAA6E3F55094EE35F1C",
+          "semanticEqual": true,
+          "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+          "fullRecommendationEqual": true,
+          "traceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 10,
+          "seed": 77574577,
+          "candidateOrder": [
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                65536,
+                4096,
+                8192,
+                32768,
+                16384,
+                2048
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+              "ctx": [
+                32768,
+                65536,
+                4096,
+                2048,
+                8192,
+                131072,
+                16384
+              ]
+            }
+          ],
+          "qualityOrderSha256": "7EFFCE5C16C8F0548B138C245FC4DA479BCEB7920D26F7BC2AC535A303B78E88",
+          "semanticHash": "DBBB310988778B72732D419B09DA6CACED36CAE661891FAA6E3F55094EE35F1C",
+          "semanticEqual": true,
+          "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+          "fullRecommendationEqual": true,
+          "traceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 11,
+          "seed": 4270582534,
+          "candidateOrder": [
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                65536,
+                2048,
+                8192,
+                32768,
+                16384,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+              "ctx": [
+                8192,
+                131072,
+                4096,
+                65536,
+                16384,
+                2048,
+                32768
+              ]
+            }
+          ],
+          "qualityOrderSha256": "A3CA27CDD0C3A5610F1D00A54774218FC388E8442ADD50DADC2E2BB68C9B99E3",
+          "semanticHash": "DBBB310988778B72732D419B09DA6CACED36CAE661891FAA6E3F55094EE35F1C",
+          "semanticEqual": true,
+          "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+          "fullRecommendationEqual": true,
+          "traceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 12,
+          "seed": 2024219803,
+          "candidateOrder": [
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+              "ctx": [
+                32768,
+                131072,
+                2048,
+                65536,
+                8192,
+                4096,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                8192,
+                2048,
+                16384,
+                4096,
+                32768,
+                65536
+              ]
+            }
+          ],
+          "qualityOrderSha256": "1C455A59BA265EF97912BF6CB9CE029A9F1BEBE6D61CFE7D178CA1129C3D769A",
+          "semanticHash": "DBBB310988778B72732D419B09DA6CACED36CAE661891FAA6E3F55094EE35F1C",
+          "semanticEqual": true,
+          "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+          "fullRecommendationEqual": true,
+          "traceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 13,
+          "seed": 4082310896,
+          "candidateOrder": [
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                65536,
+                2048,
+                32768,
+                16384,
+                8192,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+              "ctx": [
+                8192,
+                2048,
+                65536,
+                32768,
+                131072,
+                4096,
+                16384
+              ]
+            }
+          ],
+          "qualityOrderSha256": "D4389C275F8116613A458548CE604ACDC259306D06C8D8848C845BCA92EC43B3",
+          "semanticHash": "DBBB310988778B72732D419B09DA6CACED36CAE661891FAA6E3F55094EE35F1C",
+          "semanticEqual": true,
+          "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+          "fullRecommendationEqual": true,
+          "traceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 14,
+          "seed": 1833912389,
+          "candidateOrder": [
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+              "ctx": [
+                131072,
+                2048,
+                16384,
+                65536,
+                32768,
+                4096,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                4096,
+                65536,
+                32768,
+                16384,
+                2048,
+                8192
+              ]
+            }
+          ],
+          "qualityOrderSha256": "A7E24A47C81D341D847C9CC21EB4D1E8C8D79199735D96E3A8864D13DB8CE247",
+          "semanticHash": "DBBB310988778B72732D419B09DA6CACED36CAE661891FAA6E3F55094EE35F1C",
+          "semanticEqual": true,
+          "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+          "fullRecommendationEqual": true,
+          "traceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 15,
+          "seed": 3883566554,
+          "candidateOrder": [
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+              "ctx": [
+                16384,
+                4096,
+                131072,
+                65536,
+                2048,
+                8192,
+                32768
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                65536,
+                32768,
+                16384,
+                8192,
+                4096,
+                2048
+              ]
+            }
+          ],
+          "qualityOrderSha256": "0B3D34567F0E8E78D198E2F8FA07C5BD07C6A111C994AD581D2DB832AD6EF13C",
+          "semanticHash": "DBBB310988778B72732D419B09DA6CACED36CAE661891FAA6E3F55094EE35F1C",
+          "semanticEqual": true,
+          "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+          "fullRecommendationEqual": true,
+          "traceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 16,
+          "seed": 1628897071,
+          "candidateOrder": [
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+              "ctx": [
+                16384,
+                8192,
+                131072,
+                32768,
+                65536,
+                2048,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                2048,
+                16384,
+                32768,
+                65536,
+                4096,
+                8192
+              ]
+            }
+          ],
+          "qualityOrderSha256": "31A51047AEB496CF66E7114F64B0AA292F26908A80639FAEF1003934321BB3CD",
+          "semanticHash": "DBBB310988778B72732D419B09DA6CACED36CAE661891FAA6E3F55094EE35F1C",
+          "semanticEqual": true,
+          "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+          "fullRecommendationEqual": true,
+          "traceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 17,
+          "seed": 3674351748,
+          "candidateOrder": [
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+              "ctx": [
+                16384,
+                2048,
+                4096,
+                32768,
+                65536,
+                131072,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                16384,
+                8192,
+                2048,
+                4096,
+                65536,
+                32768
+              ]
+            }
+          ],
+          "qualityOrderSha256": "AD1FC9A51E02924919DB9C6C88CE00FA139C01CDEC4D53121B1D94E7FB132FD3",
+          "semanticHash": "DBBB310988778B72732D419B09DA6CACED36CAE661891FAA6E3F55094EE35F1C",
+          "semanticEqual": true,
+          "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+          "fullRecommendationEqual": true,
+          "traceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 18,
+          "seed": 1430151705,
+          "candidateOrder": [
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                8192,
+                2048,
+                32768,
+                4096,
+                65536,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+              "ctx": [
+                2048,
+                65536,
+                16384,
+                8192,
+                131072,
+                4096,
+                32768
+              ]
+            }
+          ],
+          "qualityOrderSha256": "4761C5441C7C95CB9F4A8621B9A464E7DAD3E25EB0D1822505DEED884164A0ED",
+          "semanticHash": "DBBB310988778B72732D419B09DA6CACED36CAE661891FAA6E3F55094EE35F1C",
+          "semanticEqual": true,
+          "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+          "fullRecommendationEqual": true,
+          "traceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 19,
+          "seed": 3475659886,
+          "candidateOrder": [
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+              "ctx": [
+                4096,
+                65536,
+                16384,
+                8192,
+                2048,
+                32768,
+                131072
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                8192,
+                65536,
+                4096,
+                2048,
+                32768,
+                16384
+              ]
+            }
+          ],
+          "qualityOrderSha256": "8B020D527FAF092A2AE638C3AD87AE71E95CA00A4B11082BAB8C68B3D2956041",
+          "semanticHash": "DBBB310988778B72732D419B09DA6CACED36CAE661891FAA6E3F55094EE35F1C",
+          "semanticEqual": true,
+          "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+          "fullRecommendationEqual": true,
+          "traceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 20,
+          "seed": 1237420483,
+          "candidateOrder": [
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+            "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=q8_0|t=8",
+              "ctx": [
+                4096,
+                131072,
+                8192,
+                2048,
+                32768,
+                65536,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                2048,
+                65536,
+                32768,
+                16384,
+                8192,
+                4096
+              ]
+            }
+          ],
+          "qualityOrderSha256": "7282198EA0782A6E5182A7C5C00DF92906C1F64F29A82ACC285EDB2486B80090",
+          "semanticHash": "DBBB310988778B72732D419B09DA6CACED36CAE661891FAA6E3F55094EE35F1C",
+          "semanticEqual": true,
+          "recommendationHash": "B314BAC1E2A9DBD6051C581919AAA407696A56FE413452EF484B27904A5D5B60",
+          "fullRecommendationEqual": true,
+          "traceHash": "7F6057FCBC89815D1703298B433581371E0619F324802747A3804D5011827991",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        }
+      ],
+      "semanticInvariance": true,
+      "traceOnlyOrderingDifferences": [],
+      "otherTraceDifferences": [],
+      "semanticCounterexamples": []
+    },
+    {
+      "sessionId": 3,
+      "workload": "coding",
+      "inputSha256": "573EC0203216289E427A55B4F1FE2A7728ABE123F80ECED5BF3416AFD864B316",
+      "inputScope": {
+        "candidateCount": 5,
+        "latestRunCount": 17,
+        "chronologicalAttemptCount": 17,
+        "baselineQualityRows": 180,
+        "generationConfigGroups": 3,
+        "storedMachineAndRequest": true
+      },
+      "baseline": {
+        "semanticHash": "6A74D87A1BDDE003E49DA9D0E4453B79DF7FA69D0DE73A6CDD7CFCF5D6A83C18",
+        "recommendationHash": "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7",
+        "traceHash": "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC",
+        "normalizedRecommendationHash": "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7",
+        "normalizedTraceHash": "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC",
+        "decisions": {
+          "winner": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+          "recommendationBest": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+          "provisionalWinner": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+          "recommendationProvisional": false,
+          "fallback": false,
+          "ranked": [
+            {
+              "configId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "total": 86.25880252084676,
+              "eligible": true,
+              "gateFailures": [],
+              "referenceCtx": 16384,
+              "recommendedCtx": 16384,
+              "gen": "off",
+              "breakdown": [
+                {
+                  "component": "quality",
+                  "score": 86.36363636363636,
+                  "contribution": 34.54545454545455,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "genSpeed",
+                  "score": 90.34824188572193,
+                  "contribution": 18.069648377144386,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "prefillSpeed",
+                  "score": 99.10818886936164,
+                  "contribution": 9.910818886936164,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "latency",
+                  "score": 37.328807113116646,
+                  "contribution": 3.732880711311665,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "memory",
+                  "score": 100,
+                  "contribution": 5,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "stability",
+                  "score": 100,
+                  "contribution": 10,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "context",
+                  "score": 100,
+                  "contribution": 5,
+                  "inputKind": "measured"
+                }
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+              "total": 65.89954439828982,
+              "eligible": true,
+              "gateFailures": [],
+              "referenceCtx": 8192,
+              "recommendedCtx": 8192,
+              "gen": "off",
+              "breakdown": [
+                {
+                  "component": "quality",
+                  "score": 96.21212121212122,
+                  "contribution": 38.48484848484849,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "genSpeed",
+                  "score": 13.959007807410629,
+                  "contribution": 2.791801561482126,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "prefillSpeed",
+                  "score": 82.89561018625875,
+                  "contribution": 8.289561018625875,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "latency",
+                  "score": 0,
+                  "contribution": 0,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "memory",
+                  "score": 60,
+                  "contribution": 3,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "stability",
+                  "score": 100,
+                  "contribution": 10,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "context",
+                  "score": 66.66666666666666,
+                  "contribution": 3.333333333333333,
+                  "inputKind": "measured"
+                }
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+              "total": 72.336794458765,
+              "eligible": false,
+              "gateFailures": [
+                "[I-3.3] TTFT 15.9 s at 16K exceeds the 15 s tolerance"
+              ],
+              "referenceCtx": 16384,
+              "recommendedCtx": 8192,
+              "gen": "off",
+              "breakdown": [
+                {
+                  "component": "quality",
+                  "score": 93.18181818181819,
+                  "contribution": 37.27272727272727,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "genSpeed",
+                  "score": 42.96895064753934,
+                  "contribution": 8.593790129507868,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "prefillSpeed",
+                  "score": 84.70277056529855,
+                  "contribution": 8.470277056529856,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "latency",
+                  "score": 0,
+                  "contribution": 0,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "memory",
+                  "score": 60,
+                  "contribution": 3,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "stability",
+                  "score": 100,
+                  "contribution": 10,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "context",
+                  "score": 100,
+                  "contribution": 5,
+                  "inputKind": "measured"
+                }
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+              "total": 68.54576328386041,
+              "eligible": false,
+              "gateFailures": [
+                "[I-2.7] largest clean context none is below 8K (half the Coding target)"
+              ],
+              "referenceCtx": 4096,
+              "recommendedCtx": null,
+              "gen": null,
+              "breakdown": [
+                {
+                  "component": "quality",
+                  "score": 87.3,
+                  "contribution": 34.92,
+                  "inputKind": "estimated"
+                },
+                {
+                  "component": "genSpeed",
+                  "score": 60.62881641930203,
+                  "contribution": 12.125763283860406,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "prefillSpeed",
+                  "score": 100,
+                  "contribution": 10,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "latency",
+                  "score": 0,
+                  "contribution": 0,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "memory",
+                  "score": 30,
+                  "contribution": 1.5,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "stability",
+                  "score": 100,
+                  "contribution": 10,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "context",
+                  "score": 0,
+                  "contribution": 0,
+                  "inputKind": "unavailable"
+                }
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+              "total": 63.835328682599844,
+              "eligible": false,
+              "gateFailures": [
+                "[I-3.1] decode 8.3 t/s at 16K is below the Coding gate 10 t/s"
+              ],
+              "referenceCtx": 16384,
+              "recommendedCtx": 16384,
+              "gen": null,
+              "breakdown": [
+                {
+                  "component": "quality",
+                  "score": 87.3,
+                  "contribution": 34.92,
+                  "inputKind": "estimated"
+                },
+                {
+                  "component": "genSpeed",
+                  "score": 10.856122747724186,
+                  "contribution": 2.1712245495448372,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "prefillSpeed",
+                  "score": 82.05966324163516,
+                  "contribution": 8.205966324163517,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "latency",
+                  "score": 5.381378088914824,
+                  "contribution": 0.5381378088914824,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "memory",
+                  "score": 60,
+                  "contribution": 3,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "stability",
+                  "score": 100,
+                  "contribution": 10,
+                  "inputKind": "measured"
+                },
+                {
+                  "component": "context",
+                  "score": 100,
+                  "contribution": 5,
+                  "inputKind": "measured"
+                }
+              ]
+            }
+          ],
+          "perConfig": [
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+              "eligible": false,
+              "confirmed": false,
+              "provisional": false,
+              "total": 72.336794458765,
+              "failures": [
+                {
+                  "ruleId": "I-3.3",
+                  "text": "[I-3.3] TTFT 15.9 s at 16K exceeds the 15 s tolerance",
+                  "user": false,
+                  "hard": true,
+                  "notVerified": null
+                }
+              ],
+              "undecided": [
+                {
+                  "component": "genSpeed",
+                  "kind": "unmatched-prompt",
+                  "reason": "prompt 12294 tokens vs 9154 for the others"
+                },
+                {
+                  "component": "latency",
+                  "kind": "unmatched-prompt",
+                  "reason": "prompt 12294 tokens vs 9154 for the others"
+                },
+                {
+                  "component": "prefillSpeed",
+                  "kind": "unmatched-prompt",
+                  "reason": "prompt 12294 tokens vs 9154 for the others"
+                }
+              ],
+              "selectedGen": "off"
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+              "eligible": false,
+              "confirmed": false,
+              "provisional": false,
+              "total": 68.54576328386041,
+              "failures": [
+                {
+                  "ruleId": "I-2.7",
+                  "text": "[I-2.7] largest clean context none is below 8K (half the Coding target)",
+                  "user": false,
+                  "hard": false,
+                  "notVerified": null
+                }
+              ],
+              "undecided": [
+                {
+                  "component": "context",
+                  "kind": "unavailable",
+                  "reason": "no step passed"
+                },
+                {
+                  "component": "genSpeed",
+                  "kind": "unmatched-rung",
+                  "reason": "measured at 4K, not at the common rung 16K"
+                },
+                {
+                  "component": "latency",
+                  "kind": "unmatched-rung",
+                  "reason": "measured at 4K, not at the common rung 16K"
+                },
+                {
+                  "component": "prefillSpeed",
+                  "kind": "unmatched-rung",
+                  "reason": "measured at 4K, not at the common rung 16K"
+                },
+                {
+                  "component": "quality",
+                  "kind": "estimated",
+                  "reason": "prior from 25.2B params at 5.4 bits/weight"
+                }
+              ],
+              "selectedGen": null
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "eligible": true,
+              "confirmed": true,
+              "provisional": false,
+              "total": 86.25880252084676,
+              "failures": [],
+              "undecided": [],
+              "selectedGen": "off"
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+              "eligible": false,
+              "confirmed": false,
+              "provisional": false,
+              "total": 63.835328682599844,
+              "failures": [
+                {
+                  "ruleId": "I-3.1",
+                  "text": "[I-3.1] decode 8.3 t/s at 16K is below the Coding gate 10 t/s",
+                  "user": false,
+                  "hard": true,
+                  "notVerified": null
+                }
+              ],
+              "undecided": [
+                {
+                  "component": "quality",
+                  "kind": "estimated",
+                  "reason": "prior from 27.3B params at 4.8 bits/weight"
+                }
+              ],
+              "selectedGen": null
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+              "eligible": true,
+              "confirmed": false,
+              "provisional": true,
+              "total": 65.89954439828982,
+              "failures": [],
+              "undecided": [
+                {
+                  "component": "genSpeed",
+                  "kind": "unmatched-rung",
+                  "reason": "measured at 8K, not at the common rung 16K"
+                },
+                {
+                  "component": "latency",
+                  "kind": "unmatched-rung",
+                  "reason": "measured at 8K, not at the common rung 16K"
+                },
+                {
+                  "component": "prefillSpeed",
+                  "kind": "unmatched-rung",
+                  "reason": "measured at 8K, not at the common rung 16K"
+                }
+              ],
+              "selectedGen": "off"
+            }
+          ]
+        }
+      },
+      "permutations": [
+        {
+          "number": 1,
+          "seed": 4275079014,
+          "candidateOrder": [
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+            "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+              "ctx": [
+                32768,
+                4096,
+                8192,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                16384,
+                8192,
+                4096,
+                32768
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+              "ctx": [
+                32768,
+                8192,
+                16384,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+              "ctx": [
+                4096,
+                8192,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+              "ctx": [
+                8192,
+                4096
+              ]
+            }
+          ],
+          "qualityOrderSha256": "0C4064C72845721BBAE04C6C1EEE78E962417FC68F58BEFEF3EAEAA62AC7013B",
+          "semanticHash": "6A74D87A1BDDE003E49DA9D0E4453B79DF7FA69D0DE73A6CDD7CFCF5D6A83C18",
+          "semanticEqual": true,
+          "recommendationHash": "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7",
+          "fullRecommendationEqual": true,
+          "traceHash": "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 2,
+          "seed": 1894570459,
+          "candidateOrder": [
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+            "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+              "ctx": [
+                4096,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+              "ctx": [
+                32768,
+                8192,
+                16384,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                16384,
+                4096,
+                32768,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+              "ctx": [
+                32768,
+                4096,
+                16384,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+              "ctx": [
+                4096,
+                8192,
+                16384
+              ]
+            }
+          ],
+          "qualityOrderSha256": "879FADA5987525A4B0EA82FA2BFF1944C81F1F28105C29C99EBABBC4B782C4D8",
+          "semanticHash": "6A74D87A1BDDE003E49DA9D0E4453B79DF7FA69D0DE73A6CDD7CFCF5D6A83C18",
+          "semanticEqual": true,
+          "recommendationHash": "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7",
+          "fullRecommendationEqual": true,
+          "traceHash": "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 3,
+          "seed": 3942126156,
+          "candidateOrder": [
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+            "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+              "ctx": [
+                4096,
+                16384,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+              "ctx": [
+                32768,
+                16384,
+                8192,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+              "ctx": [
+                4096,
+                32768,
+                8192,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+              "ctx": [
+                8192,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                4096,
+                32768,
+                16384,
+                8192
+              ]
+            }
+          ],
+          "qualityOrderSha256": "DD4A3D3CFA31A26AF419F91E97DCFF453DAAFB9FDD09A4FF39F9E0ECD0E7FAE4",
+          "semanticHash": "6A74D87A1BDDE003E49DA9D0E4453B79DF7FA69D0DE73A6CDD7CFCF5D6A83C18",
+          "semanticEqual": true,
+          "recommendationHash": "D701A5D93FB984A82D95095ABC82B0C95DBFAFA642DD5A5BA17DD8E7A7B11A0D",
+          "fullRecommendationEqual": false,
+          "traceHash": "351BE8151391028BB508902BEDED434A290375BBFE3AA23243F8A7282A699615",
+          "fullTraceEqual": false,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": [
+            "genChoices"
+          ]
+        },
+        {
+          "number": 4,
+          "seed": 1821664417,
+          "candidateOrder": [
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+            "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+              "ctx": [
+                16384,
+                4096,
+                32768,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+              "ctx": [
+                4096,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+              "ctx": [
+                32768,
+                4096,
+                8192,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+              "ctx": [
+                16384,
+                8192,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                16384,
+                8192,
+                32768,
+                4096
+              ]
+            }
+          ],
+          "qualityOrderSha256": "EA821B567D0C5BA41560CD50E92DA4EE9A2F28F71D3B4E3E586EDF473A30B5CA",
+          "semanticHash": "6A74D87A1BDDE003E49DA9D0E4453B79DF7FA69D0DE73A6CDD7CFCF5D6A83C18",
+          "semanticEqual": true,
+          "recommendationHash": "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7",
+          "fullRecommendationEqual": true,
+          "traceHash": "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 5,
+          "seed": 3869358362,
+          "candidateOrder": [
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+            "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+              "ctx": [
+                4096,
+                16384,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+              "ctx": [
+                4096,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+              "ctx": [
+                16384,
+                8192,
+                4096,
+                32768
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+              "ctx": [
+                8192,
+                32768,
+                4096,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                4096,
+                16384,
+                32768,
+                8192
+              ]
+            }
+          ],
+          "qualityOrderSha256": "08A3089C21393B7FFE5522FFF2C5FCD15DCD16797002FE68E02704A4E93F3226",
+          "semanticHash": "6A74D87A1BDDE003E49DA9D0E4453B79DF7FA69D0DE73A6CDD7CFCF5D6A83C18",
+          "semanticEqual": true,
+          "recommendationHash": "D701A5D93FB984A82D95095ABC82B0C95DBFAFA642DD5A5BA17DD8E7A7B11A0D",
+          "fullRecommendationEqual": false,
+          "traceHash": "351BE8151391028BB508902BEDED434A290375BBFE3AA23243F8A7282A699615",
+          "fullTraceEqual": false,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": [
+            "genChoices"
+          ]
+        },
+        {
+          "number": 6,
+          "seed": 1488843663,
+          "candidateOrder": [
+            "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                32768,
+                4096,
+                8192,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+              "ctx": [
+                8192,
+                16384,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+              "ctx": [
+                16384,
+                8192,
+                32768,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+              "ctx": [
+                4096,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+              "ctx": [
+                8192,
+                4096,
+                16384,
+                32768
+              ]
+            }
+          ],
+          "qualityOrderSha256": "E66ADCABBA3D29194B57B5123DE8C51BBDE0309050C43A5ECBC53150D98E8CD7",
+          "semanticHash": "6A74D87A1BDDE003E49DA9D0E4453B79DF7FA69D0DE73A6CDD7CFCF5D6A83C18",
+          "semanticEqual": true,
+          "recommendationHash": "D701A5D93FB984A82D95095ABC82B0C95DBFAFA642DD5A5BA17DD8E7A7B11A0D",
+          "fullRecommendationEqual": false,
+          "traceHash": "351BE8151391028BB508902BEDED434A290375BBFE3AA23243F8A7282A699615",
+          "fullTraceEqual": false,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": [
+            "genChoices"
+          ]
+        },
+        {
+          "number": 7,
+          "seed": 3528050144,
+          "candidateOrder": [
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+            "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+              "ctx": [
+                8192,
+                32768,
+                4096,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+              "ctx": [
+                4096,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+              "ctx": [
+                4096,
+                16384,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                32768,
+                8192,
+                16384,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+              "ctx": [
+                4096,
+                16384,
+                32768,
+                8192
+              ]
+            }
+          ],
+          "qualityOrderSha256": "34A6C043079230A095F441A1929A052863C8B0C356C3D4BE3748289E0F29CF15",
+          "semanticHash": "6A74D87A1BDDE003E49DA9D0E4453B79DF7FA69D0DE73A6CDD7CFCF5D6A83C18",
+          "semanticEqual": true,
+          "recommendationHash": "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7",
+          "fullRecommendationEqual": true,
+          "traceHash": "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 8,
+          "seed": 1415913045,
+          "candidateOrder": [
+            "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                4096,
+                16384,
+                32768,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+              "ctx": [
+                4096,
+                16384,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+              "ctx": [
+                16384,
+                8192,
+                32768,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+              "ctx": [
+                8192,
+                4096,
+                32768,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+              "ctx": [
+                4096,
+                8192
+              ]
+            }
+          ],
+          "qualityOrderSha256": "5F289BBED0253194742C91F7B8358F1AA00B6C410E9E7B0C756D206DBEF40BD3",
+          "semanticHash": "6A74D87A1BDDE003E49DA9D0E4453B79DF7FA69D0DE73A6CDD7CFCF5D6A83C18",
+          "semanticEqual": true,
+          "recommendationHash": "D701A5D93FB984A82D95095ABC82B0C95DBFAFA642DD5A5BA17DD8E7A7B11A0D",
+          "fullRecommendationEqual": false,
+          "traceHash": "351BE8151391028BB508902BEDED434A290375BBFE3AA23243F8A7282A699615",
+          "fullTraceEqual": false,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": [
+            "genChoices"
+          ]
+        },
+        {
+          "number": 9,
+          "seed": 3463532750,
+          "candidateOrder": [
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+            "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+              "ctx": [
+                16384,
+                32768,
+                4096,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+              "ctx": [
+                8192,
+                32768,
+                16384,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                16384,
+                4096,
+                32768,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+              "ctx": [
+                4096,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+              "ctx": [
+                8192,
+                16384,
+                4096
+              ]
+            }
+          ],
+          "qualityOrderSha256": "F740F8B13A0D271C476B59080C2F296FFE9E33E79008B96311ECBB7F55A186D9",
+          "semanticHash": "6A74D87A1BDDE003E49DA9D0E4453B79DF7FA69D0DE73A6CDD7CFCF5D6A83C18",
+          "semanticEqual": true,
+          "recommendationHash": "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7",
+          "fullRecommendationEqual": true,
+          "traceHash": "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 10,
+          "seed": 1074701603,
+          "candidateOrder": [
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+            "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+              "ctx": [
+                8192,
+                4096,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+              "ctx": [
+                8192,
+                32768,
+                4096,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                4096,
+                8192,
+                32768,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+              "ctx": [
+                8192,
+                32768,
+                16384,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+              "ctx": [
+                8192,
+                4096
+              ]
+            }
+          ],
+          "qualityOrderSha256": "A4EF21EF95A95D2DE21CF6BF86CE51D85C1D3F3BDE40A3105A22FC9CA464EE12",
+          "semanticHash": "6A74D87A1BDDE003E49DA9D0E4453B79DF7FA69D0DE73A6CDD7CFCF5D6A83C18",
+          "semanticEqual": true,
+          "recommendationHash": "D701A5D93FB984A82D95095ABC82B0C95DBFAFA642DD5A5BA17DD8E7A7B11A0D",
+          "fullRecommendationEqual": false,
+          "traceHash": "351BE8151391028BB508902BEDED434A290375BBFE3AA23243F8A7282A699615",
+          "fullTraceEqual": false,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": [
+            "genChoices"
+          ]
+        },
+        {
+          "number": 11,
+          "seed": 3122331540,
+          "candidateOrder": [
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+            "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+              "ctx": [
+                4096,
+                16384,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                4096,
+                32768,
+                8192,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+              "ctx": [
+                4096,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+              "ctx": [
+                32768,
+                8192,
+                16384,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+              "ctx": [
+                32768,
+                4096,
+                8192,
+                16384
+              ]
+            }
+          ],
+          "qualityOrderSha256": "59CFA1480922E2170E7DB412572E95D47BA79DEDDC7027B2136B2C8670EEFBFF",
+          "semanticHash": "6A74D87A1BDDE003E49DA9D0E4453B79DF7FA69D0DE73A6CDD7CFCF5D6A83C18",
+          "semanticEqual": true,
+          "recommendationHash": "D701A5D93FB984A82D95095ABC82B0C95DBFAFA642DD5A5BA17DD8E7A7B11A0D",
+          "fullRecommendationEqual": false,
+          "traceHash": "351BE8151391028BB508902BEDED434A290375BBFE3AA23243F8A7282A699615",
+          "fullTraceEqual": false,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": [
+            "genChoices"
+          ]
+        },
+        {
+          "number": 12,
+          "seed": 1010184201,
+          "candidateOrder": [
+            "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                32768,
+                8192,
+                16384,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+              "ctx": [
+                8192,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+              "ctx": [
+                4096,
+                16384,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+              "ctx": [
+                16384,
+                4096,
+                32768,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+              "ctx": [
+                4096,
+                16384,
+                32768,
+                8192
+              ]
+            }
+          ],
+          "qualityOrderSha256": "65541F30FEADB564304C48C879C485ACDC9EDCD1CAE805AD8C1FB4FB2A3C4754",
+          "semanticHash": "6A74D87A1BDDE003E49DA9D0E4453B79DF7FA69D0DE73A6CDD7CFCF5D6A83C18",
+          "semanticEqual": true,
+          "recommendationHash": "D701A5D93FB984A82D95095ABC82B0C95DBFAFA642DD5A5BA17DD8E7A7B11A0D",
+          "fullRecommendationEqual": false,
+          "traceHash": "351BE8151391028BB508902BEDED434A290375BBFE3AA23243F8A7282A699615",
+          "fullTraceEqual": false,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": [
+            "genChoices"
+          ]
+        },
+        {
+          "number": 13,
+          "seed": 3082947170,
+          "candidateOrder": [
+            "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                32768,
+                4096,
+                8192,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+              "ctx": [
+                4096,
+                8192,
+                32768,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+              "ctx": [
+                8192,
+                32768,
+                4096,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+              "ctx": [
+                16384,
+                4096,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+              "ctx": [
+                8192,
+                4096
+              ]
+            }
+          ],
+          "qualityOrderSha256": "849FD3695F088E61CEC02BA212EAFF8804A8312FD8F07597390FA93806933BAD",
+          "semanticHash": "6A74D87A1BDDE003E49DA9D0E4453B79DF7FA69D0DE73A6CDD7CFCF5D6A83C18",
+          "semanticEqual": true,
+          "recommendationHash": "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7",
+          "fullRecommendationEqual": true,
+          "traceHash": "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 14,
+          "seed": 702438615,
+          "candidateOrder": [
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+            "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+              "ctx": [
+                8192,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                32768,
+                16384,
+                4096,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+              "ctx": [
+                16384,
+                4096,
+                32768,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+              "ctx": [
+                8192,
+                4096,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+              "ctx": [
+                4096,
+                16384,
+                32768,
+                8192
+              ]
+            }
+          ],
+          "qualityOrderSha256": "0560A09A13B122D3170D2E7558688584AE3D806562023605C838F020E93D71CB",
+          "semanticHash": "6A74D87A1BDDE003E49DA9D0E4453B79DF7FA69D0DE73A6CDD7CFCF5D6A83C18",
+          "semanticEqual": true,
+          "recommendationHash": "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7",
+          "fullRecommendationEqual": true,
+          "traceHash": "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 15,
+          "seed": 2750124360,
+          "candidateOrder": [
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+            "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+              "ctx": [
+                4096,
+                8192,
+                16384,
+                32768
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+              "ctx": [
+                8192,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+              "ctx": [
+                8192,
+                4096,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+              "ctx": [
+                32768,
+                8192,
+                16384,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                16384,
+                4096,
+                32768,
+                8192
+              ]
+            }
+          ],
+          "qualityOrderSha256": "24EBDFEAD8864ADFD27BDE5D9429C6339424CE9F301967C410D5D4935790278E",
+          "semanticHash": "6A74D87A1BDDE003E49DA9D0E4453B79DF7FA69D0DE73A6CDD7CFCF5D6A83C18",
+          "semanticEqual": true,
+          "recommendationHash": "D701A5D93FB984A82D95095ABC82B0C95DBFAFA642DD5A5BA17DD8E7A7B11A0D",
+          "fullRecommendationEqual": false,
+          "traceHash": "351BE8151391028BB508902BEDED434A290375BBFE3AA23243F8A7282A699615",
+          "fullTraceEqual": false,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": [
+            "genChoices"
+          ]
+        },
+        {
+          "number": 16,
+          "seed": 629664701,
+          "candidateOrder": [
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+            "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+              "ctx": [
+                4096,
+                16384,
+                32768,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+              "ctx": [
+                8192,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+              "ctx": [
+                4096,
+                8192,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                4096,
+                32768,
+                16384,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+              "ctx": [
+                8192,
+                32768,
+                16384,
+                4096
+              ]
+            }
+          ],
+          "qualityOrderSha256": "653B114448508C12866F9112E9F149B5A52A72DA4FAC57667E6BC8C064AE71C4",
+          "semanticHash": "6A74D87A1BDDE003E49DA9D0E4453B79DF7FA69D0DE73A6CDD7CFCF5D6A83C18",
+          "semanticEqual": true,
+          "recommendationHash": "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7",
+          "fullRecommendationEqual": true,
+          "traceHash": "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 17,
+          "seed": 2677226518,
+          "candidateOrder": [
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+            "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+              "ctx": [
+                8192,
+                16384,
+                4096,
+                32768
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+              "ctx": [
+                4096,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+              "ctx": [
+                32768,
+                4096,
+                16384,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+              "ctx": [
+                8192,
+                16384,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                16384,
+                8192,
+                4096,
+                32768
+              ]
+            }
+          ],
+          "qualityOrderSha256": "22919E2C17FD365AE9CF0F9BCF13442F4B692AECF44431FC25E6AF1007DF5D3A",
+          "semanticHash": "6A74D87A1BDDE003E49DA9D0E4453B79DF7FA69D0DE73A6CDD7CFCF5D6A83C18",
+          "semanticEqual": true,
+          "recommendationHash": "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7",
+          "fullRecommendationEqual": true,
+          "traceHash": "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 18,
+          "seed": 296711819,
+          "candidateOrder": [
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+            "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+              "ctx": [
+                4096,
+                8192,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                4096,
+                8192,
+                32768,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+              "ctx": [
+                32768,
+                8192,
+                16384,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+              "ctx": [
+                16384,
+                4096,
+                32768,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+              "ctx": [
+                4096,
+                8192
+              ]
+            }
+          ],
+          "qualityOrderSha256": "CB621EB46B330E907D906CCF190B20630444CF5FB6AECFD2913B32B19BE6F5C2",
+          "semanticHash": "6A74D87A1BDDE003E49DA9D0E4453B79DF7FA69D0DE73A6CDD7CFCF5D6A83C18",
+          "semanticEqual": true,
+          "recommendationHash": "D701A5D93FB984A82D95095ABC82B0C95DBFAFA642DD5A5BA17DD8E7A7B11A0D",
+          "fullRecommendationEqual": false,
+          "traceHash": "351BE8151391028BB508902BEDED434A290375BBFE3AA23243F8A7282A699615",
+          "fullTraceEqual": false,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": [
+            "genChoices"
+          ]
+        },
+        {
+          "number": 19,
+          "seed": 2344306940,
+          "candidateOrder": [
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+            "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+              "ctx": [
+                8192,
+                16384,
+                4096,
+                32768
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+              "ctx": [
+                16384,
+                8192,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                4096,
+                8192,
+                32768,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+              "ctx": [
+                8192,
+                4096
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+              "ctx": [
+                8192,
+                16384,
+                4096,
+                32768
+              ]
+            }
+          ],
+          "qualityOrderSha256": "75128946AB9E09F0D150F9B49F19B5D798F1EDD8FD1BDD0E0962AA35F76B4EF9",
+          "semanticHash": "6A74D87A1BDDE003E49DA9D0E4453B79DF7FA69D0DE73A6CDD7CFCF5D6A83C18",
+          "semanticEqual": true,
+          "recommendationHash": "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7",
+          "fullRecommendationEqual": true,
+          "traceHash": "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        },
+        {
+          "number": 20,
+          "seed": 223386961,
+          "candidateOrder": [
+            "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+            "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+            "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8"
+          ],
+          "latestRungOrder": [
+            {
+              "configId": "D:\\llm-models\\Qwen2.5-14B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+              "ctx": [
+                32768,
+                16384,
+                4096,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=19|kv=f16|t=8",
+              "ctx": [
+                32768,
+                16384,
+                4096,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\gemma-4-26B-A4B-it-UD-Q4_K_M.gguf|ngl=23|kv=f16|t=8",
+              "ctx": [
+                4096,
+                8192
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=49|kv=f16|t=8",
+              "ctx": [
+                4096,
+                8192,
+                16384
+              ]
+            },
+            {
+              "configId": "D:\\llm-models\\Qwen3.8-27B-UD-Q4_K_M.gguf|ngl=45|kv=f16|t=8",
+              "ctx": [
+                4096,
+                16384,
+                32768,
+                8192
+              ]
+            }
+          ],
+          "qualityOrderSha256": "DF9964AAC1C86FF4C10A9900EEA7056AD8136B1CA0B0A4C766F149FD637D29F9",
+          "semanticHash": "6A74D87A1BDDE003E49DA9D0E4453B79DF7FA69D0DE73A6CDD7CFCF5D6A83C18",
+          "semanticEqual": true,
+          "recommendationHash": "719818D6C3E98D09470090635995D0E88833341B1F33C1FF58135A437F2367B7",
+          "fullRecommendationEqual": true,
+          "traceHash": "0565BC229436A513DD8817A85E844054450AB053A833F1F33A098008CE2BD6FC",
+          "fullTraceEqual": true,
+          "normalizedRecommendationEqual": true,
+          "normalizedTraceEqual": true,
+          "traceArraysDiffer": []
+        }
+      ],
+      "semanticInvariance": true,
+      "traceOnlyOrderingDifferences": [
+        {
+          "number": 3,
+          "traceArraysDiffer": [
+            "genChoices"
+          ]
+        },
+        {
+          "number": 5,
+          "traceArraysDiffer": [
+            "genChoices"
+          ]
+        },
+        {
+          "number": 6,
+          "traceArraysDiffer": [
+            "genChoices"
+          ]
+        },
+        {
+          "number": 8,
+          "traceArraysDiffer": [
+            "genChoices"
+          ]
+        },
+        {
+          "number": 10,
+          "traceArraysDiffer": [
+            "genChoices"
+          ]
+        },
+        {
+          "number": 11,
+          "traceArraysDiffer": [
+            "genChoices"
+          ]
+        },
+        {
+          "number": 12,
+          "traceArraysDiffer": [
+            "genChoices"
+          ]
+        },
+        {
+          "number": 15,
+          "traceArraysDiffer": [
+            "genChoices"
+          ]
+        },
+        {
+          "number": 18,
+          "traceArraysDiffer": [
+            "genChoices"
+          ]
+        }
+      ],
+      "otherTraceDifferences": [],
+      "semanticCounterexamples": []
+    }
+  ],
+  "limitations": [
+    "No new measurements or hardware repeat; E1 and historical spill/quality validity remain unresolved.",
+    "Trace-array serialization is reported separately from semantic decisions."
+  ],
+  "allSemanticInvariant": true
+}
