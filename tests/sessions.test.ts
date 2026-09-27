@@ -122,7 +122,7 @@ describe('session storage', () => {
     db.close()
   })
 
-  it.each(['b1-first', 'b2-first'] as const)('getSession and resume reject incomplete quality subsets from mixed runtime builds (%s)', async (order) => {
+  it.each(['b1-first', 'b2-first'] as const)('listQuality displays mixed-build rows but getSession rejects incomplete subsets (%s)', async (order) => {
     const db = openDb(join(dir, `quality-build-${order}.db`))
     const model = { id: 'E:/m/quality.gguf', name: 'quality' } as ModelMeta
     const config = { id: `${model.id}|ngl=all|kv=f16|t=8`, modelId: model.id, backend: 'vulkan' } as CandidateConfig
@@ -134,7 +134,7 @@ describe('session storage', () => {
     const rows = tests.map((t, i) => ({ testId: t.id, category: t.category, weight: t.weight, pass: true, score: 1, detail: '',
       genId: 'off', sample: 1, suite: 'qb-1.1.0', suiteSeed: null, backend: 'vulkan', runtimeVersion: `vulkan:${(i + (order === 'b1-first' ? 0 : 1)) % 2 ? 'b2' : 'b1'}` }))
     await st.saveQuality(id, model.id, config.id, 2048, rows)
-    expect(await st.listQuality(id, model.id)).toEqual([])
+    expect(await st.listQuality(id, model.id)).toHaveLength(rows.length)
     expect(getSession(db, Number(id))!.candidates[0].quality).toEqual([])
     expect(sessionInputs(db, Number(id))!.inputs[0].quality).toEqual([])
     db.close()
@@ -157,7 +157,7 @@ describe('session storage', () => {
     db.close()
   })
 
-  it('stored T1 rows with duplicate item/sample do not stand in for samples 2 and 3', async () => {
+  it('listQuality displays T1 duplicate rows but getSession rejects the incomplete suite', async () => {
     const db = openDb(join(dir, 'quality-duplicate-sample.db'))
     const model = { id: 'E:/m/t1.gguf', name: 't1', supportsThinking: true, genKnobs: { supportsThinking: true } } as ModelMeta
     const config = { id: `${model.id}|ngl=all|kv=f16|t=8`, modelId: model.id, backend: 'vulkan' } as CandidateConfig
@@ -174,7 +174,7 @@ describe('session storage', () => {
         backend: 'vulkan', runtimeVersion: 'vulkan:b1' }))
     ])
     await st.saveQuality(id, model.id, config.id, 2048, rows)
-    expect(await st.listQuality(id, model.id)).toEqual([])
+    expect(await st.listQuality(id, model.id)).toHaveLength(rows.length)
     expect(getSession(db, Number(id))!.candidates[0].quality).toEqual([])
     db.close()
   })
@@ -241,7 +241,7 @@ describe('session storage', () => {
     await st.saveQuality(id, 'm', 'c', 2048, [q('a'), q('b')])
     expect(await st.listQuality(id, 'm')).toHaveLength(2)
     db.prepare('DELETE FROM quality_result WHERE id = (SELECT max(id) FROM quality_result)').run() // now incomplete
-    expect(await st.listQuality(id, 'm')).toEqual([]) // resume re-runs the suite
+    expect(await st.listQuality(id, 'm')).toHaveLength(1) // displayed for audit; resume re-runs the incomplete suite
     db.close()
   })
 
@@ -256,13 +256,13 @@ describe('session storage', () => {
     expect(rows.map((r) => (r as { suite?: string }).suite)).toEqual(['qb-2.0.0', 'qb-2.0.0']) // not overwritten with qb-1.1.0
     const other = await mk({ qualitySeed: 8 }) // same suite, different seed → different items → re-run
     await st.saveQuality(other, 'm', 'c', 2048, [v2('a', 7), v2('b', 7)])
-    expect(await st.listQuality(other, 'm')).toEqual([])
+    expect(await st.listQuality(other, 'm')).toHaveLength(2)
     const quick = await mk({ qualityMode: 'quick' }) // v1 selected: v2 rows don't count
     await st.saveQuality(quick, 'm', 'c', 2048, [v2('a', 7)])
-    expect(await st.listQuality(quick, 'm')).toEqual([])
+    expect(await st.listQuality(quick, 'm')).toHaveLength(1)
     const noSeed = await mk({}) // v2 without a recorded seed can't be matched
     await st.saveQuality(noSeed, 'm', 'c', 2048, [v2('a', 7)])
-    expect(await st.listQuality(noSeed, 'm')).toEqual([])
+    expect(await st.listQuality(noSeed, 'm')).toHaveLength(1)
     db.close()
   })
 

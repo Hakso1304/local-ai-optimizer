@@ -246,7 +246,9 @@ describe('A/B/C (review-w4l): generation contract strictness', () => {
         requested, counterfactual: key === 'enable_thinking' ? !requested : requested === 'low' ? 'high' : 'low',
         requestedSha256: hash, counterfactualSha256: alt, status: 'proved'
       }])) }
-    return { ...tagged, renderProof: { rowId: proofRowId(tagged), promptSha256: hash, renderedSha256: hash,
+    return { ...tagged, proofProvenance: { mode: 'runtime', status: 'original', originalPromptHashPresent: true,
+      origin: { generationPromptHashPresent: true, firstReplayAt: null, lineage: [] } },
+      renderProof: { rowId: proofRowId(tagged), promptSha256: hash, renderedSha256: hash,
       counterfactualSha256: alt, counterfactuals: Object.fromEntries(Object.keys(applied).map((key) => [key, alt])),
       keys: Object.keys(applied), status: 'proved' } } as QualityResult
   })
@@ -468,7 +470,9 @@ describe('I-8.0 off/think comparator proof on both sides', () => {
         requested, counterfactual: key === 'enable_thinking' ? !requested : 'high', requestedSha256: hash,
         counterfactualSha256: alt, status: 'proved'
       }])) }
-    return { ...tagged, renderProof: { rowId: proofRowId(tagged), promptSha256: hash, renderedSha256: hash,
+    return { ...tagged, proofProvenance: { mode: 'runtime', status: 'original', originalPromptHashPresent: true,
+      origin: { generationPromptHashPresent: true, firstReplayAt: null, lineage: [] } },
+      renderProof: { rowId: proofRowId(tagged), promptSha256: hash, renderedSha256: hash,
       counterfactualSha256: alt, counterfactuals: Object.fromEntries(Object.keys(applied).map((key) => [key, alt])),
       keys: Object.keys(applied), status: Object.keys(applied).length ? 'proved' : 'unproved' } } as QualityResult
   })
