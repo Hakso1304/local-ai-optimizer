@@ -271,6 +271,40 @@ describe('A/B/C (review-w4l): generation contract strictness', () => {
     c.genQuality[1] = gq('think-low', true, proved)
     expect(V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')).toMatchObject({ comparable: true })
   })
+  it('I-8.0 rejects imported proved effort with null counterfactual despite distinct render hashes', () => {
+    const c = thinkModel(candidate('a'))
+    c.quality = rowsFor('off', { appliedTemplateKwargs: { enable_thinking: false } })
+    const proof = { enable_thinking: { requested: true, counterfactual: false, requestedSha256: 'a'.repeat(64), counterfactualSha256: 'b'.repeat(64), status: 'proved' },
+      reasoning_effort: { requested: 'low', counterfactual: null, requestedSha256: 'a'.repeat(64), counterfactualSha256: 'b'.repeat(64), status: 'proved' } }
+    c.genQuality = [gq('off', false, c.quality), gq('think-low', true, rowsFor('think-low', { appliedTemplateKwargs: { enable_thinking: true, reasoning_effort: 'low' }, templateKwargProof: proof }))]
+    expect(V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')).toMatchObject({ comparable: false, why: expect.stringMatching(/per-key template proof/) })
+    const wrongDomain = { ...proof, reasoning_effort: { ...proof.reasoning_effort, counterfactual: true } }
+    c.genQuality[1] = gq('think-low', true, rowsFor('think-low', { appliedTemplateKwargs: { enable_thinking: true, reasoning_effort: 'low' }, templateKwargProof: wrongDomain }))
+    expect(V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')).toMatchObject({ comparable: false, why: expect.stringMatching(/per-key template proof/) })
+  })
+  it('I-8.0 binds render proof to each row and rejects a copied proof from another prompt', () => {
+    const c = thinkModel(candidate('a'))
+    c.quality = rowsFor('off', { appliedTemplateKwargs: { enable_thinking: false }, acceptedSampling: { temperature: 0, seed: 1 }, requestedSampling: { temperature: 0, seed: 1 } })
+    const proof = { enable_thinking: { requested: true, counterfactual: false, requestedSha256: 'a'.repeat(64), counterfactualSha256: 'b'.repeat(64), status: 'proved' },
+      reasoning_effort: { requested: 'low', counterfactual: 'high', requestedSha256: 'a'.repeat(64), counterfactualSha256: 'b'.repeat(64), status: 'proved' } }
+    const valid = rowsFor('think-low', { appliedTemplateKwargs: { enable_thinking: true, reasoning_effort: 'low' }, acceptedSampling: { temperature: 0, seed: 1 }, requestedSampling: { temperature: 0, seed: 1 }, templateKwargProof: proof })
+      .map((r) => ({ ...r, sample: 1, promptSha256: 'a'.repeat(64), renderProof: { rowId: `${r.testId}:1`, promptSha256: 'a'.repeat(64), renderedSha256: 'a'.repeat(64), counterfactualSha256: 'b'.repeat(64), keys: ['enable_thinking', 'reasoning_effort'], status: 'proved' } } as QualityResult))
+    c.genQuality = [gq('off', false, c.quality), gq('think-low', true, valid)]
+    expect(V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')?.comparable).toBe(true)
+    const copied = valid.map((r, i) => i === 1 ? { ...r, promptSha256: 'c'.repeat(64) } as QualityResult : r)
+    c.genQuality[1] = gq('think-low', true, copied)
+    expect(V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')).toMatchObject({ comparable: false })
+  })
+  it('I-8.0 requires runtime accepted sample seed to match the requested seed on every row', () => {
+    const c = candidate('seed')
+    const rows = rowsFor('off', { sample: 1, requestedSampling: { temperature: 0, seed: 1 }, acceptedSampling: { temperature: 0, seed: 1 } })
+    c.quality = rows
+    expect(V([c]).ranked[0].qualityMeasured).toBe(true)
+    c.quality = rows.map((r, i) => i === 1 ? { ...r, acceptedSampling: { temperature: 0, seed: 999 } } as QualityResult : r)
+    expect(V([c]).ranked[0]).toMatchObject({ qualityMeasured: false, undecided: expect.arrayContaining([expect.objectContaining({ component: 'quality', kind: 'contract-error' })]) })
+    c.quality = rows.map((r, i) => i === 1 ? { ...r, acceptedSampling: { temperature: 0 } } as QualityResult : r)
+    expect(V([c]).ranked[0].qualityMeasured).toBe(false)
+  })
   it('I-8.0 legacy single-toggle applied proof remains comparable; explicit contradictory proof rejects it', () => {
     const c = candidate('a')
     c.model = { ...c.model, genKnobs: { supportsThinking: true } }

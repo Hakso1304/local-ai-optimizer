@@ -546,7 +546,7 @@ describe('runSession', () => {
     const low = { id: 'low', thinking: true, effort: 'low', temperature: 0, source: 'default' as const }
     const medium = { id: 'medium', thinking: true, effort: 'medium', temperature: 0, source: 'default' as const }
     const xhigh = { id: 'xhigh', thinking: true, effort: 'xhigh', temperature: 0, source: 'default' as const }
-    const suite = async (gens: SessionRequest['genConfigs'], render: (kw: Record<string, unknown>) => string, effortValues = ['low', 'medium', 'xhigh'], failFirst = false) => {
+    const suite = async (gens: SessionRequest['genConfigs'], render: (kw: Record<string, unknown>, messages: string) => string, effortValues = ['low', 'medium', 'xhigh'], failFirst = false) => {
       const m = { ...model, supportsThinking: true, genKnobs: { supportsThinking: true, effortValues } }
       let qualityRequest = 0
       let usedBackend!: ReturnType<typeof fakeBackend>
@@ -554,7 +554,10 @@ describe('runSession', () => {
         models: [m], runtimeVersion: 'b1', backend: () => {
           const b = (usedBackend = fakeBackend(() => ({})))
           b.templateHash = 'tpl'
-          b.applyTemplate = async (msgs, opts) => `${msgs.map((x) => x.content).join('\n')}|${render(opts?.templateKwargs ?? {})}`
+          b.applyTemplate = async (msgs, opts) => {
+            const content = msgs.map((x) => x.content).join('\n')
+            return `${content}|${render(opts?.templateKwargs ?? {}, content)}`
+          }
           const rp = b.runPrompt.bind(b)
           b.runPrompt = async (q) => {
             const r = await rp(q)
@@ -586,6 +589,22 @@ describe('runSession', () => {
         expect(rows).toHaveLength(17)
         expect(rows.every((x) => JSON.stringify(x.appliedTemplateKwargs) === JSON.stringify(x.requestedTemplateKwargs))).toBe(true)
       }
+    })
+    it('does not broadcast first-item toggle and effort proof onto a second branch that ignores both', async () => {
+      const seen: string[] = []
+      const r = await suite([off, low], (kw, messages) => {
+        if (!seen.includes(messages)) seen.push(messages)
+        return seen.indexOf(messages) === 1 ? 'ignored-both' : `think=${kw.enable_thinking}|effort=${kw.reasoning_effort ?? 'none'}`
+      })
+      expect(rowsOf(r, 'off')).toHaveLength(17)
+      expect(rowsOf(r, 'low')).toHaveLength(17)
+      for (const id of ['off', 'low']) {
+        const rows = rowsOf(r, id)
+        expect(rows[0].appliedTemplateKwargs).toBeDefined()
+        expect(rows[1].appliedTemplateKwargs).toBeUndefined()
+        expect(Object.values(rows[1].templateKwargProof ?? {}).every((p) => p.status !== 'proved')).toBe(true)
+      }
+      expect(r.rec?.insights?.map((i) => i.text).join('\n')).toMatch(/\[I-8\.0\].*not comparable/s)
     })
     it('off/xhigh alone requires a known-effort counterfactual before xhigh is verified', async () => {
       const ignored = await suite([off, xhigh], (kw) => `think=${kw.enable_thinking}`)
