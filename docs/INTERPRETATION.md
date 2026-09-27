@@ -341,7 +341,10 @@ comparison, not a universal veto.
 Rule I-8.0 (`gen.comparable`, policy): a gen comparison stores the applied template
 kwargs and sampling values as accepted by the runtime, template/runtime/model hashes,
 prompt instance, context, token budget, sample seeds, token-count source and timings.
-A requested flag is not proof it was honored (`appliedTemplateKwargs` is required).
+A requested flag is not proof it was honored (`appliedTemplateKwargs` is required),
+and a per-key render proof covers only the template branches it exercised. A thinking
+delta is comparable only when the OFF baseline's own contract (applied kwargs, accepted
+sampling, template hash) is proven too; otherwise the comparison is not evaluable.
 Rule I-8.1 (`gen.best-config`, info): per model: "thinking on (effort low, T=1.0):
 Q +17 [lo, hi] vs off; answers <k>× slower (effective <e> vs <d> t/s)".
 Rule I-8.2 (`gen.stochastic`, note): T > 0 → "sampled (seeded), n=<s> per item".
