@@ -51,6 +51,8 @@ export interface SystemProfile {
   cuda: Sourced<{ available: boolean; driverCudaVersion?: string }>
   disks: Sourced<DiskInfo[]>
   runtimes: RuntimeDetection[]
+  /** GPU temperature/power source: nvidia-smi (NVIDIA only). Filled by main's system:scan. */
+  nvidiaSmi?: { available: boolean; reason: string | null; cudaVersion: string | null }
 }
 
 /** Read from the GGUF header without loading the model. Plain fields are DECLARED (from the file);
@@ -91,7 +93,10 @@ export interface ModelInfo {
   name: string
   path: string
   sizeBytes: number
-  runtime: 'llamacpp'
+  /** Where the file was found. All are benchmarked through our llama-server (Ollama blobs load directly with -m). */
+  runtime: 'llamacpp' | 'ollama' | 'lmstudio'
+  /** Ollama model name ("llama3.1:8b") when runtime = ollama. */
+  ollamaName?: string
   meta: GgufMetadata | null
   metaError?: string
 }

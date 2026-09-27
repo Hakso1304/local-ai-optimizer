@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createInterface } from 'node:readline'
+import type { NvidiaSample } from './nvidia'
 
 // typeperf-based sampler (docs/DESIGN.md §1.1–1.2). typeperf fixes its instance set at start, so start
 // this AFTER the llama-server pid is known. Every numeric field: number = MEASURED, null = unavailable
@@ -17,9 +18,12 @@ export interface TelemetrySample {
   procRamPrivateBytes: number | null
   procVramDedicatedBytes: number | null
   procVramSharedBytes: number | null // per-pid spill signal (adapter shared has a ~1.1–1.5 GB baseline)
+  /** nvidia-smi only (merged by withNvidia); absent/null elsewhere — AMD has no non-admin source. */
+  tempC?: number | null
+  powerW?: number | null
 }
 export type Field = Exclude<keyof TelemetrySample, 'ts'>
-const FIELDS: Field[] = ['cpuPct', 'ramAvailBytes', 'gpuUtilPct', 'vramDedicatedBytes', 'vramSharedBytes', 'procRamPrivateBytes', 'procVramDedicatedBytes', 'procVramSharedBytes']
+const FIELDS: Field[] = ['cpuPct', 'ramAvailBytes', 'gpuUtilPct', 'vramDedicatedBytes', 'vramSharedBytes', 'procRamPrivateBytes', 'procVramDedicatedBytes', 'procVramSharedBytes', 'tempC', 'powerW']
 const PROC_LUID_MIN_BYTES = 128 * 1024 * 1024
 const PROC_FIELDS: Field[] = ['procRamPrivateBytes', 'procVramDedicatedBytes', 'procVramSharedBytes']
 
@@ -237,6 +241,25 @@ export function startSampler(o: SamplerOpts = {}): Sampler {
       stopped = true
       child.kill()
       return samples
+    }
+  }
+}
+
+/** Merge nvidia-smi samples (nearest within 1.5 s) into the PDH stream: adds tempC/powerW, fills a missing GPU util. */
+export function withNvidia(pdh: Sampler, nv: { readonly samples: NvidiaSample[]; stop(): unknown } | null): Sampler {
+  if (!nv) return pdh
+  const enrich = (s: TelemetrySample): TelemetrySample => {
+    let best: NvidiaSample | null = null
+    for (const n of nv.samples) if (Math.abs(n.ts - s.ts) <= 1500 && (!best || Math.abs(n.ts - s.ts) < Math.abs(best.ts - s.ts))) best = n
+    return best ? { ...s, tempC: best.tempC, powerW: best.powerW, gpuUtilPct: s.gpuUtilPct ?? best.gpuUtilPct } : s
+  }
+  return {
+    get samples() { return pdh.samples.map(enrich) },
+    unavailable: pdh.unavailable,
+    errors: pdh.errors,
+    stop() {
+      nv.stop()
+      return pdh.stop().map(enrich)
     }
   }
 }

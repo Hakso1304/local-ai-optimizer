@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { TypeperfParser, counterPaths, parseColumn, peaks, type TelemetrySample } from '../src/core/telemetry/sampler'
+import { TypeperfParser, counterPaths, parseColumn, peaks, withNvidia, type TelemetrySample } from '../src/core/telemetry/sampler'
 
 // Real typeperf output from the dev box (RX 9070 XT luid ..16058, iGPU ..190BD); hostname replaced by HOST.
 const fx = (name: string) => readFileSync(join(__dirname, 'fixtures', 'telemetry', name), 'utf8').split('\n').filter(Boolean)
@@ -90,5 +90,17 @@ describe('typeperf parser', () => {
     expect(pk.n).toBe(samples.length)
     expect(pk.max.procVramDedicatedBytes).toBe(Math.max(...samples.map((s) => s.procVramDedicatedBytes!)))
     expect(peaks([{ ...samples[0], gpuUtilPct: null }]).meanGpuUtilPct).toBeNull()
+  })
+
+  it('withNvidia merges nearest nvidia-smi temp/power into PDH samples and fills a missing GPU util', () => {
+    const base = { cpuPct: 1, ramAvailBytes: 1, vramDedicatedBytes: 1, vramSharedBytes: 1, procRamPrivateBytes: 1, procVramDedicatedBytes: 1, procVramSharedBytes: 1 }
+    const pdhSamples: TelemetrySample[] = [{ ts: 1000, gpuUtilPct: null, ...base }, { ts: 9000, gpuUtilPct: 50, ...base }]
+    const pdh = { samples: pdhSamples, unavailable: {}, errors: [], stop: () => pdhSamples }
+    const nv = { samples: [{ ts: 1200, gpuUtilPct: 88, vramUsedBytes: 1, tempC: 71, powerW: 250 }], stop: () => [] }
+    const m = withNvidia(pdh, nv)
+    expect(m.samples[0]).toMatchObject({ tempC: 71, powerW: 250, gpuUtilPct: 88 })
+    expect(m.samples[1].tempC).toBeUndefined() // no nvidia sample within 1.5 s: left absent, not invented
+    expect(peaks(m.stop()).max.tempC).toBe(71)
+    expect(withNvidia(pdh, null)).toBe(pdh)
   })
 })

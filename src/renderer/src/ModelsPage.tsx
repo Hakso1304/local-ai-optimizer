@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { ModelInfo, SmokeResult } from '../../shared/types'
 
+const SOURCE = { llamacpp: 'folder', lmstudio: 'LM Studio', ollama: 'Ollama' } as const
 const gib = (b: number) => `${(b / 1024 ** 3).toFixed(2)} GiB`
 const params = (n: number | null) => (n == null ? '—' : n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : `${(n / 1e6).toFixed(0)}M`)
 const fmt = (v: unknown) => (v == null ? '—' : typeof v === 'number' ? String(Math.round(v * 100) / 100) : typeof v === 'object' ? JSON.stringify(v) : String(v))
@@ -35,11 +36,12 @@ export function ModelsPage() {
       </header>
       {err && <p className="err">{err}</p>}
       <table>
-        <thead><tr><th>Name</th><th>Arch</th><th>Params</th><th>Quant</th><th>Ctx (train)</th><th>KV/token*</th><th>Size</th><th>Path</th><th /></tr></thead>
+        <thead><tr><th>Name</th><th>Source</th><th>Arch</th><th>Params</th><th>Quant</th><th>Ctx (train)</th><th>KV/token*</th><th>Size</th><th>Path</th><th /></tr></thead>
         <tbody>
           {models?.map((m) => (
             <tr key={m.id}>
               <td>{m.name}</td>
+              <td className="muted" title={m.ollamaName}>{SOURCE[m.runtime]}</td>
               {m.meta ? (
                 <>
                   <td>{m.meta.arch ?? '—'}</td>
@@ -56,7 +58,7 @@ export function ModelsPage() {
               <td className="bar"><button disabled={busy !== null} onClick={() => run(m)}>{busy === m.id ? 'Running…' : 'Smoke test'}</button></td>
             </tr>
           ))}
-          {models?.length === 0 && <tr><td colSpan={9} className="muted">No .gguf files in the configured model directories.</td></tr>}
+          {models?.length === 0 && <tr><td colSpan={10} className="muted">No .gguf files in the configured model directories.</td></tr>}
         </tbody>
       </table>
       <p className="muted">Declared values come from the GGUF header. *KV/token is ESTIMATED (f16 K+V), used for pruning only.</p>

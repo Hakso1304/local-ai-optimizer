@@ -15,11 +15,13 @@ import { val } from '../core/scoring/cliff'
 import { runSession, type SessionStorage } from '../core/benchmark/session'
 import { generateCandidates, machineFromProfile, rulesForRequest } from '../core/benchmark/candidates'
 import { findGgufModels, toModelMeta } from '../core/models/gguf'
-import { startSampler, stopAllSamplers } from '../core/telemetry/sampler'
+import { defaultLmStudioDirs, defaultOllamaRoot, listOllamaModels, toModelInfo as toOllamaModelInfo } from '../core/runtimes/ollama/models'
+import { startSampler, stopAllSamplers, withNvidia } from '../core/telemetry/sampler'
+import { probeNvidiaSmi, startNvidiaSampler, type NvidiaProbe } from '../core/telemetry/nvidia'
 import { evaluateAsync } from '../core/quality'
 import type { SessionEvent, SessionRequest } from '../shared/bench-events'
 import type { ModelMeta, WorkloadId } from '../shared/bench-types'
-import type { AppSettings, SmokeResult, StartResult, SystemProfile } from '../shared/types'
+import type { AppSettings, ModelInfo, SmokeResult, StartResult, SystemProfile } from '../shared/types'
 
 // Dev: runtime + sample models live in the project. Packaged: app dir is read-only (asar), so the runtime is
 // downloaded on first run into userData and models come from userData/models + settings.modelDirs.
@@ -46,6 +48,19 @@ function modelDirs(): string[] {
   return [bundledModelsDir(), ...extra]
 }
 
+/** Folder GGUFs (configured dirs) + LM Studio dirs + Ollama blobs, deduplicated by path (first source wins). */
+async function listAllModels(): Promise<ModelInfo[]> {
+  const [folder, lms, ollama] = await Promise.all([
+    findGgufModels(modelDirs()),
+    findGgufModels(defaultLmStudioDirs()).then((ms) => ms.map((m) => ({ ...m, runtime: 'lmstudio' as const }))),
+    listOllamaModels().then((ms) => Promise.all(ms.map((m) => toOllamaModelInfo(m)))).catch(() => [])
+  ])
+  const seen = new Set<string>()
+  return [...folder, ...lms, ...ollama].filter((m) => (seen.has(m.path.toLowerCase()) ? false : (seen.add(m.path.toLowerCase()), true)))
+}
+/** Roots a benchmark may load a model from (validation). */
+const modelRoots = () => [...modelDirs(), ...defaultLmStudioDirs(), join(defaultOllamaRoot(), 'blobs')]
+
 const llama = new LlamaCppBackend(llamaDir(), { pidFile: join(app.getPath('userData'), 'llama-server.pid') })
 let smokeBusy = false
 let db: DatabaseSync | null = null
@@ -58,17 +73,22 @@ export function sendBenchEvent(e: SessionEvent): void {
 }
 
 ipcMain.handle('runtimes:detect', () => detectRuntimes(llamaDir()))
+// nvidia-smi is probed once per app run (it takes ~1 s and the answer doesn't change).
+let nvProbe: Promise<NvidiaProbe> | null = null
+const nvidia = () => (nvProbe ??= probeNvidiaSmi().catch((e: Error) => ({ available: false as const, reason: e.message, source: 'nvidia-smi' })))
 ipcMain.handle('system:scan', async () => {
-  const [profile, runtimes] = await Promise.all([scanSystem(), detectRuntimes(llamaDir())])
-  return { ...profile, runtimes }
+  const [profile, runtimes, nv] = await Promise.all([scanSystem(), detectRuntimes(llamaDir()), nvidia()])
+  profileCache = profile
+  const cuda = nv.available && nv.cudaVersion ? `${nv.cudaVersion.major}.${nv.cudaVersion.minor}` : null
+  return { ...profile, runtimes, nvidiaSmi: { available: nv.available, reason: nv.available ? null : nv.reason, cudaVersion: cuda } }
 })
-ipcMain.handle('models:list', () => llama.enumerateModels(modelDirs()))
+ipcMain.handle('models:list', () => listAllModels())
 /** Per model: null if normal mode yields candidates for this workload, else the planner's reason (e.g. "full GPU
  *  offload does not fit — enable heavy-model mode"). Same generateCandidates call as a real session. */
 ipcMain.handle('models:fit', async (_e, w: WorkloadId): Promise<Record<string, string | null>> => {
   if (!(w in WORKLOADS)) throw new Error(`unknown workload ${String(w)}`)
   profileCache ??= await scanSystem()
-  const [infos, devices] = await Promise.all([findGgufModels(modelDirs()), llama.listDevices().catch(() => [])])
+  const [infos, devices] = await Promise.all([listAllModels(), llama.listDevices().catch(() => [])])
   const device = pickDiscreteDevice(devices)?.id ?? null
   const machine = machineFromProfile(profileCache, device)
   const out: Record<string, string | null> = {}
@@ -84,7 +104,11 @@ let installing: Promise<unknown> | null = null
 ipcMain.handle('runtime:install', async () => {
   if (installing) throw new Error('runtime install already running')
   const progress = (msg: string) => { for (const w of BrowserWindow.getAllWindows()) w.webContents.send('runtime:progress', msg) }
-  installing = llama.ensureRuntime(progress)
+  profileCache ??= await scanSystem()
+  const gpu = (profileCache.gpus.value ?? []).filter((g) => !g.isIntegrated).sort((a, b) => (b.dedicatedVramBytes.value ?? 0) - (a.dedicatedVramBytes.value ?? 0))[0]
+  const vendor = gpu?.vendor ?? 'other'
+  const nv = vendor === 'nvidia' ? await nvidia() : null
+  installing = llama.ensureRuntime(progress, { vendor, cudaMajor: nv?.available ? nv.cudaVersion?.major : undefined })
   try { return await installing } finally { installing = null }
 })
 ipcMain.handle('settings:get', () => readSettings())
@@ -97,14 +121,14 @@ ipcMain.handle('sessions:list', () => listSessions(needDb()))
 ipcMain.handle('sessions:get', (_e, id: number) => getSession(needDb(), Number(id)))
 ipcMain.handle('recommendation:latest', (_e, w: WorkloadId) => latestRecommendation(needDb(), w))
 ipcMain.handle('bench:start', (_e, raw: unknown) => {
-  const v = sanitizeRequest(raw, modelDirs())
+  const v = sanitizeRequest(raw, modelRoots())
   return v.ok ? startSession(v.req) : { ok: false, error: v.error }
 })
 /** Continue a paused/cancelled/interrupted/failed session. opts: retryFailed / rerunConfigIds (validated). */
 ipcMain.handle('bench:resume', (_e, id: number, opts?: { retryFailed?: unknown; rerunConfigIds?: unknown }) => {
   const stored = getSessionResume(needDb(), Number(id))
   if (!stored) return { ok: false, error: `session ${id} has no stored request` }
-  const v = sanitizeRequest({ ...stored.request, retryFailed: opts?.retryFailed, rerunConfigIds: opts?.rerunConfigIds }, modelDirs())
+  const v = sanitizeRequest({ ...stored.request, retryFailed: opts?.retryFailed, rerunConfigIds: opts?.rerunConfigIds }, modelRoots())
   return v.ok ? startSession({ ...v.req, resumeSessionId: String(Number(id)) }, stored.machine) : { ok: false, error: v.error }
 })
 ipcMain.handle('bench:cancel', () => {
@@ -119,7 +143,7 @@ ipcMain.handle('bench:pause', () => {
   return { ok: true }
 })
 ipcMain.handle('bench:smoke', async (_e, modelPath: string): Promise<SmokeResult> => {
-  if (typeof modelPath !== 'string' || !modelDirs().some((d) => isInside(d, modelPath))) throw new Error('model path not in a configured model dir')
+  if (typeof modelPath !== 'string' || !modelRoots().some((d) => isInside(d, modelPath))) throw new Error('model path not in a configured model dir')
   if (smokeBusy || active) throw new Error('a smoke run or benchmark is already in progress')
   smokeBusy = true
   try {
@@ -150,7 +174,7 @@ async function startSession(req: SessionRequest, storedMachine?: SystemProfile):
     // ponytail: static facts cached per app run; RAM is re-read live via freemem(). A resume re-uses the stored scan
     // so generateCandidates yields the same configIds/ctxSteps as the original plan (review item d).
     const profile = storedMachine ?? (profileCache ??= await scanSystem())
-    const [infos, devices, runtime] = await Promise.all([findGgufModels(modelDirs()), llama.listDevices(), llama.detect()])
+    const [infos, devices, runtime] = await Promise.all([listAllModels(), llama.listDevices(), llama.detect()])
     const device = pickDiscreteDevice(devices)?.id ?? null
     const models: ModelMeta[] = []
     for (const id of req.modelIds) {
@@ -161,6 +185,7 @@ async function startSession(req: SessionRequest, storedMachine?: SystemProfile):
     }
     if (!models.length) throw new Error('none of the selected models can be benchmarked')
     const backendKind = device ? 'vulkan' as const : 'cpu' as const
+    const nvOk = (await nvidia()).available
     // Same deterministic candidate generation the runner does (rulesForRequest keeps heavyMode), so stored sessions
     // carry full configs.
     const planFor: PlanFor = (r) => {
@@ -177,7 +202,9 @@ async function startSession(req: SessionRequest, storedMachine?: SystemProfile):
     const storage: SessionStorage = { ...base, createSession: async (s) => { const id = await base.createSession(s); gotId(id); return id } }
     if (req.resumeSessionId) gotId(req.resumeSessionId)
     const run = runSession(req, {
-      backend: () => llama, startSampler: (pid) => startSampler({ pid }), storage, machine: profile, gpuDevice: device, backendKind,
+      backend: () => llama, storage, machine: profile, gpuDevice: device, backendKind,
+      // PDH (all vendors) + nvidia-smi temp/power when it works (NVIDIA only; AMD has no non-admin source).
+      startSampler: (pid) => withNvidia(startSampler({ pid }), nvOk ? startNvidiaSampler() : null),
       models, clock: Date, readRamAvailableBytes: () => freemem(), evaluate: evaluateAsync,
       signal: me.cancel.signal, pauseSignal: me.pause.signal, runtimeVersion: runtime.version ?? null
     }, sendBenchEvent).finally(() => { if (active === me) active = null })

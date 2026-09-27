@@ -66,6 +66,13 @@ export function SystemPage() {
               <Row label="OS" s={p.os} fmt={() => `${p.os.value!.name} ${p.os.value!.version} (build ${p.os.value!.build})`} />
               <Row label="CPU" s={p.cpu} fmt={() => `${p.cpu.value!.model} — ${p.cpu.value!.physicalCores}C/${p.cpu.value!.logicalCores}T`} />
               <Row label="RAM" s={p.ram} fmt={() => `${gb(p.ram.value!.totalBytes)} total, ${gb(p.ram.value!.availableBytes)} available`} />
+              <tr>
+                <td>GPU temperature / power</td>
+                <td><Badge status={p.nvidiaSmi?.available ? 'available' : 'unavailable'} /></td>
+                <td>{p.nvidiaSmi?.available ? `NVIDIA via nvidia-smi${p.nvidiaSmi.cudaVersion ? ` (driver CUDA ${p.nvidiaSmi.cudaVersion})` : ''}`
+                  : <span className="err">{p.gpus.value?.some((g) => g.vendor === 'amd' && !g.isIntegrated) ? 'AMD: no non-admin source (needs the ADLX native SDK)' : p.nvidiaSmi?.reason ?? 'no source'}</span>}</td>
+                <td className="muted">nvidia-smi</td>
+              </tr>
               <Row label="CUDA" s={p.cuda} fmt={() => (p.cuda.value!.available ? `yes, ${p.cuda.value!.driverCudaVersion}` : 'no')} />
               {p.gpus.value?.map((g) => (
                 <Row key={g.pnpDeviceId} label={`GPU (${g.vendor}${g.isIntegrated ? ', integrated?' : ''})`} s={g.dedicatedVramBytes}

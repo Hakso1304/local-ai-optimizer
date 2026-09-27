@@ -9,7 +9,8 @@ import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { ReadableStream as WebReadableStream } from 'node:stream/web'
 import { runPowerShell, runProcess } from '../../exec'
-import type { RuntimeDetection } from '../../../shared/types'
+import type { GpuVendor, RuntimeDetection } from '../../../shared/types'
+import { pickReleaseAsset, type ReleaseAsset } from './assets'
 import { getJson, type HealthStatus, type InferenceBackend, type LoadConfig, type LoadResult, type ModelInfo, type PromptRequest, type PromptResult, type RuntimeStats } from '../types'
 import { classifyExit, emptyDeclared, parseDevices, parseLogLine, parseSse, toPromptResult, type CompletionChunk, type ExitReason, type LlamaDevice } from './parse'
 
@@ -134,47 +135,66 @@ export class LlamaCppBackend implements InferenceBackend {
     }
   }
 
-  /** Download + extract the newest official Windows Vulkan build into vendorDir if not installed.
-   *  Installed = release-tag.txt exists; it is written last, after an atomic rename of the extracted dir. */
-  async ensureRuntime(log: (m: string) => void = () => {}): Promise<RuntimeDetection> {
-    const marker = join(this.vendorDir, 'release-tag.txt')
-    if (existsSync(marker)) return this.detect()
+  /** Download + extract the newest official Windows build for this GPU into vendorDir if not installed.
+   *  NVIDIA with a CUDA-capable driver → CUDA build + cudart (same dir); anything else, or any CUDA failure → Vulkan.
+   *  Installed = release-tag.txt ("<tag> <build>") exists; it is written last, after an atomic rename. */
+  async ensureRuntime(log: (m: string) => void = () => {}, pref: { vendor: GpuVendor; cudaMajor?: number } = { vendor: 'other' }): Promise<RuntimeDetection> {
+    if (existsSync(join(this.vendorDir, 'release-tag.txt'))) return this.detect()
     const releases = await getJson<GhRelease[]>(RELEASES_URL, 15_000)
-    const asset = pickVulkanAsset(releases)
-    if (!asset) throw new Error(`no release among the latest ${releases.length} has a win-vulkan-x64 zip`)
-    const zip = join(tmpdir(), asset.name)
-    const tmp = `${this.vendorDir}.tmp`
+    const rel = releases.find((r) => !r.draft && pickReleaseAsset(r.assets, pref).main)
+    if (!rel) throw new Error(`no release among the latest ${releases.length} has a usable Windows build`)
+    const pick = pickReleaseAsset(rel.assets, pref)
+    log(pick.reason)
+    const cuda = /-cuda-([\d.]+)-x64\.zip$/.exec(pick.main!.name)?.[1]
     try {
-      log(`downloading ${asset.name} (${(asset.size / 1e6).toFixed(1)} MB)`)
-      const res = await fetch(asset.url, { signal: AbortSignal.timeout(15 * 60_000) })
-      if (!res.ok || !res.body) throw new Error(`download ${asset.url} -> HTTP ${res.status}`)
-      let received = 0
-      let shown = -1
-      const body = Readable.fromWeb(res.body as WebReadableStream).on('data', (c: Buffer) => {
-        received += c.length
-        const pct = Math.floor((received * 100) / asset.size / 5) * 5
-        if (pct !== shown) { shown = pct; log(`downloading ${pct}%`) }
-      })
-      await pipeline(body, createWriteStream(zip))
-      const got = statSync(zip).size
-      if (got !== asset.size) throw new Error(`download truncated: ${got} of ${asset.size} bytes`)
-      log(`extracting to ${this.vendorDir}`)
-      rmSync(tmp, { recursive: true, force: true })
-      mkdirSync(tmp, { recursive: true })
-      const q = (s: string) => `'${s.replace(/'/g, "''")}'`
-      await runPowerShell(`Expand-Archive -LiteralPath ${q(zip)} -DestinationPath ${q(tmp)} -Force`, 5 * 60_000)
-      // ponytail: assumes flat zip layout (true for current releases); hoist from a subfolder if that changes.
-      if (!existsSync(join(tmp, 'llama-server.exe'))) {
-        throw new Error(`llama-server.exe missing after extract; got: ${readdirSync(tmp).slice(0, 10).join(', ')}`)
-      }
-      rmSync(this.vendorDir, { recursive: true, force: true }) // no marker = partial/old install
-      renameSync(tmp, this.vendorDir)
-      writeFileSync(marker, asset.tag)
-    } finally {
-      rmSync(zip, { force: true })
-      rmSync(tmp, { recursive: true, force: true })
+      await this.installAssets(rel.tag_name, [pick.main!, ...(pick.extra ? [pick.extra] : [])], cuda ? `cuda-${cuda}` : 'vulkan', log)
+    } catch (e) {
+      if (!cuda || !pick.fallback) throw e
+      log(`CUDA build failed (${(e as Error).message}); installing the Vulkan build instead`)
+      await this.installAssets(rel.tag_name, [pick.fallback], 'vulkan', log)
     }
     return this.detect()
+  }
+
+  /** Download zips, extract all into vendorDir.tmp, check llama-server runs, then swap it into place. */
+  private async installAssets(tag: string, assets: ReleaseAsset[], build: string, log: (m: string) => void): Promise<void> {
+    const tmp = `${this.vendorDir}.tmp`
+    const zips: string[] = []
+    try {
+      rmSync(tmp, { recursive: true, force: true })
+      mkdirSync(tmp, { recursive: true })
+      for (const asset of assets) {
+        const zip = join(tmpdir(), asset.name)
+        zips.push(zip)
+        log(`downloading ${asset.name} (${(asset.size / 1e6).toFixed(1)} MB)`)
+        const res = await fetch(asset.browser_download_url, { signal: AbortSignal.timeout(15 * 60_000) })
+        if (!res.ok || !res.body) throw new Error(`download ${asset.browser_download_url} -> HTTP ${res.status}`)
+        let received = 0
+        let shown = -1
+        const body = Readable.fromWeb(res.body as WebReadableStream).on('data', (c: Buffer) => {
+          received += c.length
+          const pct = Math.floor((received * 100) / asset.size / 5) * 5
+          if (pct !== shown) { shown = pct; log(`downloading ${asset.name} ${pct}%`) }
+        })
+        await pipeline(body, createWriteStream(zip))
+        const got = statSync(zip).size
+        if (got !== asset.size) throw new Error(`download truncated: ${got} of ${asset.size} bytes`)
+        log(`extracting ${asset.name}`)
+        const q = (s: string) => `'${s.replace(/'/g, "''")}'`
+        await runPowerShell(`Expand-Archive -LiteralPath ${q(zip)} -DestinationPath ${q(tmp)} -Force`, 5 * 60_000)
+      }
+      // ponytail: assumes flat zip layout (true for current releases); hoist from a subfolder if that changes.
+      const exe = join(tmp, 'llama-server.exe')
+      if (!existsSync(exe)) throw new Error(`llama-server.exe missing after extract; got: ${readdirSync(tmp).slice(0, 10).join(', ')}`)
+      await runProcess(exe, ['--version'], 30_000) // a CUDA build without its runtime DLLs fails here
+      rmSync(this.vendorDir, { recursive: true, force: true }) // no marker = partial/old install
+      renameSync(tmp, this.vendorDir)
+      writeFileSync(join(this.vendorDir, 'release-tag.txt'), `${tag} ${build}`)
+      log(`installed llama.cpp ${tag} (${build})`)
+    } finally {
+      for (const z of zips) rmSync(z, { force: true })
+      rmSync(tmp, { recursive: true, force: true })
+    }
   }
 
   /** `llama-server --list-devices`: ground truth for which Vulkan device ids exist. */
