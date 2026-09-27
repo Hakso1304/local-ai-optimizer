@@ -6,6 +6,7 @@ import type { ProcessIdentity, ProcessTree } from '../src/core/runtimes/llamacpp
 
 const root: ProcessIdentity = { pid: 424243, name: 'node.exe', startedAt: '2026-09-28T00:00:00.0000000Z' }
 const descendant: ProcessIdentity = { pid: 424247, parentPid: root.pid, name: 'child.exe', startedAt: '2026-09-28T00:00:01.0000000Z' }
+const grandchild: ProcessIdentity = { pid: 424248, parentPid: descendant.pid, name: 'grandchild.exe', startedAt: '2026-09-28T00:00:20.0000000Z' }
 
 function fakeProcess() {
   const events = new EventEmitter() as EventEmitter & { pid: number; exitCode: number | null; signalCode: string | null; kill: () => boolean }
@@ -82,5 +83,47 @@ describe('identity-bound harness process teardown (injected fake tree)', () => {
     const error = await owned.stop().then(() => null, (reason: unknown) => reason)
     expect(error !== null || !lateChildLive, 'uncaptured live child cannot be reported as clean teardown').toBe(true)
     if (error === null) expect(killed).toContain(descendant.pid)
+  })
+
+  it('Y1: never reports clean stop when a captured child creates a grandchild after natural root exit', async () => {
+    const p = fakeProcess()
+    let rootLive = true, childLive = true, grandchildLive = false
+    const killed: number[] = []
+    const tree: ProcessTree = {
+      descendants: async () => [descendant, ...(grandchildLive ? [grandchild] : [])],
+      kill: async () => {}, isAlive: async () => false,
+      inspect: async (pid) => pid === root.pid && rootLive ? root :
+        pid === descendant.pid && childLive ? descendant : pid === grandchild.pid && grandchildLive ? grandchild : null,
+      killVerified: async (record) => {
+        killed.push(record.pid)
+        if (record.pid === descendant.pid) childLive = false
+        if (record.pid === grandchild.pid) grandchildLive = false
+        return true
+      }
+    }
+    const owned = await trackOwnedProcess(p as unknown as ChildProcess, tree, 10_000)
+    expect([...owned.descendants.values()]).toEqual([descendant])
+    rootLive = false; p.exitCode = 0; p.emit('close', 0)
+    grandchildLive = true
+    const error = await owned.stop().then(() => null, (reason: unknown) => reason)
+    expect(error !== null || !grandchildLive, 'owned grandchild must be reaped or reported as survivor').toBe(true)
+    if (error === null) expect(killed).toContain(grandchild.pid)
+  })
+
+  it('Y1: fails closed without killing a foreign post-exit descendant lacking an owned parent chain', async () => {
+    const p = fakeProcess()
+    const foreign = { ...grandchild, parentPid: 99999 }
+    let rootLive = true
+    const killed: number[] = []
+    const tree: ProcessTree = {
+      descendants: async () => rootLive ? [] : [foreign],
+      kill: async () => {}, isAlive: async () => false,
+      inspect: async (pid) => pid === root.pid && rootLive ? root : pid === foreign.pid ? foreign : null,
+      killVerified: async (record) => { killed.push(record.pid); return true }
+    }
+    const owned = await trackOwnedProcess(p as unknown as ChildProcess, tree, 10_000)
+    rootLive = false; p.exitCode = 0; p.emit('close', 0)
+    await expect(owned.stop()).rejects.toThrow(/unverified descendant|survivor|ancestry/i)
+    expect(killed).not.toContain(foreign.pid)
   })
 })

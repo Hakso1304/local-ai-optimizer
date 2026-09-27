@@ -8,6 +8,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createManifest, launchManifest, verifyManifest, type MeasurementManifest } from '../scripts/measurement-launcher'
 import type { ProcessIdentity, ProcessTree } from '../src/core/runtimes/llamacpp'
 
+const modelScan = vi.hoisted(() => ({ selectedPath: '' }))
+vi.mock('../src/core/models/gguf', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/core/models/gguf')>()
+  return { ...actual, findGgufModels: async () => modelScan.selectedPath ? [{ name: 'fake-model', path: modelScan.selectedPath }] : [] }
+})
+
 const GiB = 1024 ** 3
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -36,6 +42,7 @@ function fixture() {
     model: put(join(cwd, 'model.gguf'), 'fake model bytes')
   }
   put(join(cwd, 'package-lock.json'), '{}')
+  put(join(cwd, 'package.json'), '{"name":"fake-archive"}')
   put(join(cwd, 'node_modules', '.package-lock.json'), '{}')
   return { config, dll, out: join(cwd, 'manifest.json') }
 }
@@ -47,7 +54,70 @@ function fakeManifest(config: ReturnType<typeof fixture>['config']): Measurement
       ({ role: role as MeasurementManifest['files'][number]['role'], path: config.tsxCli, bytes: 1, sha256: '0'.repeat(64) })) }
 }
 
+function storedZip(path: string, name: string, content: Buffer) {
+  const file = Buffer.from(name)
+  let crc = 0xffffffff
+  for (const byte of content) {
+    crc ^= byte
+    for (let i = 0; i < 8; i++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0)
+  }
+  crc = (crc ^ 0xffffffff) >>> 0
+  const local = Buffer.alloc(30)
+  local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4)
+  local.writeUInt32LE(crc, 14); local.writeUInt32LE(content.length, 18); local.writeUInt32LE(content.length, 22)
+  local.writeUInt16LE(file.length, 26)
+  const central = Buffer.alloc(46)
+  central.writeUInt32LE(0x02014b50, 0); central.writeUInt16LE(20, 4); central.writeUInt16LE(20, 6)
+  central.writeUInt32LE(crc, 16); central.writeUInt32LE(content.length, 20); central.writeUInt32LE(content.length, 24)
+  central.writeUInt16LE(file.length, 28)
+  const end = Buffer.alloc(22)
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(1, 8); end.writeUInt16LE(1, 10)
+  end.writeUInt32LE(central.length + file.length, 12)
+  end.writeUInt32LE(local.length + file.length + content.length, 16)
+  writeFileSync(path, Buffer.concat([local, file, content, central, file, end]))
+}
+
+function scenarioH(pinnedWrong = false) {
+  const { config, out } = fixture()
+  const runtime = join(config.cwd, 'vendor', 'llama.cpp')
+  mkdirSync(runtime, { recursive: true })
+  config.runtimeExe = join(runtime, 'llama-server.exe')
+  writeFileSync(config.runtimeExe, 'inert Vulkan server')
+  writeFileSync(join(runtime, 'ggml.dll'), 'inert Vulkan DLL')
+  const wrongRoot = join(config.cwd, 'wrong-root'), modelRoot = join(config.cwd, 'model-root')
+  mkdirSync(wrongRoot); mkdirSync(modelRoot)
+  const wrongModel = join(wrongRoot, 'fake-model.gguf')
+  writeFileSync(wrongModel, 'wrong-model bytes')
+  const runnerSelectedModel = join(modelRoot, 'fake-model.gguf')
+  writeFileSync(runnerSelectedModel, 'runner-selected bytes')
+  modelScan.selectedPath = runnerSelectedModel // injected scanner result, no real model-root scan
+  config.model = pinnedWrong ? wrongModel : runnerSelectedModel
+  config.args = ['H', '--db', config.dbPath, '--request-cap-ms', '1000', '--ram-abort-gib', '4', '--backend', 'vulkan', '--models', 'fake-model']
+  storedZip(config.sourceZip, 'package.json', readFileSync(join(config.cwd, 'package.json')))
+  return { config, out, wrongRoot, modelRoot, runnerSelectedModel }
+}
+
 describe('measurement launcher gate (fake files and processes only)', () => {
+  it('Y2: rejects a manifest pinned to wrong-root when the runner resolver selects model-root', async () => {
+    const { config, out, runnerSelectedModel } = scenarioH(true)
+    expect(config.model).not.toBe(runnerSelectedModel)
+    let manifest: MeasurementManifest
+    try { manifest = await createManifest(config, out) }
+    catch (error) {
+      expect((error as Error).message).toMatch(/model|selection|path/i)
+      return // early create-time refusal is also a valid gate
+    }
+    await expect(verifyManifest(manifest)).rejects.toThrow(/model|selection|path/i)
+  })
+
+  it('Y3: rejects a tsconfig.json added after a valid scenario-H manifest', async () => {
+    const { config, out } = scenarioH()
+    const manifest = await createManifest(config, out)
+    await expect(verifyManifest(manifest)).resolves.toBeUndefined()
+    writeFileSync(join(config.cwd, 'tsconfig.json'), '{"compilerOptions":{"paths":{"@/*":["other/*"]}}}')
+    await expect(verifyManifest(manifest)).rejects.toThrow(/tsconfig|source|configuration|manifest|changed/i)
+  })
+
   it('W2: rejects a changed extracted source file that was not a listed manifest role', async () => {
     const { config, out } = fixture()
     const sourceDir = join(config.cwd, 'src', 'core', 'benchmark')

@@ -3,6 +3,7 @@ import { reconcileOwnedProcessScan, type ProcessIdentity, type ProcessTree } fro
 
 const root: ProcessIdentity = { pid: 81001, name: 'node.exe', startedAt: '2026-09-28T00:00:00.000Z' }
 const child: ProcessIdentity = { pid: 81002, parentPid: root.pid, name: 'node.exe', startedAt: '2026-09-28T00:00:01.000Z' }
+const grandchild: ProcessIdentity = { pid: 81003, parentPid: child.pid, name: 'node.exe', startedAt: '2026-09-28T00:00:20.000Z' }
 
 function fakeTree(found: ProcessIdentity[], live: Map<number, ProcessIdentity>) {
   const killed: number[] = []
@@ -54,6 +55,28 @@ describe('exported owned-process scan reconciliation (injected identities)', () 
       children, rootWasLive: false, ownedExitAt: Date.parse('2026-09-28T00:00:10.000Z') })
     expect(result.remaining).toEqual([])
     await result.reap()
+    expect(killed).toEqual([])
+    expect(live.get(foreign.pid)).toEqual(foreign)
+  })
+
+  it('Y1: reaps or reports a grandchild born after root exit through its captured parent identity', async () => {
+    const live = new Map([[child.pid, child], [grandchild.pid, grandchild]])
+    const { tree, killed } = fakeTree([grandchild], live)
+    const children = new Map([[child.pid, child]])
+    const error = await reconcileOwnedProcessScan({ tree, root: root.pid, rootIdentity: root,
+      children, rootWasLive: false, ownedExitAt: Date.parse('2026-09-28T00:00:10.000Z') })
+      .then(async (result) => { await result.reap(); return null }, (reason: unknown) => reason)
+    expect(error !== null || !live.has(grandchild.pid), 'owned grandchild cannot silently survive reconciliation').toBe(true)
+    if (error === null) expect(killed).toContain(grandchild.pid)
+  })
+
+  it('Y1: fails closed on a post-exit scan row with no captured parent-identity chain', async () => {
+    const foreign = { ...grandchild, parentPid: 99999 }
+    const live = new Map([[foreign.pid, foreign]])
+    const { tree, killed } = fakeTree([foreign], live)
+    await expect(reconcileOwnedProcessScan({ tree, root: root.pid, rootIdentity: root,
+      children: new Map(), rootWasLive: false, ownedExitAt: Date.parse('2026-09-28T00:00:10.000Z') }))
+      .rejects.toThrow(/unverified descendant|survivor|unknown ancestry/i)
     expect(killed).toEqual([])
     expect(live.get(foreign.pid)).toEqual(foreign)
   })
