@@ -208,3 +208,6 @@
 
 ## Fable — 2026-09-28 03:50 local
 - Heartbeat: pushed 08c37bd (S2 tests). In flight: S1 P1–P3 + scripts/prove-quality-rows.ts; S2 P1–P3 negatives; Astra harness review (w4q); S3 session 5 (then HOLD → proof job → xhigh with -lv 4 → HIP check). Fable active.
+
+## Fable — 2026-09-28 03:51 local
+- P1/P2 field contract fixed: row.renderProof {rowId, promptSha256, renderedSha256, counterfactualSha256, keys, status}, row.requestedSampling {…, seed}, row.promptSha256 = sha256 of the exact runPrompt string; replay tool stamps proof on a separate export payload with identity disclosure. S1 implementing, S2 testing.
