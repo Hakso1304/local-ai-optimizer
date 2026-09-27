@@ -31,9 +31,9 @@ import type { SystemProfile } from '../src/shared/types'
 import { validateHarnessLimits } from './harness-limits'
 import { existingDbPath } from './harness-paths'
 import { reserveSessionDump, type SessionDump } from './session-dump'
+import { MODELS_DIR, resolveSelectedModels } from './model-select'
 
 const scenario = (process.argv[2] ?? 'A').toUpperCase()
-const MODELS_DIR = 'D:\\llm-models'
 const flag = (k: string) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : undefined }
 const valuedFlags = new Set(['--workload', '--models', '--ladder', '--ram-abort-gib', '--required-ctx', '--gen-configs', '--quality-mode', '--max-per-model', '--db', '--request-cap-ms', '--pin', '--resume', '--reps', '--quality-seed', '--backend'])
 const switchFlags = new Set(['--heavy', '--no-quality', '--gen-search', '--no-warmup'])
@@ -206,11 +206,9 @@ async function run(dump: SessionDump<Record<string, unknown>>): Promise<void> {
   // Resume selects the stored session's models by id (= absolute path), never the --models default: a missing model
   // must fail here, not run an empty session that re-saves an empty recommendation over the stored one.
   const models: ModelMeta[] = []
-  for (const name of stored ? stored.request.modelIds : WANT) {
-    const info = infos.find((i) => (stored ? i.path === name : i.name === name))
-    if (!info) throw new Error(`${name} not found in ${MODELS_DIR}`)
+  for (const info of resolveSelectedModels(infos, stored ? stored.request.modelIds : WANT, !!stored)) {
     const m = toMeta(info)
-    if (typeof m === 'string') throw new Error(`${name}: ${m}`)
+    if (typeof m === 'string') throw new Error(`${info.name}: ${m}`)
     models.push(m)
   }
   console.log(`${el()} runtime ${det.version}; device ${dev?.id} ${dev?.name}; models ${models.map((m) => `${m.name} (${m.layers}L, ctx ${m.ctxTrain})`).join(', ')}`)

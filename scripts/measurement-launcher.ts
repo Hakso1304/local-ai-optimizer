@@ -3,15 +3,18 @@ import { createHash } from 'node:crypto'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { createReadStream, existsSync, lstatSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { freemem } from 'node:os'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { DatabaseSync } from 'node:sqlite'
+import * as ts from 'typescript'
 import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
 import type { ProcessTree } from '../src/core/runtimes/llamacpp'
 import { existingDbPath } from './harness-paths'
 import { validateHarnessLimits } from './harness-limits'
 import { trackOwnedProcess, type OwnedProcess } from './owned-process'
+import { findGgufModels } from '../src/core/models/gguf'
+import { MODELS_DIR, resolveSelectedModels } from './model-select'
 
 const GiB = 1024 ** 3
 const execFileAsync = promisify(execFile)
@@ -58,9 +61,28 @@ function sourcePaths(cwd: string): string[] {
     for (const name of readdirSync(absolute).sort()) walk(join(relative, name))
   }
   for (const root of ['src', 'scripts', 'package.json']) walk(root)
+  const configs = readdirSync(cwd).filter((name) => /^tsconfig(?:\.[^.]+)*\.json$/i.test(name) || /^tsx\.config\./i.test(name))
+  const seenConfigs = new Set<string>()
+  const configChain = (configPath: string) => {
+    const absolute = resolve(cwd, configPath)
+    const within = relative(cwd, absolute)
+    if (!within || within.startsWith('..') || isAbsolute(within) || !existsSync(absolute)) throw new Error(`tsx configuration extends outside snapshot: ${configPath}`)
+    if (seenConfigs.has(absolute)) return
+    seenConfigs.add(absolute)
+    walk(within)
+    if (!within.toLowerCase().endsWith('.json')) return
+    const parsed = ts.readConfigFile(absolute, ts.sys.readFile)
+    if (parsed.error) throw new Error(`tsx configuration cannot be parsed: ${configPath}`)
+    for (const ext of ([] as string[]).concat(parsed.config.extends ?? [])) {
+      if (typeof ext !== 'string' || !ext.startsWith('.')) throw new Error(`tsx configuration extends unpinned package: ${String(ext)}`)
+      const candidate = resolve(dirname(absolute), ext)
+      configChain(candidate.toLowerCase().endsWith('.json') ? candidate : `${candidate}.json`)
+    }
+  }
+  for (const config of configs) configChain(config)
   return out.sort()
 }
-async function sourceStatus(cwd: string, head: string): Promise<string[]> {
+export async function sourceStatus(cwd: string, head: string): Promise<string[]> {
   const files = sourcePaths(cwd)
   if (!existsSync(join(cwd, '.git'))) return files // git archive has no .git; the extracted tree is checked against its pinned ZIP below.
   const run = async (args: string[]) => (await execFileAsync('git', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 5_000 })).stdout.trim()
@@ -72,7 +94,7 @@ async function sourceStatus(cwd: string, head: string): Promise<string[]> {
   if (JSON.stringify(tracked) !== JSON.stringify(files)) throw new Error('source tree differs from git-tracked file list')
   return tracked
 }
-async function verifyArchiveSource(zipPath: string, cwd: string, names: string[]): Promise<void> {
+export async function verifyArchiveSource(zipPath: string, cwd: string, names: string[]): Promise<void> {
   const archive = await unzipper.Open.file(zipPath)
   const entries = archive.files.filter((e) => e.type === 'File' && (e.path === 'package.json' || e.path.startsWith('src/') || e.path.startsWith('scripts/')))
   const archiveNames = entries.map((e) => e.path).sort()
@@ -103,7 +125,7 @@ function checkCommand(manifest: MeasurementManifest): void {
   if (manifest.commandSha256 && commandHash(manifest.command) !== manifest.commandSha256) throw new Error('manifest command changed after creation')
   if (Object.keys(process.env).some((k) => k.toUpperCase() === 'GGML_CUDA_ENABLE_UNIFIED_MEMORY')) throw new Error('unified-memory environment variable is set')
 }
-function checkSelection(manifest: MeasurementManifest): void {
+async function checkSelection(manifest: MeasurementManifest): Promise<void> {
   const { args, cwd } = manifest.command
   if (args[0] !== 'H') return // fake fixtures and future non-session gates have no model selector.
   const count = (flagName: string) => args.filter((a) => a === flagName).length
@@ -117,7 +139,7 @@ function checkSelection(manifest: MeasurementManifest): void {
   const models = manifest.files.filter((f) => f.role === 'model' || f.role.startsWith('model:'))
   const resume = flag(args, '--resume')
   if (!requested.length && !resume) throw new Error('manifest model selection missing')
-  let selectedPaths = requested.map((name) => join(dirname(models[0]?.path ?? ''), name.toLowerCase().endsWith('.gguf') ? name : `${name}.gguf`))
+  let selectedNames = requested
   if (resume) {
     if (!/^\d+$/.test(resume)) throw new Error('manifest resume session ID invalid')
     const db = new DatabaseSync(manifest.command.dbPath, { readOnly: true })
@@ -125,9 +147,11 @@ function checkSelection(manifest: MeasurementManifest): void {
       const row = db.prepare('SELECT payload FROM benchmark_session WHERE id = ?').get(Number(resume)) as { payload: string } | undefined
       const payload = row ? JSON.parse(row.payload) as { request?: { modelIds?: unknown } } : null
       if (!Array.isArray(payload?.request?.modelIds) || !payload.request.modelIds.every((p) => typeof p === 'string')) throw new Error(`manifest resume session ${resume} has no model paths`)
-      selectedPaths = payload.request.modelIds as string[]
+      selectedNames = payload.request.modelIds as string[]
     } finally { db.close() }
   }
+  const infos = await findGgufModels([MODELS_DIR])
+  const selectedPaths = resolveSelectedModels(infos, selectedNames, !!resume).map((info) => info.path)
   if (selectedPaths.length !== models.length) throw new Error('manifest model count differs from command')
   for (let i = 0; i < selectedPaths.length; i++) {
     if (!models[i] || !samePath(models[i].path, selectedPaths[i])) throw new Error(`manifest model path differs from selected ${selectedPaths[i]}`)
@@ -171,7 +195,7 @@ export async function createManifest(config: ManifestConfig, out: string): Promi
     command, commandSha256: commandHash(command), sourceHead: config.snapshotHead,
     dependencyScope: 'node_modules lockfile only; installed file contents not individually pinned', files }
   checkCommand(manifest)
-  checkSelection(manifest)
+  await checkSelection(manifest)
   const headFile = join(cwd, 'HEAD.txt')
   if (readFileSync(headFile, 'utf8').trim() !== config.snapshotHead) throw new Error('snapshot HEAD.txt differs from manifest')
   writeFileSync(out, JSON.stringify(manifest, null, 2), { flag: 'wx' })
@@ -180,7 +204,7 @@ export async function createManifest(config: ManifestConfig, out: string): Promi
 export async function verifyManifest(manifest: MeasurementManifest, signal?: AbortSignal): Promise<void> {
   if (manifest.kind !== 'local-ai-optimizer/measurement-gate-v1' || !/^[0-9a-f]{40}$/i.test(manifest.snapshotHead)) throw new Error('invalid measurement manifest')
   checkCommand(manifest)
-  checkSelection(manifest)
+  await checkSelection(manifest)
   const map = fileMap(manifest)
   if (resolve(map.get('node')!.path).toLowerCase() !== resolve(process.execPath).toLowerCase()) throw new Error('Node executable differs from manifest')
   if (readFileSync(join(manifest.command.cwd, 'HEAD.txt'), 'utf8').trim() !== manifest.snapshotHead) throw new Error('snapshot HEAD changed')
