@@ -164,6 +164,18 @@ const g = (b: number | null) => (b == null ? null : +(b / GiB).toFixed(2))
 let experimentController: AbortController | null = null
 let activeOwnedChild: ChildProcess | null = null
 export const baseArgv = (ctx: number, extra: string[] = [], dev = 'Vulkan0') => ['-m', MODEL, '-c', String(ctx), '-ngl', '999', '-dev', dev, '-t', '8', '-b', '2048', '-ub', '512', '-fa', 'on', '-fit', 'off', '--parallel', '1', '-lm', 'none', '--cache-ram', '0', '-lv', '4', ...extra]
+export interface AbCaseSpec { label: string; exe: string; argv: string[]; promptTokens: number; idleMs: number }
+/** Exact standalone case argv. The A/B gate fingerprints this list before and after execution. */
+export function abCaseSpecs(mode: 'hip' | 'igpu'): AbCaseSpec[] {
+  if (mode === 'hip') return [32768, 65536].flatMap((ctx) => ([['Vulkan0', EXE], ['ROCm0', HIP_EXE]] as const).map(([dev, exe]) => ({
+    label: `${dev} f16 ${ctx / 1024}K, ${Math.round(0.558 * ctx)}-token prompt`, exe, argv: baseArgv(ctx, [], dev), promptTokens: Math.round(0.558 * ctx), idleMs: 120_000
+  })))
+  const common = ['-m', QWEN, '-c', '8192', '-t', '8', '-b', '2048', '-ub', '512', '-fa', 'on', '-lm', 'none', '-fit', 'off', '--parallel', '1', '--cache-ram', '0', '-lv', '4']
+  return [
+    { label: 'a Qwen3.8-27B 8K -ngl 49 Vulkan0, rest on CPU', exe: EXE, argv: [...common, '-ngl', '49', '-dev', 'Vulkan0'], promptTokens: 4572, idleMs: 120_000 },
+    { label: 'b Qwen3.8-27B 8K -ngl 999 Vulkan0,Vulkan1 -ts 49,16 (CPU layers on the iGPU)', exe: EXE, argv: [...common, '-ngl', '999', '-dev', 'Vulkan0,Vulkan1', '-ts', '49,16'], promptTokens: 4572, idleMs: 120_000 }
+  ]
+}
 
 /** Backend's own view (llama-server --list-devices): total/free MiB per device. */
 async function listDevices(exe = EXE, signal?: AbortSignal): Promise<string[]> {
@@ -440,9 +452,9 @@ async function hipAb() {
   const results = []
   try {
     if (hipDevices.some((l) => /ROCm0/.test(l))) {
-      for (const ctx of [32768, 65536]) for (const [exe, dev] of [[EXE, 'Vulkan0'], [HIP_EXE, 'ROCm0']]) {
-        await idle(120_000)
-        const row = await launch(`${dev} f16 ${ctx / 1024}K, ${Math.round(0.558 * ctx)}-token prompt`, baseArgv(ctx, [], dev), Math.round(0.558 * ctx), exe)
+      for (const spec of abCaseSpecs('hip')) {
+        await idle(spec.idleMs)
+        const row = await launch(spec.label, spec.argv, spec.promptTokens, spec.exe)
         results.push(row); assertCase(row)
       }
     }
@@ -455,15 +467,15 @@ async function hipAb() {
 async function igpuAb() {
   const devices = await listDevices(EXE, experimentController?.signal)
   console.log(`--list-devices: ${JSON.stringify(devices)}`)
-  const common = ['-m', QWEN, '-c', '8192', '-t', '8', '-b', '2048', '-ub', '512', '-fa', 'on', '-lm', 'none', '-fit', 'off', '--parallel', '1', '--cache-ram', '0', '-lv', '4']
+  const cases = abCaseSpecs('igpu')
   const results = []
   try {
     await idle(120_000)
-    const a = await launch('a Qwen3.8-27B 8K -ngl 49 Vulkan0, rest on CPU', [...common, '-ngl', '49', '-dev', 'Vulkan0'], 4572)
+    const a = await launch(cases[0].label, cases[0].argv, cases[0].promptTokens, cases[0].exe)
     results.push(a); assertCase(a)
     if (devices.some((l) => /Vulkan1/.test(l))) {
       await idle(120_000)
-      const b = await launch('b Qwen3.8-27B 8K -ngl 999 Vulkan0,Vulkan1 -ts 49,16 (CPU layers on the iGPU)', [...common, '-ngl', '999', '-dev', 'Vulkan0,Vulkan1', '-ts', '49,16'], 4572)
+      const b = await launch(cases[1].label, cases[1].argv, cases[1].promptTokens, cases[1].exe)
       results.push(b); assertCase(b)
     }
   } finally {
