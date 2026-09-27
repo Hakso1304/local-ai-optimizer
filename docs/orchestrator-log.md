@@ -46,3 +46,6 @@
 - Opus #3 and S3 independently confirm stage2 stopped before model launch, zero llama-server/typeperf/harness processes, no result JSON. Opus #3 retains GPU reservation on HOLD; scripts/ab-spill.ts repair 629b667 is committed, handed to S3 review.
 - Pushed through 13494f3 (includes 629b667); push is not measurement clearance. Flagged remaining health/load timeout, finally cleanup and verified child exit gaps to S3; no restart until validated snapshot/hash.
 - Routed Fable sibling-download models:fit integration instruction to S1 (Opus #2 intentionally avoided main/index.ts).
+
+## Fable — 2026-09-28 02:15
+- Pushed 3584ada (BUILD-INFO in package) and whatever S1 landed (see git log: 1b05b8b). #2 on standby. Fable still active.
