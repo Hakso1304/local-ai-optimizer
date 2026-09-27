@@ -17,6 +17,8 @@ export function BenchmarkPage({ live, preset, onDownload }: { live: LiveState; p
   const [maxCtx, setMaxCtx] = useState<number>(0) // 0 = no cap (candidate rules decide)
   const [quality, setQuality] = useState(true)
   const [heavy, setHeavy] = useState(false)
+  const [genSearch, setGenSearch] = useState(true)
+  const [qualityMode, setQualityMode] = useState<'thorough' | 'quick'>('thorough')
   const [reqCtx, setReqCtx] = useState(0) // 0 = Auto (workload default)
   const [minDec, setMinDec] = useState('') // blank = workload default
   const [fit, setFit] = useState<Record<string, string | null>>({})
@@ -37,7 +39,7 @@ export function BenchmarkPage({ live, preset, onDownload }: { live: LiveState; p
     if (!workload) return
     setMsg(null)
     const r = await window.api.startBench({
-      workload, modelIds: [...picked], runQuality: quality, heavyMode: heavy, ...(reqCtx ? { requiredContext: reqCtx } : {}), ...(minDec.trim() ? { minDecodeTps: Number(minDec) } : {}), ...(maxCtx ? { ladder: LADDER.filter((c) => c <= maxCtx) } : {})
+      workload, modelIds: [...picked], runQuality: quality, heavyMode: heavy, genSearch, qualityMode, ...(reqCtx ? { requiredContext: reqCtx } : {}), ...(minDec.trim() ? { minDecodeTps: Number(minDec) } : {}), ...(maxCtx ? { ladder: LADDER.filter((c) => c <= maxCtx) } : {})
     })
     if (!r.ok) setMsg(r.error)
   }
@@ -83,6 +85,14 @@ export function BenchmarkPage({ live, preset, onDownload }: { live: LiveState; p
         <label title="Models whose full GPU offload does not fit get a partial-offload ladder (slow, flagged degraded)">
           <input type="checkbox" checked={heavy} onChange={(e) => setHeavy(e.target.checked)} disabled={running} /> Include heavy models (partial GPU offload, degraded speed)
         </label>
+        <label title="For thinking-capable models: also run the quality suite with thinking on (and each reasoning-effort level the template offers), using the model card's sampling when known">
+          <input type="checkbox" checked={genSearch} onChange={(e) => setGenSearch(e.target.checked)} disabled={running || !quality} /> Search generation settings (thinking / effort / temperature)
+        </label>
+        <label title="Thorough: 3 seeded samples per test for sampled (T > 0) settings; Quick: 1">Quality{' '}
+          <select value={qualityMode} onChange={(e) => setQualityMode(e.target.value as 'thorough' | 'quick')} disabled={running || !quality}>
+            <option value="thorough">thorough</option><option value="quick">quick</option>
+          </select>
+        </label>
         <button onClick={() => void start()} disabled={running || !picked.size}>Start</button>
         <button onClick={() => void pause()} disabled={!running} title="Stops after the current step; resume from Results">Pause</button>
         <button onClick={() => void cancel()} disabled={!running}>Cancel</button>
@@ -99,7 +109,11 @@ export function BenchmarkPage({ live, preset, onDownload }: { live: LiveState; p
           {models?.map((m) => (
             <tr key={m.id} className="click" onClick={() => !running && !m.meta?.incomplete && toggle(m.id)}>
               <td><input type="checkbox" checked={picked.has(m.id)} readOnly disabled={running} /></td>
-              <td>{m.name}{fit[m.id] && <span className="pill warn-pill" title={[freeTip, fit[m.id]].filter(Boolean).join(' — ')}>{/incomplete/.test(fit[m.id]!) ? 'incomplete download' : /does not fit/.test(fit[m.id]!) ? heavyLabel : /runtime not installed/.test(fit[m.id]!) ? 'no runtime' : 'no config'}</span>}</td>
+              <td>{m.name}{m.meta?.genKnobs.supportsThinking && (
+                  <span className="pill" title={`template kwargs: ${m.meta.templateKwNames.join(', ') || '—'}${m.meta.genKnobs.recommended ? ` · model card: ${JSON.stringify(m.meta.genKnobs.recommended)}` : ''}`}>
+                    thinking{m.meta.genKnobs.effortValues ? `: ${m.meta.genKnobs.effortValues.join('/')}` : ''}{genSearch ? ' — searched' : ''}
+                  </span>
+                )}{fit[m.id] && <span className="pill warn-pill" title={[freeTip, fit[m.id]].filter(Boolean).join(' — ')}>{/incomplete/.test(fit[m.id]!) ? 'incomplete download' : /does not fit/.test(fit[m.id]!) ? heavyLabel : /runtime not installed/.test(fit[m.id]!) ? 'no runtime' : 'no config'}</span>}</td>
               <td className="muted">{m.runtime === 'llamacpp' ? 'folder' : m.runtime === 'lmstudio' ? 'LM Studio' : 'Ollama'}</td>
               <td>{v(m.meta?.parameterCount.value, (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : `${(n / 1e6).toFixed(0)}M`))}</td>
               <td>{m.meta?.quantName ?? '—'}</td>

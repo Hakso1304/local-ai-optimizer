@@ -10,6 +10,7 @@ const api: RendererApi & HubApi = {
   detectRuntimes: () => ipcRenderer.invoke('runtimes:detect'),
   listModels: () => ipcRenderer.invoke('models:list'),
   modelFit: (w) => ipcRenderer.invoke('models:fit', w),
+  linkModelRepo: (path, repoId) => ipcRenderer.invoke('models:linkRepo', path, repoId),
   benchSmoke: (modelPath) => ipcRenderer.invoke('bench:smoke', modelPath),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setWorkload: (w) => ipcRenderer.invoke('settings:setWorkload', w),

@@ -36,6 +36,25 @@ export function pickVulkanAsset(releases: GhRelease[]): { tag: string; name: str
 }
 
 /** Server came up with different settings than requested (maps to FailureKind 'config_drift'). */
+/** Tracks whether streamed text is inside a thinking region. A chunk counts as reasoning when the region was open
+ *  before it arrived (the tag chunks themselves are the boundary). Qwen templates may open <think> in the prompt. */
+export function thinkCounter(prompt: string) {
+  const OPEN = /<think>|<\|channel>thought/g, CLOSE = /<\/think>|<channel\|>/g
+  const openedInPrompt = /<think>\s*$/.test(prompt)
+  const c = { inside: openedInPrompt, seen: openedInPrompt, tokens: 0, tail: '',
+    feed(s: string) {
+      const t = c.tail + s
+      // last tag in the chunk decides the state
+      let last = -1, open = c.inside
+      for (const m of t.matchAll(OPEN)) if (m.index! > last) { last = m.index!; open = true }
+      for (const m of t.matchAll(CLOSE)) if (m.index! > last) { last = m.index!; open = false }
+      if (last >= 0) c.seen = true
+      c.inside = open
+      c.tail = t.slice(-16) // tags can be split across chunks
+    } }
+  return c
+}
+
 /** Fixed date for chat templates (determinism across days). */
 export const TEMPLATE_DATE = '01 Jan 2025'
 
@@ -346,6 +365,7 @@ export class LlamaCppBackend implements InferenceBackend {
     const t0 = performance.now()
     let ttftMs: number | null = null
     let streamed = 0
+    const think = thinkCounter(req.prompt)
     let text = ''
     let final: CompletionChunk | null = null
     let error: string | null = null
@@ -357,6 +377,9 @@ export class LlamaCppBackend implements InferenceBackend {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           prompt: req.prompt, n_predict: req.maxTokens, temperature: req.temperature ?? 0, seed: req.seed ?? 42,
+          ...(req.topP !== undefined ? { top_p: req.topP } : {}),
+          ...(req.topK !== undefined ? { top_k: req.topK } : {}),
+          ...(req.minP !== undefined ? { min_p: req.minP } : {}),
           stream: true, cache_prompt: false
         }),
         signal: ctl.signal
@@ -371,6 +394,8 @@ export class LlamaCppBackend implements InferenceBackend {
           if (ev.error) throw new Error(typeof ev.error === 'string' ? ev.error : (ev.error.message ?? JSON.stringify(ev.error)))
           if (ev.content) {
             streamed++
+            if (think.inside) think.tokens++
+            think.feed(ev.content)
             ttftMs ??= performance.now() - t0
             text += ev.content
             onToken?.(ev.content)
@@ -390,7 +415,7 @@ export class LlamaCppBackend implements InferenceBackend {
     const f = final as CompletionChunk | null
     const needPrompt = !error && f !== null && f.timings?.prompt_n == null && f.tokens_evaluated == null
     const promptTokens = needPrompt ? await this.tokenize(req.prompt).catch(() => null) : null
-    return toPromptResult(final, { ttftMs, totalMs, text, timedOut, error, streamedTokens: streamed, promptTokens })
+    return { ...toPromptResult(final, { ttftMs, totalMs, text, timedOut, error, streamedTokens: streamed, promptTokens }), streamedTokens: streamed, reasoningTokens: think.seen ? think.tokens : null }
   }
 
   /** One short discarded request so the measured run doesn't pay first-dispatch costs. Pass the measured

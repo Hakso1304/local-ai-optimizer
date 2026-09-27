@@ -19,6 +19,10 @@ export interface PromptRequest {
   prompt: string
   maxTokens: number
   temperature?: number
+  /** Sampling (camelCase here → top_p / top_k / min_p in /completion); absent = llama-server defaults. */
+  topP?: number
+  topK?: number
+  minP?: number
   seed?: number
   timeoutMs?: number
 }

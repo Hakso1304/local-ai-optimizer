@@ -4,6 +4,7 @@ import type { WorkloadId } from '../../shared/bench-types'
 import type { ComputedRecommendation, SessionCandidate, SessionDetail, SessionSummary } from '../../shared/types'
 import type { TelemetrySample } from '../../shared/bench-events'
 import { WORKLOADS } from '../../core/scoring/workloads'
+import { genLabel } from '../../core/benchmark/gen'
 import { ExportMenu } from './ExportMenu'
 import { LineChart, type Band } from './LineChart'
 import { ParetoChart } from './ParetoChart'
@@ -23,6 +24,34 @@ function peak(c: SessionCandidate, k: 'peakVramBytes' | 'peakRamBytes'): Metric 
 
 const refRun = (c: SessionCandidate) => c.runs.find((r) => r.ctx === c.score?.referenceCtx)
 const comp = (c: SessionCandidate, id: string) => c.score?.breakdown.find((b) => b.component === id)
+
+/** Per model: every generation config the quality suite ran with (one row each), measured from the stored rows. */
+function GenTable({ d, chosen, tag }: { d: SessionDetail; chosen: string | null; tag: string }) {
+  const models = [...new Map(d.candidates.filter((c) => (c.genQuality?.length ?? 0) > 1).map((c) => [c.model.id, c])).values()]
+  if (!models.length) return null
+  return (
+    <>
+      <h2>Generation settings{tag}</h2>
+      {models.map((c) => (
+        <table key={c.model.id}>
+          <thead><tr><th>{c.model.name}</th><th>Quality</th><th>Answer t/s (effective)</th><th>Answer latency</th><th>Reasoning tokens</th><th>Samples</th></tr></thead>
+          <tbody>
+            {c.genQuality!.map((g) => (
+              <tr key={g.gen.id}>
+                <td>{genLabel(g.gen)}{g.gen.id === chosen && <span className="pill">chosen</span>}{g.gen.source === 'model-card' && <span className="pill" title="sampling from the model's generation_config.json">model card</span>}</td>
+                <td>{g.qualityScore != null ? g.qualityScore.toFixed(0) : '—'} <Prov kind="measured" /></td>
+                <td><M m={g.effectiveTps} /></td>
+                <td><M m={g.effectiveAnswerLatencyMs} fmt={(v) => `${(v / 1000).toFixed(1)} s`} /></td>
+                <td><M m={g.reasoningTokens} fmt={(v) => num(v, 0)} /></td>
+                <td>{g.samples}{g.stochastic && <span className="muted" title="T > 0: seeded, not bit-identical across builds/hardware"> (sampled)</span>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ))}
+    </>
+  )
+}
 
 function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) => void }) {
   const rec = d.recommendation
@@ -66,7 +95,7 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
                 <td><CtxPick recommended={c.score?.recommendedCtx} scored={c.score?.referenceCtx} /></td>
                 {req != null && <td>{meets(c) ? <span className="pill">met</span> : <span className="pill warn-pill" title={`practical ceiling ${c.cliff.practicalContextCeiling.value != null ? fmtCtx(c.cliff.practicalContextCeiling.value) : 'none'}`}>not met</span>}</td>}
                 <td><M m={c.cliff.practicalContextCeiling} fmt={fmtCtx} /></td>
-                <td>{q ? <M m={{ ...q.input, value: q.score }} fmt={(v) => v.toFixed(0)} /> : '—'}</td>
+                <td>{q ? <M m={{ ...q.input, value: q.score }} fmt={(v) => { const ci = (q as { ci95?: number; n?: number }); return ci.ci95 != null ? `${v.toFixed(0)} ± ${ci.ci95.toFixed(0)}${ci.n != null ? ` (n ${ci.n})` : ''}` : v.toFixed(0) }} /> : '—'}</td>
                 <td><M m={r?.decodeTps} /> {r && <span className="muted">@{fmtCtx(r.ctx)}</span>}</td>
                 <td><M m={r?.prefillTps} fmt={(v) => num(v, 0)} /></td>
                 <td><M m={peak(c, 'peakVramBytes')} fmt={gib} /></td>
@@ -84,6 +113,7 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
       <h2>Quality vs speed (Pareto){tag}</h2>
       <ParetoChart candidates={d.candidates.filter((c) => slo(c).ok)} />
 
+      <GenTable d={d} chosen={rec?.best?.gen?.config.id ?? null} tag={tag} />
       <h2>Context scaling{tag}</h2>
       <div className="charts">
         <div><h3>Prefill t/s</h3><LineChart xs={xs} bands={bands} yLabel="prefill t/s" fmtY={(v) => num(v, 0)}
@@ -119,7 +149,8 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
       <h2>Recommendation{tag}</h2>
       {rec ? (
         <div className="card">
-          <p><b>{rec.best ? name(rec.best.configId) : 'No recommendation'}</b>{rec.best?.fallback && <span className="pill warn-pill">{rec.best.fallback}</span>}{rec.best && <> — {rec.best.score.total.toFixed(1)}/100, context <CtxPick recommended={rec.best.score.recommendedCtx} scored={rec.best.score.referenceCtx} /></>}</p>
+          <p><b>{rec.best ? name(rec.best.configId) : 'No recommendation'}</b>{rec.best?.fallback && <span className="pill warn-pill">{rec.best.fallback}</span>}{rec.provisional && <span className="pill warn-pill" title="Some candidate's quality is an estimated prior (no quality run): the ranking may change once it is measured">provisional</span>}{rec.best && <> — {rec.best.score.total.toFixed(1)}/100, context <CtxPick recommended={rec.best.score.recommendedCtx} scored={rec.best.score.referenceCtx} /></>}</p>
+          {rec.best?.gen && <p>Generation: <b>{genLabel(rec.best.gen.config)}</b> <span className="muted">— {rec.best.gen.reason}</span></p>}
           {!!rec.whyNot?.length && (
             <>
               <h3>Why not the others</h3>

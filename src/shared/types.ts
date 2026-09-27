@@ -1,5 +1,5 @@
 // Types shared between main, preload and renderer. No runtime code here.
-import type { BenchmarkRunResult, CandidateConfig, CliffReport, ModelMeta, QualityResult, Recommendation, WorkloadId, WorkloadProfile, WorkloadScore } from './bench-types'
+import type { BenchmarkRunResult, CandidateConfig, CliffReport, GenKnobs, GenQuality, ModelMeta, QualityResult, Recommendation, WorkloadId, WorkloadProfile, WorkloadScore } from './bench-types'
 import type { SessionEvent, SessionRequest, TelemetrySample } from './bench-events'
 
 export type Status = 'available' | 'unavailable' | 'unsupported'
@@ -91,6 +91,10 @@ export interface GgufMetadata {
   slidingWindowPattern: boolean[] | null
   keyLengthSwa: number | null
   valueLengthSwa: number | null
+  /** From tokenizer.chat_template (+ recommended sampling from a cached model card). */
+  genKnobs: GenKnobs
+  /** Template kwargs concerning thinking/effort/budget, exactly as named in the template. */
+  templateKwNames: string[]
   /** MoE: <arch>.expert_count / expert_used_count (null for dense models). */
   expertCount: number | null
   expertUsedCount: number | null
@@ -128,6 +132,10 @@ export interface PromptResult {
   stopType: string | null
   timedOut: boolean
   error: string | null
+  /** Content chunks streamed (≈ tokens: llama-server streams one token per chunk). */
+  streamedTokens?: number
+  /** Streamed tokens inside a thinking region (<think>…</think>, Gemma's <|channel>thought…<channel|>); null = none seen. */
+  reasoningTokens?: number | null
 }
 
 /** loadTimeMs is wall clock spawn -> /health ok (measured). `declared` is parsed from the
@@ -206,6 +214,8 @@ export interface RendererApi {
   listModels(): Promise<ModelInfo[]>
   /** modelId → null (fits in normal mode for this workload) or the reason it has no normal-mode candidate. */
   modelFit(w: WorkloadId): Promise<ModelFit>
+  /** Link a local model to a Hugging Face repo and fetch its sampling defaults (generation_config.json). */
+  linkModelRepo(path: string, repoId: string): Promise<{ ok: boolean; generation?: unknown; error?: string }>
   benchSmoke(modelPath: string): Promise<SmokeResult>
 }
 
@@ -256,6 +266,8 @@ export interface SessionCandidate {
   cliff: CliffReport
   score: WorkloadScore | null
   quality: QualityResult[]
+  /** One entry per generation config the quality suite ran with (from the stored rows), with its quality score. */
+  genQuality?: (GenQuality & { qualityScore: number | null })[]
 }
 
 export interface SessionDetail {

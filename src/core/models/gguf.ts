@@ -1,7 +1,8 @@
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { open, type FileHandle } from 'node:fs/promises'
 import { basename, join } from 'node:path'
-import type { ModelMeta } from '../../shared/bench-types'
+import type { GenKnobs, ModelMeta } from '../../shared/bench-types'
+import { readSidecar } from '../hub/modelcard'
 import type { GgufMetadata, ModelInfo } from '../../shared/types'
 
 // GGUF v2/v3 header reader (docs/DESIGN.md §2.6). Streams through the file with a 1 MiB window:
@@ -191,6 +192,7 @@ export async function readGgufMetadata(path: string): Promise<GgufMetadata> {
       expertCount: num(a('expert_count')),
       expertUsedCount: num(a('expert_used_count')),
       supportsThinking: /enable_thinking/.test(str(kv.get('tokenizer.chat_template')) ?? ''),
+      ...templateKnobs(str(kv.get('tokenizer.chat_template')) ?? ''),
       headDim: { value: headDim, kind: keyLen != null ? 'declared' : 'estimated' },
       estimated: {
         kvCacheBytesPerToken: blockCount && headCountKv && headDim && dv
@@ -213,6 +215,40 @@ const GGML_BLOCK: Record<number, [number, number]> = {
 function tensorBytes(type: number, elements: number): number {
   const b = GGML_BLOCK[type]
   return b ? Math.ceil(elements / b[0]) * b[1] : 0
+}
+
+const EFFORT_ORDER = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
+/** What a chat template lets the caller switch (never stores the template). kwNames = template variables the caller
+ *  may pass (used as `x is defined` / `x | default(…)`) that concern thinking, effort or budgets. effortValues = the
+ *  string literals the effort variable (or a variable derived from it) is compared with, ascending. */
+export function templateKnobs(tmpl: string): { genKnobs: GenKnobs; templateKwNames: string[] } {
+  const names = new Set<string>()
+  for (const m of tmpl.matchAll(/\b([a-z_][a-z0-9_]*)\s+is\s+(?:not\s+)?(?:un)?defined\b|\b([a-z_][a-z0-9_]*)\s*\|\s*default\s*\(/gi)) {
+    const n = m[1] ?? m[2]
+    if (/think|effort|budget|reason/i.test(n) && !/^(resolved_|ns\.)/.test(n)) names.add(n)
+  }
+  const kwNames = [...names].sort()
+  const effortKw = kwNames.find((n) => /effort/i.test(n))
+  const values = new Set<string>()
+  if (effortKw) {
+    // Literals compared with any variable whose name contains "effort" (e.g. resolved_reasoning_effort == 'low',
+    // … not in ('xhigh', 'medium', 'low')).
+    for (const m of tmpl.matchAll(/\w*effort\w*\s*(?:==|!=|(?:not\s+)?in)\s*(\([^)]*\)|'[^']*'|"[^"]*")/gi)) {
+      for (const lit of m[1].matchAll(/'([^']+)'|"([^"]+)"/g)) values.add((lit[1] ?? lit[2]).toLowerCase())
+    }
+  }
+  const rank = (v: string) => { const i = EFFORT_ORDER.indexOf(v); return i < 0 ? EFFORT_ORDER.length : i }
+  const effortValues = [...values].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
+  const thinkingBudgetKw = kwNames.find((n) => /budget/i.test(n))
+  return {
+    templateKwNames: kwNames,
+    genKnobs: {
+      supportsThinking: /enable_thinking/.test(tmpl),
+      ...(effortKw && effortValues.length ? { effortKw, effortValues } : {}),
+      ...(thinkingBudgetKw ? { thinkingBudgetKw } : {})
+    }
+  }
 }
 
 /** f16 K+V bytes for one token (below any sliding window), layer by layer: recurrent layers (hybrid archs) hold no
@@ -251,7 +287,9 @@ export async function findGgufModels(dirs: string[]): Promise<ModelInfo[]> {
     [...paths].map(async (path): Promise<ModelInfo> => {
       const base = { id: path, name: basename(path, '.gguf'), path, sizeBytes: statSync(path).size, runtime: 'llamacpp' as const }
       try {
-        return { ...base, meta: await readGgufMetadata(path) }
+        const meta = await readGgufMetadata(path)
+        const card = readSidecar(path)?.generation // cached generation_config.json (fetched lazily elsewhere)
+        return { ...base, meta: card ? { ...meta, genKnobs: { ...meta.genKnobs, recommended: card } } : meta }
       } catch (e) {
         return { ...base, meta: null, metaError: (e as Error).message }
       }
@@ -273,7 +311,8 @@ export function toModelMeta(info: ModelInfo): { meta: ModelMeta } | { meta: null
       headsKv: g.headCountKv ?? g.headCount!, keyLength: g.keyLength, valueLength: g.valueLength, nVocab: g.nVocab!, slidingWindow: g.slidingWindow,
       headsKvPerLayer: g.headCountKvPerLayer, fullAttentionInterval: g.fullAttentionInterval, slidingWindowPattern: g.slidingWindowPattern,
       keyLengthSwa: g.keyLengthSwa, valueLengthSwa: g.valueLengthSwa, supportsThinking: g.supportsThinking,
-      expertCount: g.expertCount, expertUsedCount: g.expertUsedCount
+      expertCount: g.expertCount, expertUsedCount: g.expertUsedCount,
+      genKnobs: g.genKnobs
     }
   }
 }

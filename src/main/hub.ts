@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path'
 import { downloadFile, listGgufFiles, searchModels, whoami, type HfGgufFile } from '../core/hub/hf'
 import type { HubAccount, HubResult } from '../shared/hub-types'
 import { diskCheck, isAllowedDest, progressInfo, resolvedProbe, userMessage } from './hub-logic'
+import { writeSidecar } from '../core/hub/modelcard'
 
 export interface HubDeps { userDataDir: string; modelDirs: () => string[] }
 
@@ -102,6 +103,8 @@ export function registerHubIpc(ipcMain: IpcMain, getWindow: () => BrowserWindow 
           repoId, path, destDir, token: t, sha256: file.sha256, sizeBytes: file.sizeBytes, signal: op.ctl.signal,
           onProgress: (bytes, total, bps) => getWindow()?.webContents.send('hub:progress', progressInfo(repoId, path, bytes, total, bps))
         })
+        // Remember where the file came from, so the model card's sampling defaults can be fetched later.
+        try { writeSidecar(r.filePath, { repoId, revision: 'main' }) } catch { /* read-only dir: no model-card defaults */ }
         return { ok: true, filePath: r.filePath, sha256Verified: r.sha256Verified }
       } catch (e) {
         return fail(e)

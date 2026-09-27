@@ -18,6 +18,14 @@ export function ModelsPage() {
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [smoke, setSmoke] = useState<{ model: string; r: SmokeResult } | null>(null)
+  // "Link HF repo": fetch the model card's sampling defaults (generation_config.json) for a local file.
+  const [linking, setLinking] = useState<{ id: string; repo: string; msg?: string } | null>(null)
+  const link = async (m: ModelInfo) => {
+    if (!linking?.repo.trim()) return
+    const r = await window.api.linkModelRepo(m.path, linking.repo.trim())
+    setLinking({ ...linking, msg: r.ok ? (r.generation ? `model card: ${JSON.stringify(r.generation)}` : 'linked; the repo has no generation_config.json') : r.error })
+    if (r.ok) load()
+  }
 
   const load = () => { window.api.listModels().then(setModels, (e: Error) => setErr(e.message)) }
   useEffect(load, [])
@@ -55,7 +63,20 @@ export function ModelsPage() {
               )}
               <td>{gib(m.sizeBytes)}</td>
               <td className="muted">{m.path}</td>
-              <td className="bar"><button disabled={busy !== null} onClick={() => run(m)}>{busy === m.id ? 'Running…' : 'Smoke test'}</button></td>
+              <td className="bar">
+                <button disabled={busy !== null} onClick={() => run(m)}>{busy === m.id ? 'Running…' : 'Smoke test'}</button>
+                {m.runtime === 'llamacpp' && (linking?.id === m.id ? (
+                  <>
+                    <input value={linking.repo} placeholder="owner/name (base model repo)" style={{ width: 220 }} onChange={(e) => setLinking({ id: m.id, repo: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') void link(m) }} />
+                    <button onClick={() => void link(m)} disabled={!linking.repo.trim()}>Link</button>
+                    {linking.msg && <span className="muted">{linking.msg}</span>}
+                  </>
+                ) : (
+                  <button title={m.meta?.genKnobs.recommended ? `model card: ${JSON.stringify(m.meta.genKnobs.recommended)}` : 'Link a Hugging Face repo to use its recommended sampling'} onClick={() => setLinking({ id: m.id, repo: '' })}>
+                    {m.meta?.genKnobs.recommended ? 'HF repo ✓' : 'HF repo'}
+                  </button>
+                ))}
+              </td>
             </tr>
           ))}
           {models?.length === 0 && <tr><td colSpan={10} className="muted">No .gguf files in the configured model directories.</td></tr>}

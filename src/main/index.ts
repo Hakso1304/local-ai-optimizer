@@ -16,6 +16,7 @@ import { val } from '../core/scoring/cliff'
 import { runSession, type SessionStorage } from '../core/benchmark/session'
 import { generateCandidates, machineFromProfile, rulesForRequest } from '../core/benchmark/candidates'
 import { findGgufModels, toModelMeta } from '../core/models/gguf'
+import { fetchGenerationConfig, readSidecar, writeSidecar } from '../core/hub/modelcard'
 import { defaultLmStudioDirs, defaultOllamaRoot, listOllamaModels, toModelInfo as toOllamaModelInfo } from '../core/runtimes/ollama/models'
 import { readVramInUse, startSampler, stopAllSamplers, withNvidia } from '../core/telemetry/sampler'
 import { probeNvidiaSmi, startNvidiaSampler, type NvidiaProbe } from '../core/telemetry/nvidia'
@@ -69,6 +70,27 @@ async function listAllModels(): Promise<ModelInfo[]> {
   const seen = new Set<string>()
   return [...folder, ...lms, ...ollama].filter((m) => (seen.has(m.path.toLowerCase()) ? false : (seen.add(m.path.toLowerCase()), true)))
 }
+/** Fetch + cache one model card (5 s timeout inside). Records the error instead of retrying forever. */
+async function fetchCard(path: string, repoId: string): Promise<{ generation?: unknown; error?: string }> {
+  try {
+    const generation = await fetchGenerationConfig(repoId)
+    writeSidecar(path, { generation: generation ?? undefined, fetchedAt: new Date().toISOString(), fetchError: generation ? undefined : 'repository has no generation_config.json' })
+    return { generation }
+  } catch (e) {
+    writeSidecar(path, { fetchedAt: new Date().toISOString(), fetchError: (e as Error).message })
+    return { error: (e as Error).message }
+  }
+}
+let cardRefresh: Promise<void> | null = null
+/** Folder models with a known repo and no fetch attempt yet: fetch their model cards one by one in the background. */
+function refreshModelCards(ms: ModelInfo[]): void {
+  if (cardRefresh) return
+  const dirs = modelDirs()
+  const todo = ms.filter((m) => m.runtime === 'llamacpp' && dirs.some((d) => insideSomeRoot(m.path, [d])) && (() => { const s = readSidecar(m.path); return !!s?.repoId && !s.fetchedAt })())
+  if (!todo.length) return
+  cardRefresh = (async () => { for (const m of todo) await fetchCard(m.path, readSidecar(m.path)!.repoId!) })().finally(() => { cardRefresh = null })
+}
+
 /** Roots a benchmark may load a model from (validation). */
 const modelRoots = () => [...modelDirs(), ...defaultLmStudioDirs(), join(defaultOllamaRoot(), 'blobs')]
 
@@ -93,7 +115,19 @@ ipcMain.handle('system:scan', async () => {
   const cuda = nv.available && nv.cudaVersion ? `${nv.cudaVersion.major}.${nv.cudaVersion.minor}` : null
   return { ...profile, runtimes, nvidiaSmi: { available: nv.available, reason: nv.available ? null : nv.reason, cudaVersion: cuda } }
 })
-ipcMain.handle('models:list', () => listAllModels())
+ipcMain.handle('models:list', async () => {
+  const ms = await listAllModels()
+  refreshModelCards(ms) // background; results show up on the next listing
+  return ms
+})
+/** Attach a Hugging Face repo to a local model file (folder models only) and fetch its generation_config.json now. */
+ipcMain.handle('models:linkRepo', async (_e, path: unknown, repoId: unknown): Promise<{ ok: boolean; generation?: unknown; error?: string }> => {
+  if (typeof path !== 'string' || !existsSync(path) || !modelDirs().some((d) => insideSomeRoot(path, [d]))) return { ok: false, error: 'model file not in a configured model folder' }
+  if (typeof repoId !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(repoId.trim())) return { ok: false, error: 'repository id must look like owner/name' }
+  writeSidecar(path, { repoId: repoId.trim(), revision: 'main', generation: undefined, fetchedAt: undefined, fetchError: undefined })
+  const r = await fetchCard(path, repoId.trim())
+  return r.error ? { ok: false, error: r.error } : { ok: true, generation: r.generation ?? null }
+})
 /** Per model: null if normal mode yields candidates for this workload, else the planner's reason (e.g. "full GPU
  *  offload does not fit — enable heavy-model mode"). Same generateCandidates call as a real session. */
 ipcMain.handle('models:fit', async (_e, w: WorkloadId): Promise<ModelFit> => {

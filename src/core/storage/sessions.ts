@@ -2,14 +2,15 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import type {
-  BenchmarkRunResult, CandidateConfig, CandidateInput, FailureKind, Metric, ModelMeta, QualityResult, Recommendation, RunStatus, WorkloadId
+  BenchmarkRunResult, CandidateConfig, CandidateInput, FailureKind, GenQuality, Metric, ModelMeta, QualityResult, Recommendation, RunStatus, WorkloadId
 } from '../../shared/bench-types'
 import type { SessionDetail, SessionPayload, SessionSummary } from '../../shared/types'
 import type { SessionRequest } from '../../shared/bench-events'
 import type { RunDetail, SessionStorage } from '../benchmark/session'
 import type { TelemetrySample } from '../telemetry/sampler'
 import { insertTelemetrySamples } from './db'
-import { defaultTestSet } from '../quality'
+import { defaultTestSet, qualityScore } from '../quality'
+import { BASELINE_GEN, genConfigsFor, summarizeGen, type GenRow } from '../benchmark/gen'
 import { detectCliffs } from '../scoring/cliff'
 import { recommend } from '../scoring/recommend'
 
@@ -24,6 +25,20 @@ export function saveSession(db: DatabaseSync, payload: SessionPayload, status: s
 export function setSessionStatus(db: DatabaseSync, id: number, status: string, error?: string): void {
   if (error === undefined) db.prepare('UPDATE benchmark_session SET status = ? WHERE id = ?').run(status, id)
   else db.prepare("UPDATE benchmark_session SET status = ?, payload = json_set(payload, '$.error', ?) WHERE id = ?").run(status, error, id)
+}
+
+/** Stored quality rows (tagged genId/sample) → one GenQuality per generation config. GenConfig ids are deterministic
+ *  (genConfigsFor(model, request)), so the configs are rebuilt rather than stored; unknown ids fall back to a
+ *  minimal config. Rows without genId are the baseline ('off'). */
+export function genQualityOf(model: ModelMeta, request: SessionRequest | null, rows: GenRow[]): (GenQuality & { qualityScore: number | null })[] {
+  const known = new Map([BASELINE_GEN, ...genConfigsFor(model, request ?? {})].map((g) => [g.id, g] as const))
+  const byGen = new Map<string, GenRow[]>()
+  for (const r of rows) { const id = r.genId ?? BASELINE_GEN.id; byGen.set(id, [...(byGen.get(id) ?? []), r]) }
+  return [...byGen].map(([id, rs]) => {
+    const gen = known.get(id) ?? { id, thinking: id !== BASELINE_GEN.id, temperature: 0, source: 'default' as const }
+    const samples = Math.max(1, ...rs.map((r) => r.sample ?? 1))
+    return { ...summarizeGen(gen, rs, samples), qualityScore: qualityScore(rs) }
+  })
 }
 
 /** Latest row per (configId, ctx): a retry/rerun inserts a new row that supersedes the old one. */
@@ -110,7 +125,8 @@ export function getSession(db: DatabaseSync, id: number): SessionDetail | null {
         config, model, runs: mine.map((r) => r.run), runIds: mine.map((r) => r.rowId),
         cliff: detectCliffs(mine.map((r) => r.run), p.vramBytes),
         score: recommendation?.ranked.find((s) => s.configId === config.id) ?? null,
-        quality: quality.filter((q) => q.model_id === model.id).map((q) => json<QualityResult>(q.payload))
+        quality: quality.filter((q) => q.model_id === model.id).map((q) => json<QualityResult>(q.payload)),
+        genQuality: genQualityOf(model, p.request ?? null, quality.filter((q) => q.model_id === model.id).map((q) => json<GenRow>(q.payload)))
       }
     })
   }
@@ -124,7 +140,12 @@ export function sessionInputs(db: DatabaseSync, id: number): { inputs: Candidate
   if (!d || !row) return null
   const p = json<SessionPayload>(row.payload)
   return {
-    inputs: d.candidates.map((c) => ({ config: c.config, model: c.model, runs: c.runs, quality: c.quality })),
+    // Baseline rows feed `quality`; every gen config (baseline included) feeds genQuality, like the runner does.
+    inputs: d.candidates.map((c) => ({
+      config: c.config, model: c.model, runs: c.runs,
+      quality: c.quality.filter((q) => ((q as GenRow).genId ?? BASELINE_GEN.id) === BASELINE_GEN.id),
+      ...(c.genQuality?.length ? { genQuality: c.genQuality } : {})
+    })),
     machine: p.machine,
     request: p.request ?? null
   }
