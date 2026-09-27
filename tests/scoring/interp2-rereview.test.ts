@@ -6,6 +6,7 @@ import { interpret, verdicts, type Insight } from '../../src/core/interpret'
 import { recommend, recommendForWorkload } from '../../src/core/scoring/recommend'
 import { DEFAULT_SCORING_CONFIG } from '../../src/core/scoring/workloads'
 import fixture from '../fixtures/scoring/session-single.json'
+import { proofRowId } from '../../src/core/benchmark/gen'
 
 const GiB = 1024 ** 3
 const m = (value: number): Metric => ({ value, kind: 'measured', source: 'synthetic' })
@@ -130,9 +131,17 @@ describe('G08 generation choice is deterministic and needs application proof', (
     counterfactual: key === 'enable_thinking' ? !requested : requested === 'low' ? 'high' : 'low',
     requestedSha256: 'a'.repeat(64), counterfactualSha256: 'b'.repeat(64), status: 'proved' as const })
   const genRows = (id: string, reasoning: number, applied: Record<string, unknown> | undefined) =>
-    quality().map((r) => ({ ...r, genId: id, sample: 1, answerTokens: 100, reasoningTokens: reasoning, totalMs: 2000, tokenSource: 'runtime', ...(applied ? { appliedTemplateKwargs: applied } : {}),
-      ...(applied && Object.keys(applied).length ? { templateKwargProof: Object.fromEntries(Object.entries(applied).map(([key, value]) => [key, proof(key, value)])) } : {}),
-      templateHash: 't1', runtimeVersion: 'b1', modelFingerprint: 'm1', acceptedSampling: { temperature: 0 } }))
+    quality().map((r) => {
+      const row = { ...r, genId: id, sample: 1, answerTokens: 100, reasoningTokens: reasoning, totalMs: 2000, tokenSource: 'runtime' }
+      const hash = 'a'.repeat(64), alt = 'b'.repeat(64)
+      return { ...row, ...(applied ? { appliedTemplateKwargs: applied } : {}),
+        ...(applied && Object.keys(applied).length ? { templateKwargProof: Object.fromEntries(Object.entries(applied).map(([key, value]) => [key, proof(key, value)])) } : {}),
+        templateHash: 't1', runtimeVersion: 'b1', modelFingerprint: 'm1', acceptedSampling: { temperature: 0, seed: 1 },
+        requestedSampling: { temperature: 0, topP: null, topK: null, minP: null, seed: 1 }, promptSha256: hash,
+        renderProof: { rowId: proofRowId(row), promptSha256: hash, renderedSha256: hash, counterfactualSha256: alt,
+          counterfactuals: Object.fromEntries(Object.keys(applied ?? {}).map((key) => [key, alt])),
+          keys: Object.keys(applied ?? {}), status: applied && Object.keys(applied).length ? 'proved' as const : 'unproved' as const } }
+    })
   const gq = (id: string, effort: string, reasoning: number, applied?: Record<string, unknown>): GenQuality => ({
     gen: { id, thinking: true, effort, temperature: 0, source: 'default' }, results: genRows(id, reasoning, applied), samples: 1, stochastic: false,
     answerTokens: m(100), reasoningTokens: m(reasoning), effectiveAnswerLatencyMs: m(2000), effectiveTps: m(50), reasoningMs: m(1000), rawTps: m(100)
@@ -141,8 +150,17 @@ describe('G08 generation choice is deterministic and needs application proof', (
   it('equal quality: the lower effort is kept whatever the input order', () => {
     for (const order of [['high', 'low'], ['low', 'high']]) {
       const c = model(candidate('a'))
-      c.quality = c.quality.map((r) => ({ ...r, templateHash: 't1', runtimeVersion: 'b1', modelFingerprint: 'm1',
-        acceptedSampling: { temperature: 0 }, appliedTemplateKwargs: { enable_thinking: false } } as QualityResult)) // full off comparator contract
+      c.quality = c.quality.map((r) => {
+        const row = { ...r, genId: 'off', sample: 1 }
+        const hash = 'a'.repeat(64), alt = 'b'.repeat(64)
+        return { ...row, templateHash: 't1', runtimeVersion: 'b1', modelFingerprint: 'm1',
+          acceptedSampling: { temperature: 0, seed: 1 }, requestedSampling: { temperature: 0, topP: null, topK: null, minP: null, seed: 1 },
+          appliedTemplateKwargs: { enable_thinking: false }, promptSha256: hash,
+          templateKwargProof: { enable_thinking: proof('enable_thinking', false) },
+          renderProof: { rowId: proofRowId(row), promptSha256: hash, renderedSha256: hash, counterfactualSha256: alt,
+            counterfactuals: { enable_thinking: alt },
+            keys: ['enable_thinking'], status: 'proved' } } as QualityResult
+      }) // full off comparator contract
       c.genQuality = order.map((e) => gq(`think-${e}`, e, e === 'high' ? 100 : 20, { enable_thinking: true, reasoning_effort: e }))
       expect(verdicts({ candidates: [c], machine: machine() }, 'max_quality').winner?.gen?.gq.gen.id, order.join()).toBe('think-low')
     }

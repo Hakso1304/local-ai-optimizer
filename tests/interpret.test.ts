@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import type { BenchmarkRunResult, CandidateInput, GenConfig, MachineLimits, WorkloadId } from '../src/shared/bench-types'
 import { interpret, RULES, RULES_VERSION, verdicts, type Insight, type InterpretData } from '../src/core/interpret'
-import { summarizeGen, templateKwargsFor, type GenRow } from '../src/core/benchmark/gen'
+import { proofRowId, summarizeGen, templateKwargsFor, type GenRow } from '../src/core/benchmark/gen'
 import { generateCandidates } from '../src/core/benchmark/candidates'
 import { recommend, recommendForWorkload } from '../src/core/scoring/recommend'
 import { WORKLOADS, effectiveProfile, withProfile, DEFAULT_SCORING_CONFIG } from '../src/core/scoring/workloads'
@@ -50,12 +50,21 @@ const pair = (rateA: number, rateB: number): CandidateInput[] => {
 
 // Generation configs: thinking at two efforts (applied template kwargs verified) vs the deterministic baseline.
 const genRows = (g: GenConfig, rate: number, reasoning: number, ms: number, applied = true): GenRow[] =>
-  q5('m', rate).map((r) => ({ ...r, genId: g.id, sample: 1, answerTokens: 100, reasoningTokens: reasoning, totalMs: ms, tokenSource: 'runtime',
-    ...(applied ? { appliedTemplateKwargs: templateKwargsFor(THINK_MODEL, g), templateHash: 'tpl-1', runtimeVersion: 'b11208', modelFingerprint: 'llama8b#1', acceptedSampling: { temperature: g.temperature },
-      templateKwargProof: Object.fromEntries(Object.entries(templateKwargsFor(THINK_MODEL, g) ?? {}).map(([key, requested]) => [key, {
+  q5('m', rate).map((r) => {
+    const row = { ...r, genId: g.id, sample: 1, answerTokens: 100, reasoningTokens: reasoning, totalMs: ms, tokenSource: 'runtime' as const }
+    if (!applied) return row
+    const kwargs = templateKwargsFor(THINK_MODEL, g) ?? {}
+    const hash = 'a'.repeat(64), alt = 'b'.repeat(64)
+    return { ...row, appliedTemplateKwargs: kwargs, templateHash: 'tpl-1', runtimeVersion: 'b11208', modelFingerprint: 'llama8b#1',
+      promptSha256: hash, requestedSampling: { temperature: g.temperature ?? 0, topP: null, topK: null, minP: null, seed: 1 },
+      acceptedSampling: { temperature: g.temperature ?? 0, seed: 1 },
+      renderProof: { rowId: proofRowId(row), promptSha256: hash, renderedSha256: hash, counterfactualSha256: alt,
+        counterfactuals: Object.fromEntries(Object.keys(kwargs).map((key) => [key, alt])), keys: Object.keys(kwargs), status: 'proved' as const },
+      templateKwargProof: Object.fromEntries(Object.entries(kwargs).map(([key, requested]) => [key, {
         requested, counterfactual: key === 'enable_thinking' ? !requested : requested === 'low' ? 'medium' : 'low',
-        requestedSha256: 'a'.repeat(64), counterfactualSha256: 'b'.repeat(64), status: 'proved'
-      }])) } : {}) }))
+        requestedSha256: hash, counterfactualSha256: alt, status: 'proved'
+      }])) }
+  })
 const THINK_MODEL = { genKnobs: { supportsThinking: true, effortValues: ['low', 'medium'] } } as CandidateInput['model']
 const OFF: GenConfig = { id: 'off', thinking: false, temperature: 0, source: 'default' }
 const LOW: GenConfig = { id: 'think-low-t1', thinking: true, effort: 'low', temperature: 1, source: 'default' }
@@ -64,7 +73,7 @@ const withGens = (lowRate: number, medRate: number, o: { medReasoning?: number; 
   const c = full8()[0]
   const model = { ...c.model, supportsThinking: true, genKnobs: { supportsThinking: true, effortValues: ['low', 'medium'] } }
   return [{ ...c, model, quality: q5(c.model.id, 0.4), genQuality: [
-    summarizeGen(OFF, genRows(OFF, 0.4, 0, 1000, o.applied ?? true), 1), summarizeGen(LOW, genRows(LOW, lowRate, 300, 4000, o.applied ?? true), 3),
+    summarizeGen(OFF, genRows(OFF, 0.4, 0, 1000, true), 1), summarizeGen(LOW, genRows(LOW, lowRate, 300, 4000, o.applied ?? true), 3),
     summarizeGen(MED, genRows(MED, medRate, o.medReasoning ?? 600, 7000, o.applied ?? true), 3)
   ] }]
 }
@@ -440,7 +449,8 @@ describe('§8 generation configs', () => {
   it('I-8.0 thinking configs without verified applied kwargs are not considered; verified ones are', () => {
     const v = verdicts({ candidates: withGens(1, 1, { applied: false }), machine: M }, 'general_chat')
     expect(v.winner!.gen!.gq.gen.id).toBe('off')
-    expect(text(interpret(v), 'I-8.0')).toMatch(/thinking on \(effort low, T=1\.0\) not comparable — application contract not met: applied template kwargs not verified on every row/)
+    expect(text(interpret(v), 'I-8.0')).toMatch(/thinking on \(effort low, T=1\.0\) not comparable — application contract not met: row-bound render proof or prompt hash not recorded on every row/)
+    expect(text(interpret(v), 'I-8.0')).toMatch(/applied template kwargs not verified on every row/)
     expect(has(panel(withGens(1, 1), 'reasoning'), 'I-8.0')).toBe(false)
   })
   it('I-8.1 the chosen thinking config with its paired difference and both effective speeds; baseline kept → none', () => {

@@ -5,7 +5,7 @@ import type { BenchmarkRunResult, CandidateInput, GenQuality, MachineLimits, Met
 import { interpret, verdicts, type Insight } from '../../src/core/interpret'
 import fixture from '../fixtures/scoring/session-single.json'
 import { RULES } from '../../src/core/interpret/catalog'
-import { proofRowId } from '../../src/core/benchmark/gen'
+import { proofRowId, type GenRow } from '../../src/core/benchmark/gen'
 
 const GiB = 1024 ** 3
 const m = (value: number): Metric => ({ value, kind: 'measured', source: 'synthetic' })
@@ -238,6 +238,19 @@ describe('A/B/C (review-w4l): generation contract strictness', () => {
   const rowsFor = (id: string, over: Record<string, unknown> = {}) => quality(10, () => true).map((r) => ({ ...r, genId: id, templateHash: 'tpl', runtimeVersion: 'b1', modelFingerprint: 'm1', acceptedSampling: { temperature: 0 }, ...over } as QualityResult))
   const gq = (id: string, thinking: boolean, results: QualityResult[]): GenQuality => ({ gen: { id, thinking, ...(thinking ? { effort: 'low' } : {}), temperature: 0, source: 'default' }, results, samples: 1, stochastic: false, answerTokens: m(100), reasoningTokens: m(thinking ? 20 : 0), effectiveAnswerLatencyMs: m(2000), effectiveTps: m(50), reasoningMs: m(thinking ? 400 : 0), rawTps: m(60) })
   const thinkModel = (c: CandidateInput) => ({ ...c, model: { ...c.model, genKnobs: { supportsThinking: true, effortValues: ['low', 'high'] } } })
+  const bound = (rows: QualityResult[], applied: Record<string, unknown>, temperature = 0): QualityResult[] => rows.map((r) => {
+    const hash = 'a'.repeat(64), alt = 'b'.repeat(64)
+    const tagged = { ...r, sample: 1, promptSha256: hash, appliedTemplateKwargs: applied,
+      requestedSampling: { temperature, topP: null, topK: null, minP: null, seed: 1 }, acceptedSampling: { temperature, seed: 1 },
+      templateKwargProof: Object.fromEntries(Object.entries(applied).map(([key, requested]) => [key, {
+        requested, counterfactual: key === 'enable_thinking' ? !requested : requested === 'low' ? 'high' : 'low',
+        requestedSha256: hash, counterfactualSha256: alt, status: 'proved'
+      }])) }
+    return { ...tagged, renderProof: { rowId: proofRowId(tagged), promptSha256: hash, renderedSha256: hash,
+      counterfactualSha256: alt, counterfactuals: Object.fromEntries(Object.keys(applied).map((key) => [key, alt])),
+      keys: Object.keys(applied), status: 'proved' } } as QualityResult
+  })
+  const renderOf = (r: QualityResult) => (r as QualityResult & { renderProof: NonNullable<GenRow['renderProof']> }).renderProof
   it('A: a T=0 baseline whose rows report accepted temperature 0.8 is not confirmed', () => {
     const c = candidate('a')
     c.quality = rowsFor('off', { acceptedSampling: { temperature: 0.8 } })
@@ -260,15 +273,13 @@ describe('A/B/C (review-w4l): generation contract strictness', () => {
     expect(o.why).toMatch(/applied template kwargs .* differ from the config's \{"enable_thinking":true,"reasoning_effort":"low"\}/)
   })
   it('I-8.0 historical applied-kwargs claim without per-key proof is not comparable; proved rows are', () => {
-    const p = (requested: unknown, counterfactual: unknown) => ({ requested, counterfactual,
-      requestedSha256: 'a'.repeat(64), counterfactualSha256: 'b'.repeat(64), status: 'proved' as const })
     const c = thinkModel(candidate('a'))
-    c.quality = rowsFor('off', { appliedTemplateKwargs: { enable_thinking: false }, templateKwargProof: { enable_thinking: p(false, true) } })
+    c.quality = bound(rowsFor('off'), { enable_thinking: false })
     const claimed = rowsFor('think-low', { appliedTemplateKwargs: { enable_thinking: true, reasoning_effort: 'low' } })
     c.genQuality = [gq('off', false, c.quality), gq('think-low', true, claimed)]
     const old = V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')!
     expect(old).toMatchObject({ comparable: false, why: expect.stringMatching(/template.*proof|per-key.*proof/) })
-    const proved = claimed.map((r) => ({ ...r, templateKwargProof: { enable_thinking: p(true, false), reasoning_effort: p('low', 'high') } } as QualityResult))
+    const proved = bound(claimed, { enable_thinking: true, reasoning_effort: 'low' })
     c.genQuality[1] = gq('think-low', true, proved)
     expect(V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')).toMatchObject({ comparable: true })
   })
@@ -285,19 +296,51 @@ describe('A/B/C (review-w4l): generation contract strictness', () => {
   })
   it('I-8.0 binds render proof to each row and rejects a copied proof from another prompt', () => {
     const c = thinkModel(candidate('a'))
-    c.quality = rowsFor('off', { appliedTemplateKwargs: { enable_thinking: false }, acceptedSampling: { temperature: 0, seed: 1 }, requestedSampling: { temperature: 0, topP: null, topK: null, minP: null, seed: 1 } })
-    const proof = { enable_thinking: { requested: true, counterfactual: false, requestedSha256: 'a'.repeat(64), counterfactualSha256: 'b'.repeat(64), status: 'proved' },
-      reasoning_effort: { requested: 'low', counterfactual: 'high', requestedSha256: 'a'.repeat(64), counterfactualSha256: 'b'.repeat(64), status: 'proved' } }
-    const valid = rowsFor('think-low', { appliedTemplateKwargs: { enable_thinking: true, reasoning_effort: 'low' }, acceptedSampling: { temperature: 0, seed: 1 }, requestedSampling: { temperature: 0, topP: null, topK: null, minP: null, seed: 1 }, templateKwargProof: proof })
-      .map((r) => {
-        const tagged = { ...r, sample: 1, promptSha256: 'a'.repeat(64) }
-        return { ...tagged, renderProof: { rowId: proofRowId(tagged), promptSha256: 'a'.repeat(64), renderedSha256: 'a'.repeat(64), counterfactualSha256: 'b'.repeat(64), keys: ['enable_thinking', 'reasoning_effort'], status: 'proved' } } as QualityResult
-      })
+    c.quality = bound(rowsFor('off'), { enable_thinking: false })
+    const valid = bound(rowsFor('think-low'), { enable_thinking: true, reasoning_effort: 'low' })
     c.genQuality = [gq('off', false, c.quality), gq('think-low', true, valid)]
     expect(V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')?.comparable).toBe(true)
     const copied = valid.map((r, i) => i === 1 ? { ...r, promptSha256: 'c'.repeat(64) } as QualityResult : r)
     c.genQuality[1] = gq('think-low', true, copied)
     expect(V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')).toMatchObject({ comparable: false })
+  })
+  it('I-8.0 reconstructed render proof cannot become proved without the original prompt hash', () => {
+    const c = thinkModel(candidate('a'))
+    c.quality = bound(rowsFor('off'), { enable_thinking: false })
+    const valid = bound(rowsFor('think-low'), { enable_thinking: true, reasoning_effort: 'low' })
+    c.genQuality = [gq('off', false, c.quality), gq('think-low', true, valid)]
+    expect(V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')?.comparable).toBe(true)
+    const reconstructed = valid.map((r, i) => i === 1 ? { ...r,
+      proofProvenance: { originalPromptHashPresent: false },
+      renderProof: { ...renderOf(r), status: 'reconstructed', promptSha256: renderOf(r).renderedSha256 }
+    } as QualityResult : r)
+    c.genQuality[1] = gq('think-low', true, reconstructed)
+    expect(V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')).toMatchObject({ comparable: false })
+  })
+  it('I-8.0 quarantines a request error or timeout row while comparing valid proved rows', () => {
+    const c = thinkModel(candidate('a'))
+    c.quality = bound(rowsFor('off'), { enable_thinking: false })
+    const valid = bound(rowsFor('think-low'), { enable_thinking: true, reasoning_effort: 'low' })
+    for (const status of ['infra_error', 'truncated'] as const) {
+      const rows = valid.map((r, i) => i === 1 ? { ...r, evaluationStatus: status, pass: false, score: 0,
+        ...(status === 'truncated' ? { outputTruncated: true } : {}) } as QualityResult : r)
+      c.genQuality = [gq('off', false, c.quality), gq('think-low', true, rows)]
+      const option = V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')!
+      expect(option.comparable).toBe(true)
+      expect(option.cs.components.quality.input.kind).toBe('measured')
+    }
+  })
+  it('I-8.0 quarantines one contradictory render row while valid rows remain comparable', () => {
+    const c = thinkModel(candidate('a'))
+    c.quality = bound(rowsFor('off'), { enable_thinking: false })
+    const valid = bound(rowsFor('think-low'), { enable_thinking: true, reasoning_effort: 'low' })
+    const contradicted = valid.map((r, i) => i === 1 ? { ...r,
+      renderProof: { ...renderOf(r), status: 'contradicted' }
+    } as QualityResult : r)
+    c.genQuality = [gq('off', false, c.quality), gq('think-low', true, contradicted)]
+    const option = V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')!
+    expect(option.comparable).toBe(true)
+    expect(option.cs.components.quality.input.kind).toBe('measured')
   })
   it('I-8.0 requires runtime accepted sample seed to match the requested seed on every row', () => {
     const c = candidate('seed')
@@ -309,11 +352,11 @@ describe('A/B/C (review-w4l): generation contract strictness', () => {
     c.quality = rows.map((r, i) => i === 1 ? { ...r, acceptedSampling: { temperature: 0 } } as QualityResult : r)
     expect(V([c]).ranked[0].qualityMeasured).toBe(false)
   })
-  it('I-8.0 legacy single-toggle applied proof remains comparable; explicit contradictory proof rejects it', () => {
+  it('I-8.0 migrated single-toggle proof remains comparable; explicit contradictory proof rejects it', () => {
     const c = candidate('a')
     c.model = { ...c.model, genKnobs: { supportsThinking: true } }
-    c.quality = rowsFor('off', { appliedTemplateKwargs: { enable_thinking: false } })
-    const legacy = rowsFor('think', { appliedTemplateKwargs: { enable_thinking: true } })
+    c.quality = bound(rowsFor('off'), { enable_thinking: false })
+    const legacy = bound(rowsFor('think'), { enable_thinking: true })
     const on = { ...gq('think', true, legacy), gen: { id: 'think', thinking: true, temperature: 0, source: 'default' as const } }
     c.genQuality = [gq('off', false, c.quality), on]
     expect(V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think')).toMatchObject({ comparable: true })
@@ -340,18 +383,33 @@ describe('I-8.0 off/think comparator proof on both sides', () => {
     results, samples: 1, stochastic: true, answerTokens: m(100), reasoningTokens: m(id === 'off' ? 0 : 20),
     effectiveAnswerLatencyMs: m(2000), effectiveTps: m(50), reasoningMs: m(id === 'off' ? 0 : 400), rawTps: m(60)
   })
+  const withRowProof = (rows: QualityResult[]): QualityResult[] => rows.map((r) => {
+    const x = r as QualityResult & { appliedTemplateKwargs?: Record<string, unknown>; acceptedSampling?: Record<string, unknown> | null; templateKwargProof?: GenRow['templateKwargProof'] }
+    const applied = x.appliedTemplateKwargs ?? {}
+    const hash = 'a'.repeat(64), alt = 'b'.repeat(64)
+    const tagged = { ...r, sample: 1, promptSha256: hash,
+      requestedSampling: { temperature: 1, topP: null, topK: null, minP: null, seed: 1 },
+      acceptedSampling: x.acceptedSampling === null ? null : { ...x.acceptedSampling, seed: 1 },
+      templateKwargProof: x.templateKwargProof ?? Object.fromEntries(Object.entries(applied).map(([key, requested]) => [key, {
+        requested, counterfactual: key === 'enable_thinking' ? !requested : 'high', requestedSha256: hash,
+        counterfactualSha256: alt, status: 'proved'
+      }])) }
+    return { ...tagged, renderProof: { rowId: proofRowId(tagged), promptSha256: hash, renderedSha256: hash,
+      counterfactualSha256: alt, counterfactuals: Object.fromEntries(Object.keys(applied).map((key) => [key, alt])),
+      keys: Object.keys(applied), status: Object.keys(applied).length ? 'proved' : 'unproved' } } as QualityResult
+  })
   const assess = (offProof: Record<string, unknown>, missingOneAccepted = false) => {
     const c = candidate('a')
-    c.model = { ...c.model, genKnobs: { supportsThinking: true, effortValues: ['low'] } }
-    c.quality = rowsFor('off', offProof)
+    c.model = { ...c.model, genKnobs: { supportsThinking: true, effortValues: ['low', 'high'] } }
+    c.quality = withRowProof(rowsFor('off', offProof))
     if (missingOneAccepted) c.quality[0] = { ...c.quality[0], acceptedSampling: null } as QualityResult
-    c.genQuality = [gq('off', c.quality), gq('think-low', rowsFor('think-low', {
+    c.genQuality = [gq('off', c.quality), gq('think-low', withRowProof(rowsFor('think-low', {
       appliedTemplateKwargs: { enable_thinking: true, reasoning_effort: 'low' }, acceptedSampling: { temperature: 1 },
       templateKwargProof: {
         enable_thinking: { requested: true, counterfactual: false, requestedSha256: 'a'.repeat(64), counterfactualSha256: 'b'.repeat(64), status: 'proved' },
         reasoning_effort: { requested: 'low', counterfactual: 'high', requestedSha256: 'a'.repeat(64), counterfactualSha256: 'b'.repeat(64), status: 'proved' }
       }
-    }))]
+    })))]
     const verdict = V([c])
     return { options: verdict.ranked[0].genOptions, chosen: verdict.ranked[0].gen?.gq.gen.id ?? null, verdict }
   }
