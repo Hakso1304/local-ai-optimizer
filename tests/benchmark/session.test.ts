@@ -7,6 +7,7 @@ import type { ExitInfo } from '../../src/core/runtimes/llamacpp'
 import type { TelemetrySample } from '../../src/core/telemetry/sampler'
 import { runSession, type RunDetail, type SessionBackend, type SessionDeps, type SessionStorage } from '../../src/core/benchmark/session'
 import { ladderPrompt } from '../../src/core/benchmark/prompts'
+import { ConfigDriftError } from '../../src/core/runtimes/llamacpp'
 import { load } from '../scoring/helpers'
 
 const GiB = 1024 ** 3
@@ -24,12 +25,13 @@ const machine: SystemProfile = {
 }
 
 /** Per-ctx script: load failure, prompt failure, or rates. hook runs inside the measured prompt. */
-interface Step { load?: 'oom'; prompt?: 'device_lost' | 'timeout'; decode?: number; prefill?: number; hook?: () => void }
+interface Step { load?: 'oom' | 'drift' | 'slow'; prompt?: 'device_lost' | 'timeout'; warmupBlocks?: boolean; decode?: number; prefill?: number; hook?: () => void }
 
 function fakeBackend(script: (ctx: number, cfg: LoadConfig) => Step) {
   let ctx = 0
   let cfg: LoadConfig | null = null
-  const calls = { loads: [] as LoadConfig[], templates: 0, cancels: 0, unloads: 0 }
+  const calls = { loads: [] as LoadConfig[], templates: 0, cancels: 0, unloads: 0, order: [] as string[] }
+  let onCancel: (() => void) | null = null
   const b: { -readonly [K in keyof SessionBackend]: SessionBackend[K] } & { calls: typeof calls } = {
     calls,
     pid: undefined as number | undefined,
@@ -39,15 +41,23 @@ function fakeBackend(script: (ctx: number, cfg: LoadConfig) => Step) {
       ctx = c.contextSize
       cfg = c
       b.lastExit = null
-      if (script(ctx, c).load === 'oom') {
+      const s = script(ctx, c)
+      if (s.load === 'oom') {
         b.lastExit = { code: 1, reason: 'oom', tail: ['ggml_vulkan: ErrorOutOfDeviceMemory'] }
         throw new Error('llama-server exited with code 1 (oom)')
       }
       b.pid = 1000 + ctx
+      if (s.load === 'drift') throw new ConfigDriftError(`config_drift: requested -c ${ctx} but server serves n_ctx 16384`)
+      if (s.load === 'slow') await new Promise((r) => setTimeout(r, 150)) // pid exists, /health not yet ok
+      calls.order.push('load-resolved')
       return { loadTimeMs: 900, declared: { layersOffloaded: 33, layersTotal: 33, modelBufferMiB: {}, kvBufferMiB: {}, computeBufferMiB: {} } }
     },
     async unloadModel() { calls.unloads++; b.pid = undefined },
-    async warmup() {},
+    async warmup() {
+      if (!script(ctx, cfg!).warmupBlocks) return
+      const cancelled = await new Promise<boolean>((r) => { onCancel = () => r(true); setTimeout(() => r(false), 1000) })
+      if (cancelled) throw new Error('warmup failed: cancelled')
+    },
     async runPrompt(req): Promise<PromptResult> {
       const s = script(ctx, cfg!)
       const base = { promptTokens: 100, prefillMs: 10, decodeTokens: req.maxTokens, decodeMs: 1000, text: 'BANANA', stopType: 'limit' }
@@ -61,7 +71,7 @@ function fakeBackend(script: (ctx: number, cfg: LoadConfig) => Step) {
       return { ...base, ttftMs: 100 + ctx / 10, prefillTps: s.prefill ?? 3000, decodeTps: s.decode ?? 90, totalMs: 2000, timedOut: false, error: null }
     },
     async applyTemplate(m) { calls.templates++; return m.map((x) => x.content).join('\n') },
-    async cancel() { calls.cancels++ }
+    async cancel() { calls.cancels++; onCancel?.() }
   }
   return b
 }
@@ -208,5 +218,41 @@ describe('runSession', () => {
     const { s, backend } = await run(() => ({}), {}, { readRamAvailableBytes: () => 1 * GiB })
     expect(backend.calls.loads).toEqual([])
     expect(s.runs[0]).toMatchObject({ status: 'fail', failureKind: 'skipped_memory' })
+  })
+  it('guard reason wins over the "cancelled" error its own cancel() causes (guard_abort, not request_error)', async () => {
+    const low = { ...sample(2048), ramAvailBytes: 1 * GiB }
+    const { s } = await run(() => ({ warmupBlocks: true }), { ladder: [2048] }, {
+      startSampler: () => ({ samples: [low], unavailable: {}, stop: () => [low] }), config: { guardPollMs: 5 }
+    })
+    expect(s.runs[0]).toMatchObject({ status: 'fail', failureKind: 'guard_abort' })
+    expect(s.details[0].reason).toBe('RAM available 1.0 GiB fell below the floor')
+  })
+
+  it('ConfigDriftError from loadModel → fail/config_drift', async () => {
+    const { s } = await run((ctx) => (ctx === 4096 ? { load: 'drift' } : {}))
+    expect(s.runs.map((r) => [r.ctx, r.status, r.failureKind])).toEqual([[2048, 'pass', null], [4096, 'fail', 'config_drift']])
+    expect(s.details.at(-1)!.reason).toMatch(/serves n_ctx 16384/)
+  })
+
+  it('starts the sampler during load, as soon as the new pid exists', async () => {
+    let backendRef: ReturnType<typeof fakeBackend> | null = null
+    await run(() => ({}), { ladder: [2048] }, {
+      startSampler: (pid) => { backendRef!.calls.order.push(`sampler:${pid}`); const xs = [sample(2048)]; return { samples: xs, unavailable: {}, stop: () => xs } },
+      backend: () => (backendRef = fakeBackend(() => ({ load: 'slow' })))
+    })
+    expect(backendRef!.calls.order).toEqual(['sampler:3048', 'load-resolved'])
+  })
+
+  it('short step: waits for the first real sample; none at all → peaks unavailable (never fabricated)', async () => {
+    const late = await run(() => ({}), { ladder: [2048] }, {
+      startSampler: () => { const xs: TelemetrySample[] = []; setTimeout(() => xs.push(sample(2048)), 150); return { samples: xs, unavailable: {}, stop: () => xs } },
+      config: { firstSampleWaitMs: 2000 }
+    })
+    expect(late.s.runs[0].peakVramBytes).toMatchObject({ kind: 'measured' })
+    const none = await run(() => ({}), { ladder: [2048] }, {
+      startSampler: () => ({ samples: [], unavailable: {}, stop: () => [] }), config: { firstSampleWaitMs: 100 }
+    })
+    expect(none.s.runs[0].peakVramBytes).toMatchObject({ value: null, kind: 'unavailable' })
+    expect(none.s.runs[0].status).toBe('pass')
   })
 })

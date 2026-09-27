@@ -73,6 +73,9 @@ export const DEFAULT_SESSION_CONFIG = {
   sharedSpillAbortBytes: 2 * GiB, // per-PID shared GPU memory: kill the run (DESIGN §3.3)
   maxConsecutiveDegraded: 2,
   guardPollMs: 1000,
+  /** typeperf needs ~2 s for its first row; a 0.5B step can finish in ~1.5 s. After the reps, wait (real time) up to
+   *  this long from sampler start for one real row so memory peaks aren't lost. Never fabricated: still 0 → unavailable. */
+  firstSampleWaitMs: 3000,
   qualityFillerMax: 3000
 }
 export type SessionConfig = typeof DEFAULT_SESSION_CONFIG
@@ -259,21 +262,36 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     }
 
     send({ type: 'phase', configId: cand.id, ctx, phase: 'load' })
+    // Start the sampler as soon as the NEW server's pid exists (during load), not after /health: typeperf's ~2 s
+    // start-up then overlaps the load. Per-step (not per-candidate) because each step restarts the server and
+    // typeperf's per-PID counter set is fixed at start.
+    const oldPid = backend.pid
+    let sampler: SessionSampler | null = null
+    let samplerAt = 0
+    const startIfNew = () => {
+      if (!sampler && backend.pid !== undefined && backend.pid !== oldPid) { sampler = deps.startSampler(backend.pid); samplerAt = Date.now() }
+    }
+    const pidPoll = setInterval(startIfNew, 50)
     let load: LoadResult
     try {
       load = await backend.loadModel(loadCfg(cand, model, ctx))
     } catch (e) {
+      clearInterval(pidPoll)
+      ;(sampler as SessionSampler | null)?.stop()
       const msg = (e as Error).message
-      const kind = signal?.aborted ? null : failKind(backend.lastExit) ?? (/healthy within/.test(msg) ? 'load_timeout' : 'load_fail')
+      const drift = (e as { failureKind?: string }).failureKind === 'config_drift' // ConfigDriftError (runtimes/llamacpp)
+      const kind = signal?.aborted ? null : drift ? 'config_drift' : failKind(backend.lastExit) ?? (/healthy within/.test(msg) ? 'load_timeout' : 'load_fail')
       return result(signal?.aborted ? 'cancelled' : kind === 'load_timeout' ? 'timeout' : 'fail', kind, msg)
     }
+    clearInterval(pidPoll)
+    if (!sampler && backend.pid !== undefined) { sampler = deps.startSampler(backend.pid); samplerAt = Date.now() }
+    const loadDoneAt = Date.now()
+    const smp = sampler as SessionSampler | null
 
-    const pid = backend.pid
-    const sampler = pid !== undefined ? deps.startSampler(pid) : null
     let emitted = 0
     let guard: string | null = null
     const flush = () => {
-      const xs = sampler?.samples ?? []
+      const xs = smp?.samples ?? []
       for (; emitted < xs.length; emitted++) {
         const s = xs[emitted]
         send({ type: 'telemetry', configId: cand.id, ctx, sample: s })
@@ -281,6 +299,11 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         if (!guard && s.procVramSharedBytes != null && s.procVramSharedBytes > cfg.sharedSpillAbortBytes) guard = `shared GPU memory spill ${(s.procVramSharedBytes / GiB).toFixed(1)} GiB exceeded the abort limit`
         if (guard) void backend.cancel()
       }
+    }
+    // A guard's cancel() makes the in-flight request fail with "cancelled": the guard reason must win over that.
+    const fail = (error: string, timedOut: boolean) => {
+      flush()
+      return guard ? { status: 'fail' as const, kind: 'guard_abort' as const, reason: guard } : classify(error, timedOut)
     }
     const timer = setInterval(flush, cfg.guardPollMs)
     const prompt = ladderPrompt(ctx)
@@ -291,28 +314,34 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     try {
       send({ type: 'phase', configId: cand.id, ctx, phase: 'warmup' })
       // Size-matched warmup: compiles the pipelines for this batch shape (F7).
-      await backend.warmup(prompt).then(() => { warm = true }, (e: Error) => { failure = classify(e.message, false) })
+      await backend.warmup(prompt).then(() => { warm = true }, (e: Error) => { failure = fail(e.message, false) })
       send({ type: 'phase', configId: cand.id, ctx, phase: 'measure' })
       for (let i = 0; i < cfg.reps && !failure && !signal?.aborted; i++) {
         const r = await backend.runPrompt({ prompt, maxTokens: cfg.predictTokens, temperature: 0, seed: 1, timeoutMs })
         flush()
-        if (r.error) { failure = classify(r.error, r.timedOut); break }
+        if (r.error) { failure = fail(r.error, r.timedOut); break }
         reps.push(r)
         send({ type: 'token-rate', configId: cand.id, ctx, prefillTps: r.prefillTps, decodeTps: r.decodeTps, ttftMs: r.ttftMs })
       }
     } finally {
       clearInterval(timer)
     }
-    const samples = sampler?.stop() ?? []
+    const measureEndAt = Date.now()
+    if (smp && !failure && !smp.samples.length) {
+      while (!smp.samples.length && Date.now() - samplerAt < cfg.firstSampleWaitMs) await new Promise((r) => setTimeout(r, 100))
+    }
+    const samples = smp?.stop() ?? []
     flush()
     if (!failure && guard) failure = { status: 'fail', kind: 'guard_abort', reason: guard }
     if (!failure && signal?.aborted) failure = { status: 'cancelled', kind: null, reason: 'cancelled by user' }
     const f = failure as { status: RunStatus; kind: FailureKind | null; reason: string } | null
 
+    // Peaks over every sample (load included: memory stays allocated); means only over warmup+measure (X10).
     const pk = peaks(samples)
-    const tele = (v: number | null, field: Field): Metric =>
-      pk.n === 0 ? { value: null, kind: 'unavailable', reason: 'no telemetry samples (run too short or sampler failed)' }
-        : measured(v, 'typeperf', sampler?.unavailable[field] ?? 'counter reported nothing')
+    const win = peaks(samples.filter((x) => x.ts >= loadDoneAt && x.ts <= measureEndAt))
+    const tele = (v: number | null, field: Field, n = pk.n): Metric =>
+      n === 0 ? { value: null, kind: 'unavailable', reason: 'no telemetry samples in the window (run too short or sampler failed)' }
+        : measured(v, 'typeperf', smp?.unavailable[field] ?? 'counter reported nothing')
     const prefill = median(reps.map((r) => r.prefillTps))
     const decode = median(reps.map((r) => r.decodeTps))
     const ttft = median(reps.map((r) => r.ttftMs))
@@ -334,8 +363,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       peakVramBytes: tele(pk.max.procVramDedicatedBytes, 'procVramDedicatedBytes'),
       peakSharedGpuBytes: tele(pk.max.procVramSharedBytes, 'procVramSharedBytes'),
       peakRamBytes: tele(pk.max.procRamPrivateBytes, 'procRamPrivateBytes'),
-      avgGpuUtil: tele(pk.meanGpuUtilPct, 'gpuUtilPct'),
-      avgCpuUtil: tele(pk.meanCpuPct, 'cpuPct')
+      avgGpuUtil: tele(win.meanGpuUtilPct, 'gpuUtilPct', win.n),
+      avgCpuUtil: tele(win.meanCpuPct, 'cpuPct', win.n)
     }, { samples, load })
   }
 
