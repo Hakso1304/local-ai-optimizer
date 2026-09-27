@@ -351,9 +351,11 @@ row's prompt with its recorded kwargs; a proof copied from another item or templ
 is not proof, and such rows are quarantined from comparisons. The accepted sampling must
 include the seed: the runtime-accepted seed is compared with the requested per-sample seed;
 a missing or different accepted seed makes the row unverified (disclosed), never proved.
-Scope: row-bound proof is required for generation-config comparisons and for rows whose
-configuration requested template kwargs (thinking-capable models); plain quality rows
-with no requested kwargs keep MEASURED status without it. Reconstructed provenance
+Scope: row-bound proof is required for generation-config comparisons and for any CLAIM
+about the thinking state of a row ("measured with thinking off"). A standalone quality
+measurement keeps MEASURED status without proof — it measures what the model produced —
+but its thinking state is disclosed as unverified when proof is missing, and it can
+neither prove a delta nor be attributed to a generation setting. Reconstructed provenance
 (re-rendered after the fact, no original prompt hash) makes a row non-comparable for
 generation comparisons but does not demote a plain measured row. Root provenance is
 immutable: whether the ORIGINAL producer recorded the generation prompt hash is written
