@@ -1,0 +1,42 @@
+{
+ "when": "2026-09-27T17:13:21.872Z",
+ "model": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+ "vulkaninfoHeaps": "",
+ "stopReason": "A1 fresh, 36,572-token prompt: spawnSync vendor/llama.cpp/llama-server.exe ENOENT; stopping experiment",
+ "results": [
+  {
+   "label": "A1 fresh, 36,572-token prompt",
+   "exe": "vendor/llama.cpp/llama-server.exe",
+   "argv": "-m D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf -c 65536 -ngl 999 -dev Vulkan0 -t 8 -b 2048 -ub 512 -fa on -fit off --parallel 1 -lm none --cache-ram 0",
+   "error": "spawnSync vendor/llama.cpp/llama-server.exe ENOENT",
+   "ramAbort": null,
+   "loadMs": 0,
+   "promptTokensRequested": 36572,
+   "promptTokensActual": null,
+   "reps": [],
+   "samples": 0,
+   "adapterLuid": null,
+   "adapterTotalGiB": 15.92,
+   "peakPidDedicatedGiB": null,
+   "peakPidSharedGiB": null,
+   "pidSharedBaselineGiB": null,
+   "peakAdapterDedicatedGiB": null,
+   "spillOnset": null,
+   "buffersMiB": {
+    "model": [],
+    "kv": [],
+    "compute": []
+   },
+   "layersPerDevice": {},
+   "offloadLines": [],
+   "largestBufferMiB": null,
+   "stdoutLog": "",
+   "stderrLog": "",
+   "stdoutTruncated": false,
+   "stderrTruncated": false,
+   "listDevicesBefore": [],
+   "ramAvailBeforeGiB": 17.29,
+   "ramAvailMinGiB": 17.28
+  }
+ ]
+}
