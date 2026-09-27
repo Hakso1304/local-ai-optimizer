@@ -54,7 +54,7 @@ export interface RunDetail {
 /** #2 implements this against db.ts. Resume reads back what save* wrote. */
 export interface SessionStorage {
   createSession(s: { workload: SessionRequest['workload']; request: SessionRequest; startedAt: number }): Awaitable<string>
-  setSessionStatus(sessionId: string, status: 'running' | 'done' | 'cancelled' | 'failed', error?: string): Awaitable<void>
+  setSessionStatus(sessionId: string, status: 'running' | 'done' | 'cancelled' | 'paused' | 'failed', error?: string): Awaitable<void>
   listRuns(sessionId: string): Awaitable<BenchmarkRunResult[]>
   saveRun(sessionId: string, run: BenchmarkRunResult, detail: RunDetail): Awaitable<void>
   listQuality(sessionId: string, modelId: string): Awaitable<QualityResult[]>
@@ -97,6 +97,9 @@ export interface SessionDeps {
   readRamAvailableBytes?: () => number | null
   evaluate?: typeof evaluateAsync
   signal?: AbortSignal
+  /** Pause: checked between steps only — the current step finishes (never mid-request), then the session unloads,
+   *  persists and ends with status 'paused'. Resume it like any other session (resumeSessionId). */
+  pauseSignal?: AbortSignal
   config?: Partial<SessionConfig>
 }
 
@@ -136,8 +139,12 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     if (!sessionId) sessionId = await storage.createSession({ workload: req.workload, request: req, startedAt: clock.now() })
     await storage.setSessionStatus(sessionId, 'running')
     // Resume re-runs steps that never really ran: cancelled ones and RAM-guard skips (memory may be free now).
-    // Later rows win, so a re-run supersedes the stored attempt.
-    const rerun = (r: BenchmarkRunResult) => r.status === 'cancelled' || r.failureKind === 'skipped_memory'
+    // retryFailed also re-runs fail/timeout steps (not config_drift: same config → same drift; a changed config has a
+    // new configId anyway). rerunConfigIds re-runs every step of those configs. Later rows win in storage.
+    const rerunIds = new Set(req.rerunConfigIds ?? [])
+    const rerun = (r: BenchmarkRunResult) =>
+      r.status === 'cancelled' || r.failureKind === 'skipped_memory' || rerunIds.has(r.configId) ||
+      (!!req.retryFailed && (r.status === 'fail' || r.status === 'timeout') && r.failureKind !== 'config_drift')
     const done = new Map((req.resumeSessionId ? await storage.listRuns(sessionId) : []).filter((r) => !rerun(r)).map((r) => [`${r.configId}@${r.ctx}`, r] as const))
     send({ type: 'session:started', workload: req.workload, modelIds: req.modelIds, resumed: !!req.resumeSessionId })
 
@@ -156,9 +163,10 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     const inputs: CandidateInput[] = []
     const quality = new Map<string, QualityResult[]>() // modelId → results
     let gpuLost = false
+    const paused = () => !signal?.aborted && !!deps.pauseSignal?.aborted
 
     for (const { cand, model } of plan) {
-      if (signal?.aborted) break
+      if (signal?.aborted || paused()) break
       send({ type: 'candidate:started', configId: cand.id, model: model.id, gpuLayers: cand.gpuLayers, ctxSteps: cand.ctxSteps })
       if (gpuLost && cand.gpuLayers > 0) {
         send({ type: 'candidate:done', configId: cand.id, status: 'skipped', reason: 'GPU device was lost earlier in this session' })
@@ -172,7 +180,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
 
       send({ type: 'phase', configId: cand.id, ctx: steps[0] ?? 0, phase: 'ladder' })
       for (const ctx of steps) {
-        if (signal?.aborted) break
+        if (signal?.aborted || paused()) break
         let run = done.get(`${cand.id}@${ctx}`)
         if (run) {
           log('info', `${cand.id} @${ctx}: already measured in this session; reused`)
@@ -193,7 +201,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
 
       const cliff = detectCliffs(runs, vramTotal)
       const anyUsable = runs.some(isUsable)
-      if (req.runQuality !== false && anyUsable && !signal?.aborted && !quality.has(model.id)) {
+      if (req.runQuality !== false && anyUsable && !signal?.aborted && !paused() && !quality.has(model.id)) {
         const stored = req.resumeSessionId ? await storage.listQuality(sessionId, model.id) : []
         if (stored.length) quality.set(model.id, stored)
         else {
@@ -208,13 +216,18 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       }
       await backend.unloadModel().catch((e) => log('error', `unload failed: ${(e as Error).message}`))
       inputs.push({ config: cand, model, runs, quality: [] })
-      const status = signal?.aborted ? 'cancelled' : anyUsable ? 'done' : 'failed'
+      const status = signal?.aborted ? 'cancelled' : paused() ? 'paused' : anyUsable ? 'done' : 'failed'
       send({ type: 'candidate:done', configId: cand.id, status, reason: stopReason })
     }
 
     if (signal?.aborted) {
       await storage.setSessionStatus(sessionId, 'cancelled')
       send({ type: 'session:cancelled' })
+      return null
+    }
+    if (paused()) {
+      await storage.setSessionStatus(sessionId, 'paused')
+      send({ type: 'session:paused' })
       return null
     }
     for (const i of inputs) i.quality = quality.get(i.model.id) ?? []

@@ -205,6 +205,43 @@ describe('runSession', () => {
     expect(h.backend.calls.loads.some((l) => l.gpuLayers === 0 && l.device === 'none')).toBe(true)
   })
 
+  it('pause mid-ladder: finishes the current step, unloads, status paused; resume continues from the next step', async () => {
+    const pause = new AbortController()
+    const first = await run((ctx) => (ctx === 8192 ? { hook: () => pause.abort() } : {}), {}, { pauseSignal: pause.signal })
+    expect(first.rec).toBeNull()
+    expect(first.s.runs.map((r) => [r.ctx, r.status])).toEqual([[2048, 'pass'], [4096, 'pass'], [8192, 'pass']]) // 8K completed, not cut
+    expect(first.backend.calls.cancels).toBe(0) // never mid-request
+    expect(first.backend.pid).toBeUndefined()
+    expect(first.s.status.at(-1)).toBe('paused')
+    expect(first.events.at(-1)?.type).toBe('session:paused')
+    expect(first.events.find((e) => e.type === 'candidate:done')).toMatchObject({ status: 'paused' })
+    const resumed = await run(() => ({}), { resumeSessionId: 's1' }, {}, first.s.runs)
+    expect(ctxOf(resumed.backend)).toEqual([16384, 32768])
+    expect(resumed.rec?.best).not.toBeNull()
+  })
+
+  it('retryFailed re-runs the failed step only (not config_drift); without it the failure is reused', async () => {
+    const first = await run((ctx) => (ctx === 8192 ? { prompt: 'timeout' } : {}))
+    expect(first.s.runs.at(-1)).toMatchObject({ ctx: 8192, status: 'timeout' })
+    const plain = await run(() => ({}), { resumeSessionId: 's1' }, {}, first.s.runs)
+    expect(ctxOf(plain.backend)).toEqual([]) // reuses the timeout → ladder stops there again
+    const retry = await run(() => ({}), { resumeSessionId: 's1', retryFailed: true }, {}, first.s.runs)
+    expect(ctxOf(retry.backend)).toEqual([8192, 16384, 32768]) // 2K/4K reused, 8K retried, ladder continues
+    const drift = await run((ctx) => (ctx === 4096 ? { load: 'drift' } : {}))
+    const again = await run(() => ({}), { resumeSessionId: 's1', retryFailed: true }, {}, drift.s.runs)
+    expect(ctxOf(again.backend)).toEqual([]) // same config → same drift: not retried
+  })
+
+  it('rerunConfigIds re-runs only the selected configuration', async () => {
+    const first = await run(() => ({}), { workload: 'long_context_coding' })
+    const ids = [...new Set(first.s.runs.map((r) => r.configId))]
+    expect(ids).toHaveLength(2)
+    const re = await run(() => ({}), { workload: 'long_context_coding', resumeSessionId: 's1', rerunConfigIds: [ids[1]] }, {}, first.s.runs)
+    expect(re.backend.calls.loads.every((l) => (l.extraArgs ?? []).includes('q8_0') === ids[1].includes('kv=q8_0'))).toBe(true)
+    expect(re.backend.calls.loads.length).toBe(first.s.runs.filter((r) => r.configId === ids[1]).length)
+    expect(re.s.runs.length).toBe(first.s.runs.length + re.backend.calls.loads.length) // new rows appended; reads keep the last
+  })
+
   it('emits events in order', async () => {
     const { events } = await run((ctx) => (ctx > 4096 ? { load: 'oom' } : {}), { ladder: [2048, 4096, 8192] })
     const types = events.map((e) => (e.type === 'phase' ? `phase:${e.phase}` : e.type)).filter((t) => t !== 'telemetry' && t !== 'log')

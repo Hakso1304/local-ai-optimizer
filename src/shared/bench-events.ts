@@ -19,12 +19,16 @@ export interface SessionRequest {
   /** Heavy-model mode: models whose full GPU offload does not fit get a partial-offload ladder instead of being
    *  rejected (slow, flagged expectDegraded). Default false. */
   heavyMode?: boolean
+  /** With resumeSessionId: also re-run steps that failed or timed out (not config_drift). */
+  retryFailed?: boolean
+  /** With resumeSessionId: re-run every step of these configs ("rerun selected configuration"); new rows supersede. */
+  rerunConfigIds?: string[]
   /** Continue this session: (configId, ctx) steps and quality already persisted are skipped. */
   resumeSessionId?: string
 }
 
 export type SessionPhase = 'load' | 'warmup' | 'measure' | 'ladder' | 'quality'
-export type CandidateStatus = 'done' | 'failed' | 'cancelled' | 'skipped'
+export type CandidateStatus = 'done' | 'failed' | 'cancelled' | 'paused' | 'skipped'
 
 /** Event payload without the session id (what the runner builds). */
 export type SessionEventBody =
@@ -39,6 +43,7 @@ export type SessionEventBody =
   | { type: 'candidate:done'; configId: string; status: CandidateStatus; reason: string | null }
   | { type: 'session:done'; recommendation: Recommendation }
   | { type: 'session:cancelled' }
+  | { type: 'session:paused' }
   | { type: 'session:failed'; error: string }
 
 export type SessionEvent = { sessionId: string } & SessionEventBody
