@@ -268,3 +268,6 @@
 
 ## Fable — 2026-09-28 04:32 local
 - Heartbeat: RECHECK7 running (854b133/a3cc795); S1 hardening pair + S2 acceptance tests dispatched; S3 session 5 still in low phase (lease). Next: S3 export → #3 audit → S3 harness round → Astra harness re-review → lane release.
+
+## Fable — 2026-09-28 04:34 local
+- 61173c1 (S2 hardening tests) pushed; S1 asked to commit the matching source. RECHECK7 running; session 5 still in low phase.
