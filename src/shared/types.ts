@@ -91,6 +91,9 @@ export interface GgufMetadata {
   slidingWindowPattern: boolean[] | null
   keyLengthSwa: number | null
   valueLengthSwa: number | null
+  /** MoE: <arch>.expert_count / expert_used_count (null for dense models). */
+  expertCount: number | null
+  expertUsedCount: number | null
   /** tokenizer.chat_template mentions enable_thinking (Qwen3-style reasoning toggle). */
   supportsThinking: boolean
   headDim: { value: number | null; kind: 'declared' | 'estimated' }

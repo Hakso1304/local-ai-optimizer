@@ -83,12 +83,14 @@ describe('readGgufMetadata', () => {
       ['gemma4.attention.sliding_window', 'u32', 512],
       ['gemma4.attention.sliding_window_pattern', 'boolarr', [true, true, true, true, true, false]],
       ['gemma4.attention.key_length_swa', 'u32', 256], ['gemma4.attention.value_length_swa', 'u32', 256],
+      ['gemma4.expert_count', 'u32', 128], ['gemma4.expert_used_count', 'u32', 8],
       ['tokenizer.ggml.tokens', 'strarr', ['a', 'b']]
     ], [[4]]))
     const m = await readGgufMetadata(p)
     expect(m).toMatchObject({
       headCountKv: 8, headCountKvPerLayer: [8, 8, 8, 8, 8, 2], slidingWindow: 512,
-      slidingWindowPattern: [true, true, true, true, true, false], keyLengthSwa: 256, valueLengthSwa: 256, fullAttentionInterval: null
+      slidingWindowPattern: [true, true, true, true, true, false], keyLengthSwa: 256, valueLengthSwa: 256, fullAttentionInterval: null,
+      expertCount: 128, expertUsedCount: 8
     })
     // 5 SWA layers × 8 heads × (256+256) × 2 B + 1 full layer × 2 heads × (128+128) × 2 B
     expect(m.estimated.kvCacheBytesPerToken).toBe(5 * 8 * 512 * 2 + 2 * 256 * 2)
