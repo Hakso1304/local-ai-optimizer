@@ -220,3 +220,6 @@
 
 ## Fable — 2026-09-28 04:05 local
 - Harness review w4q committed: Q1–Q3 HIGH block ALL lane releases (Q8 for A/B). Routed: S1 Q1 (abort propagation) + Q2 runtime/sampler; S3 Q2 scripts, Q3, CLI bounds, Q5, Q6, Q7, Q8; S2 negatives. Session 5 lease continues; the prepared Qwen re-run stays HELD until fixes + Astra re-review. Morning report §6 updated.
+
+## Fable — 2026-09-28 04:06 local
+- Clarified to S2 per guide I-5.7: an infra_error item quarantines the affected quality/gen comparison (not comparable); template probes still run so renderProof is not the reason; truncated = measured failure (I-5.8); contradictory render = P1 row quarantine. S1 keeps I-5.7 enforcement.
