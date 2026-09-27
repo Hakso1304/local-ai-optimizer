@@ -13,7 +13,7 @@ import { buildQualityPrompts, defaultTestSet, evaluateAsync, needlePrompt, type 
 import { detectCliffs, fmtCtx, isUsable, val } from '../scoring/cliff'
 import { recommend } from '../scoring/recommend'
 import { DEFAULT_SCORING_CONFIG, effectiveProfile, withProfile } from '../scoring/workloads'
-import { estimateMemory, generateCandidates, machineFromProfile, rulesForRequest } from './candidates'
+import { DEFAULT_CANDIDATE_RULES, estimateMemory, generateCandidates, machineFromProfile, rulesForRequest, type CandidateRules } from './candidates'
 import { LADDER_FILL, LADDER_PREDICT, PROMPT_VERSION, ladderPrompt } from './prompts'
 import { RULES_VERSION } from '../interpret'
 import { BASELINE_GEN, genConfigsFor, genLabel, samplingFor, splitReasoning, summarizeGen, templateKwargsFor, type GenRow } from './gen'
@@ -138,6 +138,19 @@ function median(xs: (number | null)[]): number | null {
 }
 
 const GPU_DEVICE = /^(Vulkan|CUDA|ROCm|SYCL|Metal|MTL)\d+$/
+/** The exact LoadConfig the runner launches a step with (pure; export-equivalence tests compare it with
+ *  core/export toLlamaServerArgs). LlamaCppBackend.loadModel adds the fixed -fit off, --parallel 1, host/port and log
+ *  flags itself. */
+export function loadConfigFor(cand: CandidateConfig, model: ModelMeta, ctx: number, rules: CandidateRules = DEFAULT_CANDIDATE_RULES): LoadConfig {
+  return {
+    modelPath: model.id, contextSize: ctx, gpuLayers: cand.gpuLayersAll ? 999 : cand.gpuLayers, device: cand.device ?? 'none',
+    threads: cand.threads, batchSize: 2048,
+    extraArgs: ['-ub', String(rules.ubatch), '-fa', cand.flashAttn ? 'on' : 'off', ...(cand.kvType === 'f16' ? [] : ['-ctk', cand.kvType, '-ctv', cand.kvType]),
+      ...(cand.kvOffload === false ? ['-nkvo'] : []), // -nkvo / --no-kv-offload: KV cache in RAM (b11208 --help)
+      ...(cand.mmap === false ? ['-lm', 'none'] : [])] // --load-mode none: no mmap (b11208 --help)
+  }
+}
+
 /** Host-side buffers from the load log. WDDM reports pinned host memory as the process's "shared GPU memory":
  *  Qwen3.8 ngl 50 under -lm none showed 3.82 GiB shared with 4 GiB of VRAM free (≈ 15/65 of the weights).
  *  CPU_Mapped is a file mapping under mmap (not shared: 8B showed 282 MiB CPU_Mapped, 0.02 GiB shared). */
@@ -394,16 +407,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
 
   // --- helpers (closures over deps/cfg) ---
 
-  function loadCfg(cand: CandidateConfig, model: ModelMeta, ctx: number): LoadConfig {
-    return {
-      modelPath: model.id, contextSize: ctx, gpuLayers: cand.gpuLayersAll ? 999 : cand.gpuLayers, device: cand.device ?? 'none',
-      threads: cand.threads, batchSize: 2048,
-      signal, // cancel during load kills the server immediately (not after the 120 s /health deadline)
-      extraArgs: ['-ub', String(rules.ubatch), '-fa', cand.flashAttn ? 'on' : 'off', ...(cand.kvType === 'f16' ? [] : ['-ctk', cand.kvType, '-ctv', cand.kvType]),
-        ...(cand.kvOffload === false ? ['-nkvo'] : []), // -nkvo / --no-kv-offload: KV cache in RAM (b11208 --help)
-        ...(cand.mmap === false ? ['-lm', 'none'] : [])] // --load-mode none: no mmap (b11208 --help)
-    }
-  }
+  // Cancel during load kills the server immediately (not after the 120 s /health deadline).
+  function loadCfg(cand: CandidateConfig, model: ModelMeta, ctx: number): LoadConfig { return { ...loadConfigFor(cand, model, ctx, rules), signal } }
 
   async function runStep(cand: CandidateConfig, model: ModelMeta, ctx: number, spillBase = 0): Promise<{ run: BenchmarkRunResult; detail: RunDetail }> {
     let pinned = 0 // host-pinned bytes, known once the load log is parsed

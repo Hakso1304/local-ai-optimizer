@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ModelMeta, QualityResult } from '../../src/shared/bench-types'
 import { BASELINE_GEN, genConfigsFor, genLabel, samplingFor, splitReasoning, summarizeGen, templateKwargsFor } from '../../src/core/benchmark/gen'
-import { qualityStats } from '../../src/core/scoring/components'
+import { measuredQuality } from '../../src/core/scoring/components'
 
 const base = { id: 'm', name: 'M', layers: 32 } as ModelMeta
 const effort = { ...base, genKnobs: { supportsThinking: true, effortValues: ['low', 'medium', 'high', 'xhigh'] } }
@@ -50,20 +50,29 @@ describe('reasoning split + summary', () => {
   })
 })
 
-describe('qualityStats (95 % band, suite-size agnostic)', () => {
+describe('measuredQuality (uncertainty.ts unc-1: unique items are the unit)', () => {
   const rows = (cat: QualityResult['category'], n: number, pass: number): QualityResult[] =>
     Array.from({ length: n }, (_, i) => ({ testId: `${cat}${i}`, category: cat, weight: 1, pass: i < pass, score: 1, detail: '' }))
-  it('value = weighted pass rate; the band narrows with more items; never 0 width at 100 %', () => {
-    const small = qualityStats(rows('coding', 5, 5), ['coding'])!
-    const big = qualityStats(rows('coding', 60, 60), ['coding'])!
-    expect(small).toMatchObject({ value: 100, n: 5 })
-    expect(small.ci95).toBeGreaterThan(big.ci95)
-    expect(big.ci95).toBeGreaterThan(0)
-    expect(qualityStats(rows('coding', 5, 3), ['instruction'])).toBeNull()
+  const ok = (r: ReturnType<typeof measuredQuality>) => { if (!r.ok) throw new Error(r.reason); return r }
+  it('value = weighted pass rate; the band narrows with more unique items and is never 0 wide at 100 %', () => {
+    const small = ok(measuredQuality(rows('coding', 5, 5), ['coding'])).u
+    const big = ok(measuredQuality(rows('coding', 60, 60), ['coding'])).u
+    expect(small).toMatchObject({ q: 100, n: 5, method: 'wilson-item', version: 'unc-1' })
+    expect(100 - small.lower).toBeGreaterThan(100 - big.lower)
+    expect(big.lower).toBeLessThan(100)
+    expect(measuredQuality(rows('coding', 5, 3), ['instruction']).ok).toBe(false)
   })
-  it('repeated samples count as more items (n = items × samples)', () => {
-    const once = rows('reasoning', 4, 2), thrice = [...once, ...once, ...once]
-    expect(qualityStats(thrice, ['reasoning'])!.n).toBe(12)
-    expect(qualityStats(thrice, ['reasoning'])!.ci95).toBeLessThan(qualityStats(once, ['reasoning'])!.ci95)
+  it('repeated samples do NOT count as more independent items (Gap 1)', () => {
+    const once = rows('reasoning', 4, 2), thrice = [...once, ...once, ...once].map((r, i) => ({ ...r, sample: Math.floor(i / 4) + 1 }))
+    const a = ok(measuredQuality(once, ['reasoning'])), b = ok(measuredQuality(thrice, ['reasoning']))
+    expect(b.u.n).toBe(4)
+    expect(b.coverage).toMatchObject({ uniqueItems: 4, completions: 12 })
+    expect(b.u.lower).toBeCloseTo(a.u.lower, 6)
+  })
+  it('an infrastructure error quarantines the result (I-5.7); truncation counts as a failure (I-5.8)', () => {
+    const infra = [...rows('coding', 5, 5)]; (infra[0] as QualityResult & { evaluationStatus: string }).evaluationStatus = 'infra_error'
+    expect(measuredQuality(infra, ['coding'])).toMatchObject({ ok: false, quarantined: true })
+    const trunc = rows('coding', 5, 5).map((r, i) => (i === 0 ? { ...r, evaluationStatus: 'truncated' as const, outputTruncated: true } : r))
+    expect(ok(measuredQuality(trunc, ['coding'])).u.q).toBe(80)
   })
 })

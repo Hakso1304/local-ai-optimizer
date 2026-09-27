@@ -28,7 +28,8 @@ export const toRun = (r: FixtureRun): BenchmarkRunResult => ({
   configId: r.configId, ctx: r.ctx, promptTokens: r.promptTokens, status: STATUS[r.status][0], failureKind: STATUS[r.status][1],
   loadTimeMs: m(r.loadMs), ttftMs: m(r.ttftMs), prefillTps: m(r.prefillTps), decodeTps: m(r.decodeTps), totalMs: m(r.totalMs),
   peakVramBytes: m(r.peakVramBytes), peakSharedGpuBytes: m(r.peakSharedGpuBytes), peakRamBytes: m(r.peakRamBytes),
-  avgGpuUtil: m(r.gpuAvgPct), avgCpuUtil: m(r.cpuAvgPct)
+  avgGpuUtil: m(r.gpuAvgPct), avgCpuUtil: m(r.cpuAvgPct),
+  warm: true // fixture rows are warmed measurements (I-6.0 requires a recorded successful warmup)
 })
 
 export const machine = (vramBytes = 17095983104): MachineLimits => ({
@@ -55,7 +56,7 @@ export function inputs(f: Fixture): CandidateInput[] {
 /** Synthetic measured quality: 5 items per category, the first `rate × 5` pass (policy tests, not measurements). */
 export const q5 = (modelId: string, rate: number): QualityResult[] =>
   (['instruction', 'reasoning', 'coding', 'structured', 'extraction', 'context'] as const).flatMap((category) => [0, 1, 2, 3, 4].map((i) => ({
-    testId: `${modelId}-${category}-${i}`, category, weight: 1, pass: i < rate * 5, score: i < rate * 5 ? 1 : 0, detail: ''
+    testId: `${category}-${i}`, category, weight: 1, pass: i < rate * 5, score: i < rate * 5 ? 1 : 0, detail: ''
   })))
 /** Give every candidate measured quality (rate per model id; default 0.6 = Q 60). */
 export const withQuality = (list: CandidateInput[], rate: number | ((modelId: string) => number) = 0.6): CandidateInput[] =>

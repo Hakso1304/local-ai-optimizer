@@ -65,9 +65,10 @@ describe('export', () => {
     expect(note).toMatch(/^Context: recommended 32768 \(measured/)
     expect(note).toMatch(/practical ceiling 65536 \(measured\); model declares 131072 \(declared\)/)
     expect(note).toMatch(/Measured: quality, genSpeed, prefillSpeed, latency, memory, stability, context\./)
-    // Without a quality run (General Chat still recommends on the prior, provisionally): quality is named as estimated.
+    // Without a quality run the pick is only provisional (I-1.2): nothing is exported.
     const prior = recommend(inputs(f).map((c) => (c.config.id === 'llama8b|ngl=all' ? { ...c, model, config: { ...gen, id: 'llama8b|ngl=all' } } : c)), M, 'general_chat')
-    expect(provenanceNote(prior)).toMatch(/Estimated: quality \(quality prior/)
+    expect(prior.provisionalBest?.estimatedTerms).toContain('quality (estimated)')
+    expect(provenanceNote(prior)).toBe('No recommendation: nothing to export.')
     expect(provenanceNote({ ...rec, best: null })).toBe('No recommendation: nothing to export.')
   })
 })

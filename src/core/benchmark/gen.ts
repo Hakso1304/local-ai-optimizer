@@ -102,12 +102,20 @@ export function summarizeGen(gen: GenConfig, rows: GenRow[], samples: number): G
   const ans = median(rows.map((r) => r.answerTokens)), rea = gen.thinking ? median(rows.map((r) => r.reasoningTokens)) : 0
   const ms = median(rows.map((r) => r.totalMs))
   const tps = median(rows.map((r) => (r.answerTokens != null && r.totalMs ? (r.answerTokens * 1000) / r.totalMs : null)))
-  const src = `quality suite median of ${rows.length} requests`
+  const raw = median(rows.map((r) => (r.answerTokens != null && r.reasoningTokens != null && r.totalMs ? ((r.answerTokens + r.reasoningTokens) * 1000) / r.totalMs : null)))
+  const rms = gen.thinking ? median(rows.map((r) => (r.answerTokens != null && r.reasoningTokens != null && r.totalMs && r.answerTokens + r.reasoningTokens > 0
+    ? (r.totalMs * r.reasoningTokens) / (r.answerTokens + r.reasoningTokens) : null))) : 0
+  // Token splits are MEASURED only when the runtime reported them for every request; a text-length split is ESTIMATED.
+  const runtime = gen.thinking ? rows.length > 0 && rows.every((r) => r.tokenSource === 'runtime') : true
+  const src = `quality suite median of ${rows.length} requests${runtime ? '' : '; reasoning/answer split by text length'}`
+  const tok = (v: number | null, reason: string, source = src): Metric => (v === null ? { value: null, kind: 'unavailable', reason } : { value: v, kind: runtime ? 'measured' : 'estimated', source })
   return {
     gen, results: rows, samples, stochastic: gen.temperature > 0,
-    answerTokens: m(ans, src, 'no token counts'),
-    reasoningTokens: rea === null ? { value: null, kind: 'unavailable', reason: 'no token counts' } : { value: rea, kind: gen.thinking ? 'estimated' : 'measured', source: gen.thinking ? `${src}; split by reasoning/answer text length` : 'thinking off' },
+    answerTokens: tok(ans, 'no token counts'),
+    reasoningTokens: gen.thinking ? tok(rea, 'no token counts') : { value: 0, kind: 'measured', source: 'thinking off' },
     effectiveAnswerLatencyMs: m(ms, src, 'no request timings'),
-    effectiveTps: m(tps, `${src}; answer tokens / total s`, 'no token counts')
+    effectiveTps: tok(tps, 'no token counts', `${src}; answer tokens / total s`),
+    reasoningMs: gen.thinking ? tok(rms, 'no token counts', `${src}; total × reasoning share`) : { value: 0, kind: 'measured', source: 'thinking off' },
+    rawTps: tok(raw, 'no token counts', `${src}; all generated tokens / total s`)
   }
 }

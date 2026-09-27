@@ -26,7 +26,7 @@ describe('required context', () => {
   it('…ineligible for required 128K, with what limited it', () => {
     const rec = recommendForWorkload(data(eight()), 'long_context_coding', { requiredContext: 131072 })
     expect(rec.best).toBeNull()
-    expect(rec.ranked[0].gateFailures).toContain('[I-2.9] practical context 64K < required 128K (limited by memory)')
+    expect(rec.ranked[0].gateFailures).toEqual([expect.stringMatching(/^\[I-2\.5\] largest clean context 64K < required 128K \(planned-skip:(memory|ram)\)$/)])
   })
 
   it('an explicit required context makes TTFT advisory: eligible, and the reason says it was accepted', () => {
@@ -41,10 +41,11 @@ describe('required context', () => {
     expect(lowered.minDecodeTps).toBe(5)
   })
 
-  it('never empty just because everything is slow: falls back to the fastest config reaching the required context', () => {
+  it('a user decode floor is never overridden by the required-context fallback: an unmet-constraint alternative, not best', () => {
     const rec = recommendForWorkload(data(eight()), 'long_context_coding', { requiredContext: 65536, minDecodeTps: 500 })
-    expect(rec.best).toMatchObject({ configId: FULL, fallback: 'meets required context; below preferred speed' })
-    expect(rec.reasons.join('\n')).toMatch(/^\[I-2\.10\] Meets required context; below preferred speed: llama8b\|ngl=all \(fastest config reaching 64K; \[I-3\.7\] decode .* below your preferred 500 t\/s\)\.$/m)
+    expect(rec.best).toBeNull()
+    expect(rec.unmetAlternatives).toEqual([{ configId: FULL, unmet: [expect.stringMatching(/^\[I-3\.1\] decode .* is below your floor 500 t\/s$/)] }])
+    expect(rec.reasons.join('\n')).toMatch(/^\[I-2\.5\] llama8b\|ngl=all reaches the required context but misses your constraint/m)
   })
 
   it('16 GB GPU, target 128K: q8_0 and -nkvo full-offload variants are generated, each noted', () => {
@@ -69,14 +70,14 @@ describe('large_coding profile (quality over speed)', () => {
   it('picks the 27B (Q 100 at 12 t/s) over the 8B (Q 60 at ~100 t/s) when both reach 64K, and says why', () => {
     const rec = recommendForWorkload(data(all()), 'large_coding', { requiredContext: 65536 })
     expect(rec.best?.configId).toBe('qwen38|ngl=55')
-    expect(rec.reasons.join('\n')).toMatch(/\[I-7\.3\] Chosen for quality over speed: quality 100 ± \d+ vs 60 ± \d+; decode 12\.4 vs [\d.]+ t\/s \([\d.]+× slower than llama8b\|ngl=all\)/)
+    expect(rec.reasons.join('\n')).toMatch(/\[I-7\.4\] Quality vs speed: chosen for quality: quality \+40 \[\+\d+, \+\d+\] vs llama8b\|ngl=all; decode 12\.4 vs [\d.]+ t\/s \([\d.]+× slower\)/)
     expect(rec.reasons.join('\n')).toMatch(/\[I-3\.3\] Required context 64K: TTFT 81\.9 s at 64K$/m)
   })
 
   it('plain Coding picks the 8B: the 27B misses the 15 s TTFT tolerance at 16K (20.5 s), so quality cannot decide', () => {
     const rec = recommendForWorkload(data(all()), 'coding')
     expect(rec.best?.configId).toBe(FULL)
-    expect(rec.ranked.find((s) => s.configId === 'qwen38|ngl=55')!.gateFailures.join(' ')).toMatch(/\[I-3\.8\] TTFT 20\.5 s at 16K exceeds the 15 s tolerance/)
+    expect(rec.ranked.find((s) => s.configId === 'qwen38|ngl=55')!.gateFailures.join(' ')).toMatch(/\[I-3\.3\] TTFT 20\.5 s at 16K exceeds the 15 s tolerance/)
   })
 
   it('large_coding: latency is advisory, gates are 8 t/s decode and quality 50', () => {

@@ -102,17 +102,17 @@ describe('componentScores', () => {
     expect(r.best?.practicalContext).toMatchObject({ value: 16384, kind: 'measured' })
     expect(r.best?.declaredContext).toMatchObject({ value: 131072, kind: 'declared' })
     expect(r.best?.score.referenceCtx).toBe(16384)
-    expect(r.reasons).toContain('[I-2.1] decode TPS fell 62% between 16K and 32K (82.0 → 31.0 t/s)')
-    expect(r.reasons).toContain('[I-2.2] No VRAM spill up to 16K')
+    expect(r.reasons.join('\n')).toMatch(/^\[I-2\.1\] .*largest clean context measured in this run 16K \(declared 128K\)\. Stopped because of a spill at 32K: decode TPS fell 62% between 16K and 32K \(82\.0 → 31\.0 t\/s\)\.$/m)
+    expect(r.reasons).toContain('[I-2.2] No VRAM spill measured up to 16K')
   })
 })
 
 describe('recommend', () => {
   it('single candidate: finite score, picked, noted as not compared (X1)', () => {
-    const r = recommend(inputs(load('session-single.json')), machine(), 'general_chat')
+    const r = recommend(withQuality(inputs(load('session-single.json'))), machine(), 'general_chat')
     expect(r.best?.configId).toBe('single')
     expect(finiteEverywhere(r)).toBe(true)
-    expect(r.reasons).toContain('[I-7.1] Only one candidate; not compared')
+    expect(r.reasons.join('\n')).toMatch(/\[I-7\.1\] Comparison scope: General Chat on this machine snapshot — only one candidate; not compared/)
     const b = r.best!.score
     expect(Math.abs(b.breakdown.reduce((s, x) => s + x.contribution, 0) - b.total)).toBeLessThan(1e-9) // A16
   })
@@ -120,7 +120,7 @@ describe('recommend', () => {
   it('all failed: no winner, every config excluded with a reason (X2, A18)', () => {
     const r = recommend(inputs(load('session-all-failed.json')), machine(), 'coding')
     expect(r.best).toBeNull()
-    expect(r.reasons[0]).toBe('[I-7.1] No recommendation: no successful runs')
+    expect(r.reasons[0]).toBe('[I-7.2] Decision trace (constraints, eligible set, neutralizations, tie-break chain): no recommendation — no successful runs')
     expect(r.excluded.map((e) => e.configId)).toEqual(['a-oom', 'b-timeout', 'c-crashed'])
     expect(r.excluded[0].reasons[0]).toMatch(/oom/)
     expect(r.alternatives).toEqual({ fastest: null, bestQuality: null, bestLongContext: null, lowestMemory: null })

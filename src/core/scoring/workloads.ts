@@ -33,11 +33,9 @@ export const WORKLOADS: Record<WorkloadId, WorkloadProfile> = {
 }
 
 export const DEFAULT_SCORING_CONFIG = {
-  version: 'scoring-1.1.0',
+  version: 'scoring-1.2.0',
   profiles: WORKLOADS,
   qualityCategoryWeights: { instruction: 0.2, reasoning: 0.25, coding: 0.25, structured: 0.1, extraction: 0.1, context: 0.1 } as Record<QualityCategory, number>,
-  /** z for the quality 95 % band (Agresti–Coull per category, category-weighted; suite-size agnostic). */
-  qualityCiZ: 1.96,
   /** Used only when no quality results exist; labelled ESTIMATED. [A] */
   qualityPrior: { base: 35, perDoubling: 15, max: 90 },
   cliff: {

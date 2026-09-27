@@ -1,6 +1,6 @@
 // Benchmark / scoring / recommendation types. Pure data, no runtime code. See docs/DESIGN.md §5.
 import type { QualityCategory, QualityResult } from '../core/quality'
-import type { Insight } from '../core/interpret'
+import type { DecisionTrace, Insight } from '../core/interpret'
 export type { QualityCategory, QualityResult }
 
 /** Where a value came from (ACCEPTANCE R1).
@@ -137,6 +137,10 @@ export interface GenQuality {
   effectiveAnswerLatencyMs: Metric
   /** Answer tokens per total second (reasoning time counts against it). */
   effectiveTps: Metric
+  /** Median time spent reasoning per request (total × reasoning/(answer + reasoning)), same requests. */
+  reasoningMs?: Metric
+  /** Raw decode of the same requests: (answer + reasoning) tokens per total second. */
+  rawTps?: Metric
 }
 
 export type KvType = 'f16' | 'q8_0'
@@ -300,9 +304,17 @@ export interface ComponentScore {
   score: number
   input: Metric
   note?: string
-  /** Quality only: effective number of graded items (items × samples) and the 95 % half-width in points. */
+  /** Quality only (core/scoring/uncertainty, unc-1 heuristic): independent units, band, half-width, method, coverage. */
   n?: number
   ci95?: number
+  lower?: number
+  upper?: number
+  method?: string
+  unit?: string
+  algorithm?: string
+  coverage?: { uniqueItems: number; uniqueSkills: number; seeds: number; completions: number; validItems: number; categoriesCovered: string[]; infraErrors: number; truncated: number }
+  /** Quality rows contained an infrastructure error (I-5.7): excluded, shown as invalid. */
+  quarantined?: boolean
 }
 
 export interface ComponentScores {
@@ -316,6 +328,8 @@ export interface ComponentScores {
   recommendedCtx: number | null
   /** false = the recommended rung is outside the latency tolerance (or its TTFT is unknown) and not advisory. */
   recommendedFits?: boolean
+  /** false = the candidate does not reach the common scoring rung (I-7.1): speed read lower, latency scored 0. */
+  reachesScoringRung?: boolean
   /** Why these rungs were chosen (rules I-2.8 / I-3.10). */
   referenceWhy?: string
   recommendedWhy?: string
@@ -387,7 +401,13 @@ export interface Recommendation {
   /** Some candidate's quality is an estimated prior (no quality run), or the winner was decided on an estimated
    *  component (rules I-1.1 / I-5.5): the ranking may change once it is measured. */
   provisional?: boolean
-  /** Interpretation rules version (core/interpret rules.v1.json) and the insight panel they produced. */
+  /** Interpretation rules version (core/interpret rules.v2.json) and the insight panel they produced. */
   rulesVersion?: string
   insights?: Insight[]
+  /** I-1.2: best candidate that depends on an estimated/unavailable decisive term — never the confirmed best. */
+  provisionalBest?: { configId: string; headline: string; estimatedTerms: string[]; reason: string }
+  /** I-2.5: configs that reach the required context but miss a user constraint (not recommendations). */
+  unmetAlternatives?: { configId: string; unmet: string[] }[]
+  /** I-7.2: every constraint, eligibility, neutralization and tie-break that produced this result. */
+  decisionTrace?: DecisionTrace
 }

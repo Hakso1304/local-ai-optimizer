@@ -61,10 +61,10 @@ describe('calibration: 8B Q4_K_M full offload 2K→64K', () => {
   it('reasons name the TTFT at the chosen ctx and the memory bound (not "no cliff")', () => {
     const rec = recommend(candidates('coding'), M, 'coding')
     // Scored at the workload target (16K) but recommended at 32K: the reason shows both.
-    expect(rec.reasons.find((x) => x.startsWith('[I-3.3] Recommended context 32K'))).toMatch(/^\[I-3\.3\] Recommended context 32K: TTFT 12\.0 s for a full prompt \(tolerance 15 s; \d+ tokens, noticeable\), decode 72\.0 t\/s \(scored at 16K: TTFT 4\.9 s, decode 88\.1 t\/s\)\.$/)
+    expect(rec.reasons.find((x) => x.startsWith('[I-3.3] Recommended context 32K'))).toMatch(/^\[I-3\.3\] Recommended context 32K: TTFT 12\.0 s with \d+ prompt tokens — noticeable \(tolerance 15 s\), decode 72\.0 t\/s \(scored at 16K: TTFT 4\.9 s, decode 88\.1 t\/s\)$/)
     const fast = recommend(candidates('fast_assistant'), M, 'fast_assistant') // recommended = scored = 4K → no suffix
     expect(fast.reasons.find((x) => x.startsWith('[I-3.3] Recommended context 4K'))).not.toMatch(/scored at/)
-    expect(rec.reasons.find((x) => x.startsWith('[I-2.1] Practical context 64K'))).toMatch(/memory-bound at 64K \(128K: est\. VRAM .* > budget/)
+    expect(rec.reasons.find((x) => x.startsWith('[I-2.1]'))).toMatch(/largest clean context measured in this run 64K \(declared 128K\)\. Higher contexts were not attempted: 128K est\. VRAM .* > budget/)
   })
 
   it('partial offload (ngl 20: 17.5 t/s; ngl 0: 7.1 t/s) is never recommended over a passing full offload', () => {
@@ -73,7 +73,7 @@ describe('calibration: 8B Q4_K_M full offload 2K→64K', () => {
       for (const id of ['llama8b|ngl=20', 'llama8b|ngl=0']) {
         const s = rec.ranked.find((x) => x.configId === id)!
         expect(s.eligible, `${w} ${id}`).toBe(false)
-        expect(s.gateFailures.join(' ')).toMatch(/\[I-3\.9\] partial offload; a full-offload config of this model ran/)
+        expect(s.gateFailures.join(' ')).toMatch(/\[I-7\.6\] partial offload dominated by llama8b\|ngl=all, a same-model full offload meeting the same hard constraints/)
       }
     }
   })
@@ -96,7 +96,7 @@ describe('calibration: Qwen2.5-14B Q4_K_M real spill cliff at 32K (per-PID telem
   const passAll = (modelId: string, best: boolean): QualityResult[] =>
     ['instruction', 'reasoning', 'coding', 'structured', 'extraction', 'context'].flatMap((category) => [0, 1, 2, 3, 4].map((i) => {
       const pass = best || i < 3
-      return { testId: `${modelId}-${category}-${i}`, category: category as QualityResult['category'], weight: 1, pass, score: pass ? 1 : 0, detail: '' }
+      return { testId: `${category}-${i}`, category: category as QualityResult['category'], weight: 1, pass, score: pass ? 1 : 0, detail: '' }
     }))
 
   it('practical 16K, degraded 32K, limited by cliff; decode_drop + shared_spill fire, vram_spill corroborates (83% VRAM)', () => {
@@ -120,21 +120,21 @@ describe('calibration: Qwen2.5-14B Q4_K_M real spill cliff at 32K (per-PID telem
     const inp = both().map((c) => ({ ...c, quality: passAll(c.model.id, c.model.id === q14.id) }))
     const rec = recommend(inp, M, 'document_analysis')
     expect(rec.best?.configId).toBe(FULL)
-    expect(rec.ranked.find((s) => s.configId === FULL14)!.gateFailures.join(' ')).toMatch(/practical context 16K is below 32K/)
+    expect(rec.ranked.find((s) => s.configId === FULL14)!.gateFailures.join(' ')).toMatch(/\[I-2\.7\] largest clean context 16K is below 32K/)
   })
 
-  it('D07: an unmeasured 14B (quality prior only) is ineligible for quality-weighted Document Analysis; the result is provisional', () => {
+  it('I-1.2: an unmeasured 14B (quality prior only) is provisional, never the confirmed best; the measured 8B is', () => {
     const rec = recommend(both(), M, 'document_analysis')
     expect(rec.best?.configId).toBe(FULL)
-    expect(rec.ranked.find((s) => s.configId === FULL14)!.gateFailures.join(' ')).toMatch(/\[I-5\.9\] no measured quality/)
-    expect(rec.provisional).toBe(true)
-    expect(rec.reasons.join(' ')).toMatch(/\[I-5\.5\] No measured quality for Qwen2\.5-14B/)
+    expect(rec.decisionTrace!.candidates.find((c) => c.configId === FULL14)).toMatchObject({ confirmed: false, undecided: ['quality (estimated)'] })
+    expect(rec.insights!.map((i) => i.text).join('\n')).toMatch(/\[I-5\.5\] qwen14b\|ngl=all: no measured quality — the quality term is a prior/)
   })
 
   it('Fast Assistant never picks the 14B, even with higher quality', () => {
     for (const withQuality of [false, true]) {
       const inp = [...candidates('fast_assistant'), ...inputs(f14)].map((c) => ({ ...c, quality: withQuality ? passAll(c.model.id, c.model.id === q14.id) : [] }))
-      expect(recommend(inp, M, 'fast_assistant').best?.configId).toBe(FULL)
+      const rec = recommend(inp, M, 'fast_assistant')
+      expect(withQuality ? rec.best?.configId : rec.provisionalBest?.configId).toBe(FULL) // without quality: provisional only (I-1.2)
     }
   })
 

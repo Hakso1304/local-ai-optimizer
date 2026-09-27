@@ -131,7 +131,8 @@ describe('runSession', () => {
     expect(s.runs.every((r) => r.status === 'pass')).toBe(true)
     expect(s.runs[0].peakVramBytes).toMatchObject({ kind: 'measured' })
     expect(s.runs[0].decodeTps).toMatchObject({ value: 90, kind: 'measured' })
-    expect(rec?.best?.configId).toBe(`${model.id}|ngl=all|kv=f16|t=8`)
+    expect(rec?.best).toBeNull() // no quality run → provisional only (I-1.2)
+    expect(rec?.provisionalBest?.configId).toBe(`${model.id}|ngl=all|kv=f16|t=8`)
     expect(s.status).toEqual(['running', 'done'])
   })
 
@@ -181,8 +182,8 @@ describe('runSession', () => {
     const kept = first.s.runs.filter((r) => r.status === 'pass')
     const { backend, rec } = await run(() => ({}), { resumeSessionId: 's1' }, {}, kept)
     expect(ctxOf(backend)).toEqual([8192, 16384, 32768])
-    expect(rec?.best?.score.referenceCtx).toBe(8192) // general chat target
-    expect(rec?.best?.score.recommendedCtx).toBe(16384) // general chat: largest passing rung ≤ 16K within the 8 s TTFT
+    expect(rec?.ranked[0].referenceCtx).toBe(8192) // general chat target (common scoring rung)
+    expect(rec?.ranked[0].recommendedCtx).toBe(16384) // general chat: largest passing rung ≤ 16K within the 8 s TTFT
   })
 
   it('resume re-runs cancelled and RAM-skipped steps instead of stopping on them', async () => {
@@ -191,7 +192,7 @@ describe('runSession', () => {
     expect(first.s.runs.at(-1)).toMatchObject({ ctx: 8192, status: 'cancelled' })
     const { backend, rec } = await run(() => ({}), { resumeSessionId: 's1' }, {}, first.s.runs) // includes the cancelled 8K row
     expect(ctxOf(backend)).toEqual([8192, 16384, 32768])
-    expect(rec?.best).not.toBeNull()
+    expect(rec?.provisionalBest).toBeDefined()
     const skipped = await run(() => ({}), { ladder: [2048] }, { readRamAvailableBytes: () => 1 * GiB })
     const again = await run(() => ({}), { resumeSessionId: 's1', ladder: [2048] }, {}, skipped.s.runs)
     expect(ctxOf(again.backend)).toEqual([2048])
@@ -227,7 +228,7 @@ describe('runSession', () => {
     expect(first.events.find((e) => e.type === 'candidate:done')).toMatchObject({ status: 'paused' })
     const resumed = await run(() => ({}), { resumeSessionId: 's1' }, {}, first.s.runs)
     expect(ctxOf(resumed.backend)).toEqual([16384, 32768])
-    expect(resumed.rec?.best).not.toBeNull()
+    expect(resumed.rec?.provisionalBest).toBeDefined()
   })
 
   it('retryFailed re-runs the failed step only (not config_drift); without it the failure is reused', async () => {
@@ -339,7 +340,7 @@ describe('runSession', () => {
     const thinking = await run(() => ({}), { workload: 'fast_assistant', runQuality: true, ladder: [2048, 4096], genSearch: false }, { models: [{ ...model, supportsThinking: true }] })
     expect(thinking.backend.calls.templateOpts.length).toBe(17)
     expect(thinking.backend.calls.templateOpts.every((o) => JSON.stringify(o) === '{"templateKwargs":{"enable_thinking":false}}')).toBe(true)
-    expect(thinking.rec?.reasons.join('\n')).toMatch(/\[I-5\.4\] .*: quality measured with thinking disabled \(chat template enable_thinking=false\)/)
+    expect(thinking.rec?.insights?.map((i) => i.text).join('\n')).toMatch(/\[I-5\.4\] .*: quality measured with thinking off \(T=0\)/)
     const plain = await run(() => ({}), { runQuality: true, ladder: [2048] })
     expect(plain.backend.calls.templateOpts.every((o) => o === undefined)).toBe(true)
   })
@@ -567,8 +568,8 @@ describe('runSession', () => {
     const { rec, s } = await run((_ctx, c) => ({ decode: c.extraArgs?.includes('q8_0') ? 70 : 90 }), { workload: 'long_context_coding' })
     expect(new Set(s.runs.map((r) => r.configId)).size).toBe(2)
     expect(rec?.ranked).toHaveLength(2)
-    expect(rec?.best?.configId).toBe(`${model.id}|ngl=all|kv=f16|t=8`)
-    expect(rec?.alternatives.fastest).toBe(`${model.id}|ngl=all|kv=f16|t=8`)
+    expect(rec?.provisionalBest?.configId).toBe(`${model.id}|ngl=all|kv=f16|t=8`) // no quality run → provisional
+    expect(rec?.alternatives.fastest).toBeNull() // alternatives are chosen among confirmed candidates only (I-1.2)
   })
 
   it('skips a step whose RAM estimate breaks the live floor (A25) without loading it', async () => {
@@ -577,9 +578,9 @@ describe('runSession', () => {
     expect(s.runs[0]).toMatchObject({ status: 'fail', failureKind: 'skipped_memory' })
     // Every step skipped by the RAM guard → say so, with the guard's arithmetic (not just "no successful runs").
     expect(rec?.best).toBeNull()
-    expect(rec?.reasons[0]).toBe('[I-7.1] No recommendation: nothing was run — the RAM guard skipped every step before loading')
+    expect(rec?.reasons[0]).toBe('[I-7.2] Decision trace (constraints, eligible set, neutralizations, tie-break chain): no recommendation — nothing was run: the RAM guard skipped every step before loading')
     expect(rec?.reasons[1]).toMatch(/^\[I-4\.3\] est\. RAM 0\.5 GiB > available 1\.0 GiB − floor 4\.0 GiB$/) // resident only; floor max(4 GiB, 8%)
-    expect(rec?.excluded[0].reasons[0]).toMatch(/^2K: run fail \(skipped_memory\): est\. RAM/)
+    expect(rec?.excluded[0].reasons[0]).toMatch(/^\[I-6\.3\] 2K: run fail \(skipped_memory\): est\. RAM/)
   })
   it('guard reason wins over the "cancelled" error its own cancel() causes (guard_abort, not request_error)', async () => {
     const spill = { ...sample(2048), procVramSharedBytes: 3 * GiB }

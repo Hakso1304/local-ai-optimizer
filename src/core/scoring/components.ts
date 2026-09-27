@@ -6,6 +6,7 @@ import type {
 } from '../../shared/bench-types'
 import { detectCliffs, fmtCtx, isUsable, val } from './cliff'
 import { DEFAULT_SCORING_CONFIG, type ScoringConfig } from './workloads'
+import { coverage, qualityUncertainty, type QualityInterval, type UncertaintyRow } from './uncertainty'
 
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x))
 const NA = (reason: string): Metric => ({ value: null, kind: 'unavailable', reason })
@@ -36,13 +37,17 @@ function passRungs(runs: BenchmarkRunResult[], cliff: CliffReport): { byCtx: Map
 
 /** Scoring step (rule I-2.8): the largest PASS rung ≤ target, else the smallest PASS rung, else the smallest usable
  *  rung — so candidates are compared at the workload's need, never beyond the practical ceiling (X9). */
-export function referenceStep(runs: BenchmarkRunResult[], cliff: CliffReport, target: number): { run: BenchmarkRunResult; why: string } | null {
+export function referenceStep(runs: BenchmarkRunResult[], cliff: CliffReport, target: number, common = false): { run: BenchmarkRunResult; why: string; reaches: boolean } | null {
   const { byCtx, pass } = passRungs(runs, cliff)
   const le = pass.filter((c) => c <= target).at(-1)
-  if (le !== undefined) return { run: byCtx.get(le)!, why: `largest passing rung ≤ target ${fmtCtx(target)}` }
-  if (pass.length) return { run: byCtx.get(pass[0])!, why: `no passing rung ≤ target ${fmtCtx(target)}; smallest passing rung` }
+  if (common && le === target) return { run: byCtx.get(le)!, why: `common scoring rung ${fmtCtx(target)}`, reaches: true }
+  // Passed a larger rung but the common one was not in its ladder: read at the nearest passing rung below, no penalty.
+  if (common && le !== undefined && pass.some((c) => c > target)) return { run: byCtx.get(le)!, why: `common scoring rung ${fmtCtx(target)} not in this ladder; read at ${fmtCtx(le)} (clean up to ${fmtCtx(pass.at(-1)!)})`, reaches: true }
+  if (common && le !== undefined) return { run: byCtx.get(le)!, why: `does not reach the common scoring rung ${fmtCtx(target)}; speed read at ${fmtCtx(le)}, latency scored 0`, reaches: false }
+  if (le !== undefined) return { run: byCtx.get(le)!, why: `largest passing rung ≤ target ${fmtCtx(target)}`, reaches: true }
+  if (pass.length) return { run: byCtx.get(pass[0])!, why: `no passing rung ≤ ${fmtCtx(target)}; smallest passing rung`, reaches: !common }
   const u = cliff.steps.find((s) => byCtx.has(s.ctx))
-  return u ? { run: byCtx.get(u.ctx)!, why: 'no passing rung; smallest usable (degraded) rung' } : null
+  return u ? { run: byCtx.get(u.ctx)!, why: 'no passing rung; smallest usable (degraded) rung', reaches: !common } : null
 }
 
 /** Recommended -c (rule I-3.10, audit D06): always a measured PASS rung. Latency advisory → the largest PASS rung ≤
@@ -63,41 +68,35 @@ export function recommendedStep(runs: BenchmarkRunResult[], cliff: CliffReport, 
   return { run: byCtx.get(pass[0])!, fits: false, why: `no passing rung has a measured TTFT within the ${(tol / 1000).toFixed(0)} s tolerance; smallest passing rung` }
 }
 
-/** Category-weighted pass rate (0–100) with a 95 % half-width, for any suite size: per category an Agresti–Coull
- *  interval on the weighted pass rate (Kish effective n = (Σw)²/Σw², so repeated samples count as more items), combined
- *  with the category weights. n = graded rows (items × samples). null when no category has results. */
-export function qualityStats(results: QualityResult[], categories: QualityCategory[], cfg: ScoringConfig = DEFAULT_SCORING_CONFIG):
-  { value: number; n: number; ci95: number } | null {
-  const z = cfg.qualityCiZ
-  const mine = results.filter((q) => categories.includes(q.category))
-  let num = 0, den = 0, v = 0
-  const parts: { W: number; var: number }[] = []
-  for (const cat of Object.keys(cfg.qualityCategoryWeights) as QualityCategory[]) {
-    const rows = mine.filter((q) => q.category === cat)
-    const w = rows.reduce((s, r) => s + r.weight, 0)
-    if (!(w > 0)) continue
-    const p = rows.reduce((s, r) => s + (r.pass ? r.weight : 0), 0) / w
-    const nEff = w ** 2 / rows.reduce((s, r) => s + r.weight ** 2, 0)
-    const pt = (p * nEff + z * z / 2) / (nEff + z * z)
-    const W = cfg.qualityCategoryWeights[cat]
-    num += W * p
-    den += W
-    parts.push({ W, var: (pt * (1 - pt)) / (nEff + z * z) })
+/** Quality over the profile's categories via core/scoring/uncertainty (unc-1, a HEURISTIC band: unique items or
+ *  skill clusters are the unit, repeats collapse to an item mean, truncated = fail). Rows with an infrastructure
+ *  error quarantine the result (rule I-5.7): quality is then unavailable, never a measured 0. */
+export function measuredQuality(results: QualityResult[], categories: QualityCategory[], cfg: ScoringConfig = DEFAULT_SCORING_CONFIG):
+  ({ ok: true; u: QualityInterval; coverage: ReturnType<typeof coverage> } | { ok: false; quarantined: boolean; reason: string }) {
+  const rows = (results as UncertaintyRow[]).filter((q) => categories.includes(q.category)).map(({ genId: _g, ...r }) => r as UncertaintyRow)
+  if (!rows.length) return { ok: false, quarantined: false, reason: 'no quality results for these categories' }
+  const weights = Object.fromEntries(categories.map((c) => [c, cfg.qualityCategoryWeights[c]]))
+  try {
+    return { ok: true, u: qualityUncertainty(rows, weights), coverage: coverage(rows) }
+  } catch (e) {
+    const msg = (e as Error).message
+    return { ok: false, quarantined: /quarantined/.test(msg), reason: msg }
   }
-  if (!(den > 0)) return null
-  for (const x of parts) v += (x.W / den) ** 2 * x.var
-  return { value: (100 * num) / den, n: mine.length, ci95: 100 * z * Math.sqrt(v) }
 }
 
 function quality(input: CandidateInput, profile: WorkloadProfile, cfg: ScoringConfig, results = input.quality): ComponentScore {
-  // Same formula as core/quality qualityScore (not imported: it pulls node:vm), restricted to the profile's categories.
-  const st = qualityStats(results, profile.promptSetIds, cfg)
-  if (st) {
-    return { score: st.value, n: st.n, ci95: st.ci95, input: { value: st.value, kind: 'measured', source: `quality suite, ${st.n} graded items, ±${st.ci95.toFixed(0)} (95 %)` } }
+  const m = measuredQuality(results, profile.promptSetIds, cfg)
+  if (m.ok) {
+    const { u, coverage: cov } = m
+    return {
+      score: u.q, n: u.n, ci95: (u.upper - u.lower) / 2, lower: u.lower, upper: u.upper, method: u.method, unit: u.unit, algorithm: u.version, coverage: cov,
+      input: { value: u.q, kind: 'measured', source: `quality suite, ${cov.uniqueItems} items / ${cov.uniqueSkills} skills (${u.method} ${u.version}, heuristic band)` }
+    }
   }
+  if (m.quarantined) return { ...unknown(NA('quality quarantined: infrastructure error in the harness (I-5.7)'), cfg), quarantined: true }
   const { paramCount, fileBytes } = input.model
   if (!paramCount || !(paramCount > 0)) return unknown(NA('no quality results and parameter count unknown'), cfg)
-  // ponytail: size/quant prior, only when the suite didn't run; replace with measured Q whenever available.
+  // ponytail: size/quant prior, only when the suite didn't run; immutable (never adjusted from other candidates, I-1.2).
   const bpw = (fileBytes * 8) / paramCount
   const p = cfg.qualityPrior
   const base = Math.min(p.max, Math.max(0, p.base + p.perDoubling * Math.log2(paramCount / 1e9)))
@@ -131,13 +130,15 @@ export function componentScores(
   machine: MachineLimits,
   profile: WorkloadProfile,
   cfg: ScoringConfig = DEFAULT_SCORING_CONFIG,
-  /** Score with this generation config's quality; thinking configs also pay for their reasoning tokens in speed/latency. */
-  gen?: GenQuality
+  /** Score with this generation config's quality; thinking configs also pay for their reasoning time in speed/latency. */
+  gen?: GenQuality,
+  /** I-7.1: the rung every candidate of the workload is scored at (min(target, largest clean context of any candidate)). */
+  opts: { scoringRung?: number | null } = {}
 ): ComponentScores {
   const n = cfg.norm
   const cliff = detectCliffs(input.runs, val(machine.vramBytes, true), cfg.cliff)
-  // Score at the workload's target (comparable across candidates); recommend the largest ctx the latency budget allows.
-  const refStep = referenceStep(input.runs, cliff, profile.targetContext)
+  // Score at a rung common to all candidates (else the workload's target); recommend the largest ctx the latency budget allows.
+  const refStep = referenceStep(input.runs, cliff, opts.scoringRung ?? profile.targetContext, opts.scoringRung != null)
   const ref = refStep?.run ?? null
   const rec = recommendedStep(input.runs, cliff, profile)
   const none = zero(NA('no usable context step'))
@@ -171,14 +172,15 @@ export function componentScores(
 
   const tol = profile.latencyToleranceMs
   const good = tol * n.latencyGoodFraction
-  // Thinking: the reader waits for reasoning tokens too. Effective decode = decode × answer/(answer + reasoning);
-  // time to answer = TTFT + reasoning tokens / decode. Token counts are the suite's medians (estimated for the ladder).
+  // Thinking (I-3.2): speed is the same-request effective answer rate of the suite (answer tokens / total s), and the
+  // wait adds the suite's measured reasoning time to the rung's TTFT. Provenance follows the token-count source.
   let decodeM = ref?.decodeTps, ttftM = ref?.ttftMs
   if (ref && gen?.gen.thinking) {
-    const d = val(ref.decodeTps, true), t = val(ref.ttftMs, true), a = val(gen.answerTokens, true), r = val(gen.reasoningTokens)
-    const src = `${gen.gen.id}: ${r ?? '?'} reasoning + ${a ?? '?'} answer tokens (suite median)`
-    decodeM = d !== null && a !== null && r !== null ? { value: (d * a) / (a + r), kind: 'estimated', source: `effective decode, ${src}` } : NA(`reasoning token count unavailable for ${gen.gen.id}`)
-    ttftM = d !== null && t !== null && r !== null ? { value: t + (r / d) * 1000, kind: 'estimated', source: `time to answer, ${src}` } : NA(`reasoning token count unavailable for ${gen.gen.id}`)
+    const t = val(ref.ttftMs, true), rm = val(gen.reasoningMs)
+    decodeM = gen.effectiveTps
+    ttftM = t !== null && rm !== null
+      ? { value: t + rm, kind: gen.reasoningMs?.kind === 'measured' ? 'measured' : 'estimated', source: `TTFT at ${fmtCtx(ref.ctx)} + ${gen.gen.id} reasoning time (suite median)` }
+      : NA(`reasoning time unavailable for ${gen.gen.id}`)
   }
   const components: Record<ComponentId, ComponentScore> = {
     quality: quality(input, profile, cfg, gen ? gen.results : input.quality),
@@ -186,13 +188,14 @@ export function componentScores(
     // points behind; reading speed is felt linearly in t/s. Prefill spans orders of magnitude, so it stays log.
     genSpeed: ref ? fromRef(decodeM, (v) => linScore(v, n.decodeFloorTps, profile.genTargetTps), 'decode TPS') : none,
     prefillSpeed: ref ? fromRef(ref.prefillTps, (v) => logScore(v, n.prefillFloorTps, profile.prefillTargetTps), 'prefill TPS') : none,
-    latency: ref ? fromRef(ttftM, (v) => 100 * clamp01(1 - Math.log(Math.max(v, good) / good) / Math.log(tol / good)), 'TTFT') : none,
+    latency: !ref ? none : refStep!.reaches ? fromRef(ttftM, (v) => 100 * clamp01(1 - Math.log(Math.max(v, good) / good) / Math.log(tol / good)), 'TTFT')
+      : { score: 0, input: ttftM ?? NA('TTFT unavailable'), note: refStep!.why },
     memory: ref ? memory(ref, input, machine, cfg) : none,
     stability,
     context
   }
   return {
     components, cliff, referenceCtx: ref?.ctx ?? null, recommendedCtx: rec?.run.ctx ?? null, usable: ref !== null,
-    ...(rec ? { recommendedFits: rec.fits, recommendedWhy: rec.why } : {}), ...(refStep ? { referenceWhy: refStep.why } : {})
+    ...(rec ? { recommendedFits: rec.fits, recommendedWhy: rec.why } : {}), ...(refStep ? { referenceWhy: refStep.why, reachesScoringRung: refStep.reaches } : {})
   }
 }

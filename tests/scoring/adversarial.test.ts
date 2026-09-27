@@ -236,7 +236,7 @@ describe('calibration (e) + X3/X16: determinism', () => {
   })
 
   it('the full calibration set ranks sensibly: fast_assistant → qwen (366 t/s), max_quality → 8B', () => {
-    expect(recommend(inputs(f), M, 'fast_assistant').best?.configId).toBe('qwen|all')
+    expect(recommend(inputs(f), M, 'fast_assistant').provisionalBest?.configId).toBe('qwen|all') // no quality run → provisional (I-1.2)
     // Measured quality 8B 80 vs Qwen-1.5B 60 (bands overlap at 5 items/category → the score decides; quality weighs 0.7).
     expect(recommend(withQuality(inputs(f), (m) => (m.startsWith('llama') ? 0.8 : 0.6)), M, 'max_quality').best?.configId).toBe('llama8b|all')
   })
@@ -370,18 +370,14 @@ describe('X19: candidate explosion is bounded', () => {
 
 // ---------------------------------------------------------------------------------------------------------------
 describe('X20: quality with no measured results is labelled ESTIMATED', () => {
-  it('max_quality without a quality run: quality input kind estimated; D07: ineligible (quality-weighted), provisional', () => {
-    const r = recommend(inputs(sub(calib, ['llama8b|all'])), M, 'max_quality')
-    const q = r.ranked[0].breakdown.find((b) => b.component === 'quality')!
-    expect(q.input.kind).toBe('estimated')
-    expect(r.ranked[0].gateFailures.join(' ')).toMatch(/\[I-5\.9\] no measured quality/)
-    expect(r.best).toBeNull()
-    expect(r.provisional).toBe(true)
-    // General Chat is not quality-weighted: the prior stays usable there, labelled ESTIMATED and provisional.
-    const chat = recommend(inputs(sub(calib, ['llama8b|all'])), M, 'general_chat')
-    expect(chat.best?.configId).toBe('llama8b|all')
-    expect(chat.reasons.join(' ')).toMatch(/ESTIMATED/)
-    expect(chat.provisional).toBe(true)
+  it('without a quality run: quality input kind estimated; the candidate is provisional, never the confirmed best (I-1.2)', () => {
+    for (const w of ['max_quality', 'general_chat'] as const) {
+      const r = recommend(inputs(sub(calib, ['llama8b|all'])), M, w)
+      expect(r.ranked[0].breakdown.find((b) => b.component === 'quality')!.input.kind, w).toBe('estimated')
+      expect(r.best, w).toBeNull()
+      expect(r.provisional, w).toBe(true)
+      expect(r.provisionalBest, w).toMatchObject({ configId: 'llama8b|all', estimatedTerms: ['quality (estimated)'] })
+    }
   })
 
   it('measured quality replaces the prior', () => {

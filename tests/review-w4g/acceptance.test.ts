@@ -55,7 +55,7 @@ beforeAll(() => {
 })
 
 describe('W4G v2 acceptance — remove it.fails only when each contract is implemented', () => {
-  it.fails('G01 repeats preserve the band and the report labels its heuristic coverage', () => {
+  it('G01 repeats preserve the band and the report labels its heuristic coverage', () => {
     const c = candidate(), repeated = { ...c, quality: [...c.quality, ...c.quality, ...c.quality] }
     const oracle = qualityUncertainty(c.quality, { instruction: 1, reasoning: 1, coding: 1, structured: 1, extraction: 1, context: 1 })
     expect(qualityUncertainty(repeated.quality, { instruction: 1, reasoning: 1, coding: 1, structured: 1, extraction: 1, context: 1 })).toEqual(oracle)
@@ -71,14 +71,14 @@ describe('W4G v2 acceptance — remove it.fails only when each contract is imple
     expect.soft(text).toMatch(/samples|completions/i)
   })
 
-  it.fails('G02 required context never overrides an explicit user decode floor', () => {
+  it('G02 required context never overrides an explicit user decode floor', () => {
     const c = candidate('slow', [32768]); c.runs[0].decodeTps = m(10)
     const rec = recommendForWorkload({ candidates: [c], machine: machine() }, 'coding', { requiredContext: 32768, minDecodeTps: 20 })
     expect(rec.best).toBeNull()
     expect(rec.ranked.find(x => x.configId === 'slow')?.eligible).toBe(false)
   })
 
-  it.fails('G03 partial offload survives when full offload misses the required context', () => {
+  it('G03 partial offload survives when full offload misses the required context', () => {
     const full = candidate('full', [8192]), partial = candidate('partial', [8192, 32768])
     partial.model = full.model; partial.config.modelId = full.model.id
     partial.config.gpuLayersAll = false; partial.config.gpuLayers = 20
@@ -87,7 +87,7 @@ describe('W4G v2 acceptance — remove it.fails only when each contract is imple
     expect(rec.ranked.find(x => x.configId === 'partial')?.eligible).toBe(true)
   })
 
-  it.fails('G04 infra_error quality is quarantined without discarding valid performance', () => {
+  it('G04 infra_error quality is quarantined without discarding valid performance', () => {
     const c = candidate(); c.quality = quality().map((r, i) => i ? r : { ...r, evaluationStatus: 'infra_error' })
     const v = verdicts({ candidates: [c], machine: machine() }, 'max_quality')
     expect.soft(v.winner).toBeNull()
@@ -95,14 +95,14 @@ describe('W4G v2 acceptance — remove it.fails only when each contract is imple
     expect.soft(interpret(v).some(i => i.ruleId === 'I-5.7' && i.severity === 'critical' && /invalid|quarantin|infra/i.test(i.text))).toBe(true)
   })
 
-  it.fails('G05 a model prior is immutable when another measured candidate is added', () => {
+  it('G05 a model prior is immutable when another measured candidate is added', () => {
     const prior = candidate('prior'); prior.quality = []
     const low = candidate('measured'); low.quality = quality(10, 1)
     const score = (cs: CandidateInput[]) => verdicts({ candidates: cs, machine: machine() }, 'general_chat').ranked.find(x => x.input.config.id === 'prior')!.cs.components.quality.score
     expect(score([prior, low])).toBe(score([prior]))
   })
 
-  it.fails('G06 device loss remains critical after a superseding successful retry', () => {
+  it('G06 device loss remains critical after a superseding successful retry', () => {
     const c = candidate()
     // Expected session input: allRuns: (BenchmarkRunResult & {runId: string,
     // supersededBy?: string, startedAt: number, endedAt: number})[]. runs is latest-only.
@@ -113,14 +113,14 @@ describe('W4G v2 acceptance — remove it.fails only when each contract is imple
     expect(insights.some(i => i.ruleId === 'I-6.3' && i.severity === 'critical' && /device.lost|GPU reset/i.test(i.text))).toBe(true)
   })
 
-  it.fails('G07 unknown in-use VRAM cannot produce numeric planning headroom', () => {
+  it('G07 unknown in-use VRAM cannot produce numeric planning headroom', () => {
     const hw = machine(); hw.vramInUseBytes = na('adapter counter unavailable')
     const headroom = inspect([candidate()], hw).filter(i => i.ruleId === 'I-4.1')
     // Omission or an explicit unavailable/named per-PID-vs-total basis is allowed.
     expect(headroom.every(i => /unavailable|not evaluable|not verified|per.PID.*(?:adapter|total)/i.test(i.text))).toBe(true)
   })
 
-  it.fails('G07b floor distance preserves a one GiB deficit as negative', () => {
+  it('G07b floor distance preserves a one GiB deficit as negative', () => {
     const c = candidate(); c.runs[0].minRamAvailBytes = m(3 * GiB)
     // Expected §12 input: planningSnapshot.ramFloorBytes, mmapCreditBytes.
     const data = { candidates: [c], machine: machine(), planningSnapshot: { ramFloorBytes: 4 * GiB, mmapCreditBytes: 0 } }
@@ -128,7 +128,7 @@ describe('W4G v2 acceptance — remove it.fails only when each contract is imple
     expect(text).toMatch(/(?:[-−]1(?:\.0+)?\s*GiB|1(?:\.0+)?\s*GiB\s+below)/i)
   })
 
-  it.fails('G08 unrelated fine-tunes are not declared equivalent quantizations', () => {
+  it('G08 unrelated fine-tunes are not declared equivalent quantizations', () => {
     const a = candidate('finetune-a'), b = candidate('finetune-b')
     // Expected ModelMeta.baseModelId/fineTuneId identify content beyond architecture.
     a.model = { ...a.model, baseModelId: 'org/base', fineTuneId: 'org/math' } as ModelMeta
@@ -137,7 +137,7 @@ describe('W4G v2 acceptance — remove it.fails only when each contract is imple
     expect(notes).toEqual([])
   })
 
-  it.fails('G09 a user-capped clean sweep is coverage, not a proven usable limit', () => {
+  it('G09 a user-capped clean sweep is coverage, not a proven usable limit', () => {
     const c = candidate('capped', [8192])
     // Expected session input: stopReason: 'user-cap'; largest clean tested remains 8K.
     const data = { candidates: [c], machine: machine(), stopReason: 'user-cap' as const }
@@ -155,7 +155,7 @@ describe('W4G v2 acceptance — remove it.fails only when each contract is imple
     ['I-7.4', /quality/i, /speed|slower/i],
     ['I-7.6', /partial/i, /constraint|eligible/i],
   ] as const
-  it.fails.each(meanings)('G10 rule-id integrity: %s retains its v2 meaning', (id, first, second) => {
+  it.each(meanings)('G10 rule-id integrity: %s retains its v2 meaning', (id, first, second) => {
     const r = RULES.find(r => r.id === id)
     // Soft assertions inspect text even while interp-1 is still the active version.
     expect.soft(RULES_VERSION).toBe('interp-2')
@@ -163,7 +163,7 @@ describe('W4G v2 acceptance — remove it.fails only when each contract is imple
     expect.soft(r?.text).toMatch(second)
   })
 
-  it.fails('G10b decision trace records scoring rung, eligible set and actual tie-break chain', () => {
+  it('G10b decision trace records scoring rung, eligible set and actual tie-break chain', () => {
     const rec = recommend([candidate('a'), candidate('b')], machine(), 'max_quality')
     const trace = traceOf(rec)
     expect(trace).toBeDefined()
@@ -175,7 +175,7 @@ describe('W4G v2 acceptance — remove it.fails only when each contract is imple
     expect(Object.keys(trace!.thresholdsUsed).length).toBeGreaterThan(0)
   })
 
-  it.fails('G11 alternative ranking choices carry their deciding rule verdict', () => {
+  it('G11 alternative ranking choices carry their deciding rule verdict', () => {
     const a = candidate('a'), b = candidate('b'); b.runs[0].decodeTps = m(60)
     const rec = recommend([a, b], machine(), 'max_quality'), trace = traceOf(rec)
     expect(trace?.alternatives).toBeDefined()
@@ -186,7 +186,7 @@ describe('W4G v2 acceptance — remove it.fails only when each contract is imple
     expect(rec.alternatives.fastest).toBe('b')
   })
 
-  it.fails('G12 every recommendation, why-not and generation reason cites a rule', () => {
+  it('G12 every recommendation, why-not and generation reason cites a rule', () => {
     const a = candidate('a'), b = candidate('b')
     a.genQuality = [gen('off', false, quality(10, 6)), gen('think', true, quality(10, 10))]
     const rec = recommend([a, b], machine(), 'max_quality')
@@ -195,7 +195,7 @@ describe('W4G v2 acceptance — remove it.fails only when each contract is imple
     expect(texts.filter(text => !/\[I-\d+\.\d+\]/.test(text))).toEqual([])
   })
 
-  it.fails('G13 first-rung spill never suggests a nonexistent clean use-context action', () => {
+  it('G13 first-rung spill never suggests a nonexistent clean use-context action', () => {
     const c = candidate(); c.runs[0].peakSharedGpuBytes = m(GiB)
     const report = detectCliffs(c.runs, 16 * GiB)
     expect(report.spillFreeUpTo).toBeNull()
@@ -204,7 +204,7 @@ describe('W4G v2 acceptance — remove it.fails only when each contract is imple
     expect(spill.some(i => /^use-context(?:\s|$)/.test(i.action ?? ''))).toBe(false)
   })
 
-  it.fails('G14 category boundaries are inclusive and fewer than three items is insufficient', () => {
+  it('G14 category boundaries are inclusive and fewer than three items is insufficient', () => {
     const c = candidate(); c.quality = [...quality(3, 1).filter(r => r.category === 'reasoning'), ...quality(3, 2).filter(r => r.category === 'coding')]
     const flags = categoryFlags(c.quality)
     expect(flags.find(f => f.category === 'reasoning')?.flags).toContain('weak')
@@ -222,13 +222,13 @@ describe('W4G v2 acceptance — remove it.fails only when each contract is imple
     expect(componentScores(c, machine(), cfg).components.quality.score).toBeGreaterThan(0)
   })
 
-  it.fails('G14b rep spread uses median rather than maximum', () => {
+  it('G14b rep spread uses median rather than maximum', () => {
     const c = candidate(); c.runs[0].repDecodeTps = [10, 11.7]; c.runs[0].decodeTps = m(10.85)
     // 1.7 / 10.85 = 15.67% >15%; 1.7 / 11.7 = 14.53% incorrectly misses it.
     expect(inspect([c]).some(i => i.ruleId === 'I-6.1' && i.severity === 'warn')).toBe(true)
   })
 
-  it.fails('G15 a recovered decode dip states cause unverified, not likely contention', () => {
+  it('G15 a recovered decode dip states cause unverified, not likely contention', () => {
     const c = candidate('dip', [2048, 4096, 8192])
     c.runs[0].decodeTps = m(40); c.runs[1].decodeTps = m(20); c.runs[2].decodeTps = m(40)
     const text = inspect([c]).filter(i => i.ruleId === 'I-2.6').map(i => i.text).join(' ')

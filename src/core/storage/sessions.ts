@@ -246,7 +246,7 @@ function demoCandidate(f: Fixture, configId: string, kv: 'f16' | 'q8_0'): Candid
     configId, ctx: r.ctx, promptTokens: r.promptTokens, status: STATUS[r.status][0], failureKind: STATUS[r.status][1],
     loadTimeMs: m(r.loadMs), ttftMs: m(r.ttftMs), prefillTps: m(r.prefillTps), decodeTps: m(r.decodeTps), totalMs: m(r.totalMs),
     peakVramBytes: m(r.peakVramBytes), peakSharedGpuBytes: m(r.peakSharedGpuBytes), peakRamBytes: m(r.peakRamBytes),
-    avgGpuUtil: m(r.gpuAvgPct), avgCpuUtil: m(r.cpuAvgPct)
+    avgGpuUtil: m(r.gpuAvgPct), avgCpuUtil: m(r.cpuAvgPct), warm: true // DEMO rows stand for warmed measurements (I-6.0)
   }))
   return { config, model: { ...model, name: `DEMO ${model.name}` }, runs, quality: [] }
 }
