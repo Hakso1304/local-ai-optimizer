@@ -984,7 +984,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   }
 
   /** CR-04-long: needle at 50 % depth of a prompt filling ~0.75 × ctx. null when the load itself failed. */
-  async function runLongNeedle(cand: CandidateConfig, model: ModelMeta, ctx: number): Promise<QualityResult | null> {
+  async function runLongNeedle(cand: CandidateConfig, model: ModelMeta, ctx: number): Promise<GenRow | null> {
     send({ type: 'phase', configId: cand.id, ctx, phase: 'quality' })
     if (!await backendFor(cand)) {
       log('warn', `${cand.id}: required ${cand.backend ?? 'vulkan'} backend unavailable for long-context needle (I-3.9)`)
@@ -1004,9 +1004,16 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       const r = await backend.runPrompt({ prompt, maxTokens: test.maxTokens, temperature: 0, seed: 1, timeoutMs: cfg.promptTimeoutBaseMs + ctx * cfg.promptTimeoutPerCtxMs })
       const why = g.tripped()
       if (why) { log('error', `${cand.id}: ${why}`); return null }
-      return r.error ? { testId: test.id, category: 'context', weight: 1, pass: false, score: 0, detail: `request failed: ${r.error}` } : await evaluate(test, r.text)
+      const outputTruncated = r.timedOut || r.stopType === 'limit'
+      const status: GenRow['evaluationStatus'] = r.error && !r.timedOut ? 'infra_error' : outputTruncated ? 'truncated' : 'valid'
+      const result = r.error
+        ? { testId: test.id, category: 'context' as const, weight: 1, pass: false, score: 0, detail: `request failed: ${r.error}` }
+        : await evaluate(test, r.text)
+      return { ...result, evaluationStatus: status, outputTruncated, maxTokens: test.maxTokens, checkerVersion: suite.suite }
     } catch (e) {
-      return { testId: test.id, category: 'context', weight: 1, pass: false, score: 0, detail: `request failed: ${(e as Error).message}` }
+      return { testId: test.id, category: 'context', weight: 1, pass: false, score: 0,
+        detail: `request failed: ${(e as Error).message}`, evaluationStatus: 'infra_error', outputTruncated: false,
+        maxTokens: test.maxTokens, checkerVersion: suite.suite }
     } finally {
       g.stop()
     }
