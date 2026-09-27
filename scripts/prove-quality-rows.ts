@@ -30,6 +30,9 @@ const artifact = JSON.parse(raw.toString('utf8')) as {
 }
 if (!Array.isArray(artifact.qualityResults) || !artifact.session?.payload?.request) throw new Error('input is not a session-evidence export')
 const previousReplay = artifact.rowProofReplay as { runId?: string } | undefined
+if (previousReplay && (typeof previousReplay.runId !== 'string' || !/^[0-9a-f]{64}$/.test(previousReplay.runId))) {
+  throw new Error('input replay artifact has no valid run lineage id')
+}
 const expectedSession = flag('--session')
 if (expectedSession && Number(expectedSession) !== artifact.sessionId) throw new Error(`session mismatch: export is ${artifact.sessionId}`)
 const request = artifact.session.payload.request
@@ -92,7 +95,8 @@ for (const q of modelRows) {
   if (!Number.isInteger(sample) || sample! < 1) throw new Error(`row ${q.id}: sample is missing`)
   const requestedSampling = { temperature: gen.temperature, topP: gen.topP ?? null, topK: gen.topK ?? null, minP: gen.minP ?? null, seed: sample! }
   const prior = row.proofProvenance
-  if (previousReplay && (!prior?.origin || previousReplay.runId !== prior.origin.lineage.at(-1))) {
+  if (previousReplay && (!prior?.origin || !Array.isArray(prior.origin.lineage) ||
+      prior.origin.lineage.length === 0 || previousReplay.runId !== prior.origin.lineage.at(-1))) {
     throw new Error(`row ${q.id}: replay lineage is missing or does not match the input artifact`)
   }
   if (!previousReplay && prior?.mode === 'live-template-replay') throw new Error(`row ${q.id}: replay provenance without artifact lineage`)
