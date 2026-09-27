@@ -101,7 +101,7 @@ async function baselineTests(value: string) {
       counts = { passed: report.numPassedTests, failed: report.numFailedTests, skipped: report.numPendingTests, total: report.numTotalTests }
   } catch { /* Reporter failure is a HOLD. */ }
   finally { rmSync(reportPath, { force: true }) }
-  const ready = result.code === 0 && !!counts && counts.passed > 0 && counts.failed === 0
+  const ready = result.code === 0 && !!counts && counts.passed > 0 && counts.failed === 0 && counts.skipped === 0
   return { ready, evidence: { command: { executable: process.execPath, argv, cwd: root, shell: false, windowsHide: true, timeoutMs: 180_000 },
     startedAt, endedAt, exitCode: result.code, counts, reporter: 'vitest json (temporary reporter file removed)',
     stdoutSha256: createHash('sha256').update(result.stdout).digest('hex'),
