@@ -1,0 +1,44 @@
+{
+ "vramBytes": 17095983104,
+ "models": [
+  {
+   "id": "llama31-8b-q4km",
+   "name": "Meta-Llama-3.1-8B-Instruct Q4_K_M",
+   "fileBytes": 4920739232,
+   "paramCount": 8030261248,
+   "quant": "Q4_K_M",
+   "arch": "llama",
+   "ctxTrain": 131072,
+   "layers": 32,
+   "nEmbd": 4096,
+   "heads": 32,
+   "headsKv": 8,
+   "keyLength": null,
+   "valueLength": null,
+   "nVocab": 128256,
+   "slidingWindow": null
+  }
+ ],
+ "runs": [
+  {
+   "configId": "zero",
+   "model": "llama31-8b-q4km",
+   "quant": "Q4_K_M",
+   "ctx": 4096,
+   "gpuLayers": 32,
+   "threads": 8,
+   "status": "ok",
+   "promptTokens": 3904,
+   "loadMs": 4200,
+   "ttftMs": 0,
+   "prefillTps": 2900,
+   "decodeTps": 0,
+   "totalMs": null,
+   "peakRamBytes": 1073741824,
+   "peakVramBytes": 6335076762,
+   "peakSharedGpuBytes": 10485760,
+   "cpuAvgPct": 12,
+   "gpuAvgPct": 95
+  }
+ ]
+}
