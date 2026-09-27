@@ -83,8 +83,7 @@ function listDevices(exe = EXE): string[] {
   return lines
 }
 function vulkanHeaps(): string {
-  ramFloor()
-  try { return execFileSync('vulkaninfo', ['--summary'], { encoding: 'utf8', windowsHide: true, timeout: PROBE_TIMEOUT_MS, env: safeEnv(), stdio: ['ignore', 'pipe', 'ignore'] }).split(/\r?\n/).filter((l) => /heap|MEMORY_HEAP|size\s*=/i.test(l)).slice(0, 30).join('\n') } catch { return 'vulkaninfo not available (skipped)' }
+  try { ramFloor(); return execFileSync('vulkaninfo', ['--summary'], { encoding: 'utf8', windowsHide: true, timeout: PROBE_TIMEOUT_MS, env: safeEnv(), stdio: ['ignore', 'pipe', 'ignore'] }).split(/\r?\n/).filter((l) => /heap|MEMORY_HEAP|size\s*=/i.test(l)).slice(0, 30).join('\n') } catch { return 'vulkaninfo not available (skipped)' }
 }
 
 const servers = () => execFileSync('tasklist', ['/FI', 'IMAGENAME eq llama-server.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true, timeout: PROBE_TIMEOUT_MS }).split('\n').filter((l) => /^"llama-server\.exe"/i.test(l)).length
@@ -242,6 +241,7 @@ async function hipAb() {
   // Unified memory would let HIP page to host RAM silently — the ceiling comparison would be meaningless.
   if (unifiedMemoryKeys().length) throw new Error(`${unifiedMemoryKeys().join(', ')} set in this environment; unset it first`)
   const hipDevices = listDevices(HIP_EXE)
+  const vulkanDevices = listDevices()
   console.log(`HIP --list-devices: ${JSON.stringify(hipDevices)}`)
   const results = []
   try {
@@ -253,7 +253,7 @@ async function hipAb() {
       }
     }
   } finally {
-    writeFileSync(out, JSON.stringify({ when: new Date().toISOString(), model: MODEL, hipDevices, vulkanDevices: listDevices(), unifiedMemoryEnvKeys: unifiedMemoryKeys(), safeEnvStripsUnifiedMemory: true, results }, null, 1))
+    writeFileSync(out, JSON.stringify({ when: new Date().toISOString(), model: MODEL, hipDevices, vulkanDevices, unifiedMemoryEnvKeys: unifiedMemoryKeys(), safeEnvStripsUnifiedMemory: true, results }, null, 1))
   }
   console.log(`wrote ${out}; leftover llama-server ${servers()}`)
 }
@@ -283,6 +283,7 @@ async function main() {
   if (HIP) return hipAb()
   if (IGPU) return igpuAb()
   const results = []
+  const heaps = vulkanHeaps()
   try {
     await idle(120_000)
     const a1 = await launch('A1 fresh, 36,572-token prompt', baseArgv(65536), 36572)
@@ -300,7 +301,7 @@ async function main() {
     const b2 = await launch('B2 fresh, -ub 256, 36,572-token prompt', baseArgv(65536).map((a, i, xs) => (xs[i - 1] === '-ub' ? '256' : a)), 36572)
     results.push(b2); assertCase(b2)
   } finally {
-    writeFileSync(out, JSON.stringify({ when: new Date().toISOString(), model: MODEL, vulkaninfoHeaps: vulkanHeaps(), results }, null, 1))
+    writeFileSync(out, JSON.stringify({ when: new Date().toISOString(), model: MODEL, vulkaninfoHeaps: heaps, results }, null, 1))
   }
   console.log(`wrote ${out}; leftover llama-server ${servers()}`)
 }
