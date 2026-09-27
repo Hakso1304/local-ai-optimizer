@@ -463,7 +463,11 @@ export function interpret(v: Verdicts): Insight[] {
 
   // §8 generation configs
   for (const c of firstOf(everyone.filter((x) => x.genOptions.length))) {
-    for (const g of c.genOptions.filter((x) => !x.comparable)) add('gen.comparable', { model: c.input.model.name, gen: genLabel(g.gq.gen), why: g.why ?? 'not comparable' }, [], { configId: id(c), evaluable: false })
+    for (const g of c.genOptions.filter((x) => !x.comparable)) {
+      const standaloneOff = !g.gq.gen.thinking && c.qualityMeasured && !c.gen
+      const why = `${g.why ?? 'not comparable'}${standaloneOff ? '; standalone quality measured, thinking state unverified' : ''}`
+      add('gen.comparable', { model: c.input.model.name, gen: genLabel(g.gq.gen), why }, [], { configId: id(c), evaluable: false })
+    }
     const off = c.genOptions.find((g) => !g.gq.gen.thinking)
     const g = c.gen
     if (g && off && g !== off) {

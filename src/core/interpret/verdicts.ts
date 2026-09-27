@@ -419,9 +419,12 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
     const qCheck = contractCheck(qRows, [], qConfig, qExpected, effort)
     // Plain quality without template kwargs or a gen comparison retains its measured status.
     // A requested/recorded seed contract, however, must be honoured even on that path.
-    const seedContractApplies = !!qExpected || sortedGens.length > 1 || sortedGens.some((x) => x.gen.thinking) || qRows.some((r) => !!r.requestedSampling)
-    const proofRequired = !!qExpected || sortedGens.length > 1 || sortedGens.some((x) => x.gen.thinking)
-    const qErrors = [...qCheck.errors, ...(proofRequired ? qCheck.missing : seedContractApplies ? qCheck.missing.filter((x) => x.includes('seed')) : [])]
+    // A selected generation setting is a claim about how these rows were
+    // produced, so it needs the full proof. If every option is non-comparable,
+    // fall back to the baseline as a standalone quality observation: its
+    // measured checker results remain usable without claiming thinking state.
+    const seedContractApplies = qRows.some((r) => r.requestedSampling !== undefined && Number.isInteger(r.sample))
+    const qErrors = [...qCheck.errors, ...(gen ? qCheck.missing : seedContractApplies ? qCheck.missing.filter((x) => x.includes('seed')) : [])]
     // A contradictory baseline cannot remain a measured quality contribution merely
     // because no alternative generation config was selected. Preserve the rows for
     // audit, but score this candidate with quality unavailable.

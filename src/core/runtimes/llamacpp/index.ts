@@ -133,17 +133,23 @@ const defaultProcessTree: ProcessTree = {
   },
   async inspect(pid, timeoutMs = 5_000) {
     if (!Number.isSafeInteger(pid) || pid <= 0) return null
-    const raw = await runPowerShell(`$w=Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}';$p=Get-Process -Id ${pid} -ErrorAction SilentlyContinue;if($w -and $p -and $w.CreationDate.ToUniversalTime().Ticks -eq $p.StartTime.ToUniversalTime().Ticks){@{pid=[int]$w.ProcessId;parentPid=[int]$w.ParentProcessId;name=[string]$w.Name;startedAt=$p.StartTime.ToUniversalTime().ToString('o')} | ConvertTo-Json -Compress}`, timeoutMs)
+    // Use CIM for both PID discovery and creation identity. Get-Process
+    // StartTime has finer precision, and comparing its raw ticks to CIM's
+    // truncated CreationDate rejects the same live process.
+    const raw = await runPowerShell(`$w=Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}' -ErrorAction Stop;if($w){@{pid=[int]$w.ProcessId;parentPid=[int]$w.ParentProcessId;name=[string]$w.Name;startedAt=$w.CreationDate.ToUniversalTime().ToString('o')} | ConvertTo-Json -Compress}`, timeoutMs)
     if (!raw.trim()) return null
     const record = JSON.parse(raw) as ProcessIdentity
     return record.pid === pid && Number.isSafeInteger(record.parentPid) && typeof record.startedAt === 'string' ? record : null
   },
   async killVerified(record) {
     if (!Number.isSafeInteger(record.pid) || record.pid <= 0 || !/^\d{4}-\d\d-\d\dT[\d:.]+Z$/.test(record.startedAt)) throw new Error('invalid process identity')
-    const script = `$p=Get-Process -Id ${record.pid} -ErrorAction SilentlyContinue;if(-not $p){'gone';exit};$want=[datetime]::Parse('${record.startedAt}').ToUniversalTime();if($p.StartTime.ToUniversalTime().Ticks -ne $want.Ticks){'mismatch';exit};$p.Kill();$p.WaitForExit(3000) | Out-Null;'killed'`
+    const script = `$p=Get-Process -Id ${record.pid} -ErrorAction SilentlyContinue;if(-not $p){'gone';exit};$want=[datetime]::Parse('${record.startedAt}').ToUniversalTime();if([math]::Abs($p.StartTime.ToUniversalTime().Ticks - $want.Ticks) -ge 10){'mismatch';exit};$p.Kill();$p.WaitForExit(3000) | Out-Null;'killed'`
     return (await runPowerShell(script, 6_000)).trim() === 'killed'
   }
 }
+
+/** Windows PID + creation-time inspection for supervised external process trees. */
+export const windowsProcessTree: ProcessTree = defaultProcessTree
 
 /** The child's environment: the parent's minus GGML_CUDA_ENABLE_UNIFIED_MEMORY. Managed memory lets a CUDA/HIP
  *  build oversubscribe VRAM into system RAM, which would make "fits in VRAM" unmeasurable (docs/HIP-BACKEND.md). */
@@ -406,10 +412,14 @@ export class LlamaCppBackend implements InferenceBackend {
     if (p.pid && this.processTree.inspect) {
       try {
         const root = await this.processTree.inspect(p.pid, 15_000)
-        if (!root || !alive(p)) throw new Error('spawned server identity could not be verified')
+        if (!root || !alive(p)) {
+          await waitExit(p, 1_000)
+          throw new Error('spawned server identity could not be verified')
+        }
         this.ownedRootIdentity = root
       } catch (e) {
         await this.unloadModel()
+        if (exited) throw new Error(`${exited}; last log: ${this.log.slice(-10).join(' | ')}`)
         throw new ServerStuckError(`cannot verify spawned server identity: ${(e as Error).message}`)
       }
     }
@@ -493,11 +503,23 @@ export class LlamaCppBackend implements InferenceBackend {
       (a.parentPid === undefined || b.parentPid === undefined || a.parentPid === b.parentPid)
     const children = new Map(this.ownedChildren)
     const scan = () => this.processTree.descendants(root)
-    const reconcile = (found: ProcessIdentity[], rootWasLive: boolean) => {
+    const reconcile = async (found: ProcessIdentity[], rootWasLive: boolean) => {
       for (const child of found) {
         const known = children.get(child.pid)
         if (known && same(child, known)) continue
         if (known && !same(child, known) && !rootWasLive) continue // the recorded child exited; its PID is now foreign
+        if (!known && rootWasLive && this.ownedRootIdentity && this.processTree.inspect &&
+            same(await this.processTree.inspect(root), this.ownedRootIdentity) &&
+            same(await this.processTree.inspect(child.pid), child) &&
+            (child.parentPid === root || (child.parentPid !== undefined &&
+              children.has(child.parentPid) && same(await this.processTree.inspect(child.parentPid), children.get(child.parentPid)!) &&
+              await ancestryValid(children.get(child.parentPid)!)))) {
+          // A child discovered during unload is still owned if the live root
+          // and every observed ancestry edge retain their creation identity.
+          children.set(child.pid, child)
+          this.ownedChildren.set(child.pid, child)
+          continue
+        }
         const born = Date.parse(child.startedAt)
         if (!rootWasLive && Number.isFinite(born) && this.ownedExitAt !== null && born > this.ownedExitAt) continue
         throw new ServerStuckError(`llama-server pid ${root} has unverified descendant ${child.pid}`)
@@ -529,7 +551,7 @@ export class LlamaCppBackend implements InferenceBackend {
         throw new ServerStuckError(`llama-server pid ${root} identity changed before unload`)
       }
       const initial = await scan() // enumeration failure is a fatal inability to verify cleanup
-      reconcile(initial, rootLive)
+      await reconcile(initial, rootLive)
       // After the parent exits, only children captured while it was alive are
       // owned. A new child of the same numeric parent PID is foreign.
       for (const child of children.values()) await killChild(child)
@@ -540,7 +562,7 @@ export class LlamaCppBackend implements InferenceBackend {
       }
       const deadline = Date.now() + 3_000
       while (true) {
-        reconcile(await scan(), false) // every scan is evidence; unknown survivors cannot be discarded
+        await reconcile(await scan(), false) // every scan is evidence; unknown survivors cannot be discarded
         const remaining: ProcessIdentity[] = []
         for (const child of children.values()) if (await stillOwned(child)) remaining.push(child)
         if (!remaining.length) break
