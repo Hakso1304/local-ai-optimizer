@@ -252,6 +252,60 @@ describe('A/B/C (review-w4l): generation contract strictness', () => {
   })
 })
 
+describe('I-8.0 off/think comparator proof on both sides', () => {
+  const rowsFor = (id: 'off' | 'think-low', proof: Record<string, unknown> = {}) => quality(10, () => true).map((r) => ({
+    ...r, genId: id, templateHash: 'tpl', runtimeVersion: 'b1', modelFingerprint: 'm1',
+    ...proof
+  } as QualityResult))
+  const gq = (id: 'off' | 'think-low', results: QualityResult[]): GenQuality => ({
+    gen: { id, thinking: id !== 'off', ...(id === 'think-low' ? { effort: 'low' } : {}), temperature: 1, source: 'model-card' },
+    results, samples: 1, stochastic: true, answerTokens: m(100), reasoningTokens: m(id === 'off' ? 0 : 20),
+    effectiveAnswerLatencyMs: m(2000), effectiveTps: m(50), reasoningMs: m(id === 'off' ? 0 : 400), rawTps: m(60)
+  })
+  const assess = (offProof: Record<string, unknown>, missingOneAccepted = false) => {
+    const c = candidate('a')
+    c.model = { ...c.model, genKnobs: { supportsThinking: true, effortValues: ['low'] } }
+    c.quality = rowsFor('off', offProof)
+    if (missingOneAccepted) c.quality[0] = { ...c.quality[0], acceptedSampling: null } as QualityResult
+    c.genQuality = [gq('off', c.quality), gq('think-low', rowsFor('think-low', {
+      appliedTemplateKwargs: { enable_thinking: true, reasoning_effort: 'low' }, acceptedSampling: { temperature: 1 }
+    }))]
+    const verdict = V([c])
+    return { options: verdict.ranked[0].genOptions, chosen: verdict.ranked[0].gen?.gq.gen.id ?? null, verdict }
+  }
+  const offValid = { appliedTemplateKwargs: { enable_thinking: false }, acceptedSampling: { temperature: 1 } }
+
+  it('compares a fully proven think config with a fully proven off control', () => {
+    const { options } = assess(offValid)
+    expect(options.find((g) => g.gq.gen.id === 'off')).toMatchObject({ comparable: true })
+    expect(options.find((g) => g.gq.gen.id === 'think-low')).toMatchObject({ comparable: true })
+  })
+  it('does not compare T=1 think against T=1 off with one missing accepted temperature', () => {
+    const { options, chosen } = assess(offValid, true)
+    expect(options.find((g) => g.gq.gen.id === 'think-low')).toMatchObject({ comparable: false, why: expect.stringMatching(/baseline.*runtime-accepted temperature|runtime-accepted temperature.*baseline/) })
+    expect(chosen).not.toBe('think-low')
+  })
+  it('excludes T=1 off and think comparison when off accepted temperature contradicts T=1', () => {
+    const { options, chosen, verdict } = assess({ ...offValid, acceptedSampling: { temperature: 0.8 } })
+    expect(options.find((g) => g.gq.gen.id === 'off')).toMatchObject({ comparable: false })
+    expect(options.find((g) => g.gq.gen.id === 'think-low')).toMatchObject({ comparable: false, why: expect.stringMatching(/baseline.*accepted temperature|accepted temperature.*baseline/) })
+    expect(chosen).toBeNull()
+    expect(verdict.winner).toBeNull()
+  })
+  it('does not compare valid think rows against off rows missing applied kwargs', () => {
+    const { options, chosen } = assess({ acceptedSampling: { temperature: 1 } })
+    expect(options.find((g) => g.gq.gen.id === 'think-low')).toMatchObject({ comparable: false, why: expect.stringMatching(/baseline.*applied template kwargs|applied template kwargs.*baseline/) })
+    expect(chosen).not.toBe('think-low')
+  })
+  it('excludes T=1 off and think comparison when off applied kwargs enable thinking', () => {
+    const { options, chosen, verdict } = assess({ ...offValid, appliedTemplateKwargs: { enable_thinking: true } })
+    expect(options.find((g) => g.gq.gen.id === 'off')).toMatchObject({ comparable: false })
+    expect(options.find((g) => g.gq.gen.id === 'think-low')).toMatchObject({ comparable: false, why: expect.stringMatching(/baseline.*applied template kwargs|applied template kwargs.*baseline/) })
+    expect(chosen).toBeNull()
+    expect(verdict.winner).toBeNull()
+  })
+})
+
 describe('I-2.8 placement spill (w4m: same-window reading required, heuristic)', () => {
   const B = (g: number) => ({ ...machine(), vramEffectiveBudgetBytes: m(g * GiB) })
   const shape = { peakVramBytes: m(11.6 * GiB), peakSharedGpuBytes: m(0), peakSharedGpuRawBytes: m(1.08 * GiB) }
