@@ -142,8 +142,8 @@ describe('ab-spill evidence from a fake Node child (no GPU)', { timeout: 15_000 
       model: [{ dev: 'Vulkan0', mib: 800.5 }], kv: [{ dev: 'Vulkan0', mib: 256.25 }], compute: [{ dev: 'Vulkan0', mib: 64 }]
     })
     expect(row.largestBufferMiB).toBe(800.5)
-    expect(row.stdoutTruncated).toBe(false)
-    expect(row.stderrTruncated).toBe(false)
+    expect(row.stdoutLog).toContain('offloaded 25/25 layers')
+    expect(row.stderrLog).toContain('Vulkan0 compute buffer size = 64.00 MiB')
   })
 
   it('reports missing buffer declarations as unavailable rather than zero', async () => {
