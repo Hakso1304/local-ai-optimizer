@@ -3,7 +3,9 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { freemem } from 'node:os'
 import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { ProcessTree } from '../src/core/runtimes/llamacpp'
+import { parseDevices } from '../src/core/runtimes/llamacpp/parse'
 import { hashFile } from './measurement-launcher'
 import { trackOwnedProcess, type OwnedProcess } from './owned-process'
 
@@ -23,6 +25,12 @@ export interface HipProbeResult {
   exitSignal: string | null
   stdout: string
   stderr: string
+  devices: { id: string; name: string; backend: 'hip' }[]
+  rocm0: { id: string; name: string; backend: 'hip' } | null
+  wrapperSha256: string
+  runtimeIntegrity: { verified: boolean; error: string | null }
+  verifiedTeardownAt: string | null
+  teardown: { at: string; verified: boolean; survivors: string[] }
   ramMinGiB: number
   abortReason: string | null
   error: string | null
@@ -58,19 +66,33 @@ export async function runHipProbe(exePath: string, outPath: string, deps: HipPro
   if (deps.signal?.aborted) parentAbort()
   else deps.signal?.addEventListener('abort', parentAbort, { once: true })
   const startedAt = new Date(), start = Date.now()
+  const totalMs = Math.min(deps.timeoutMs ?? MAX_MS, MAX_MS)
+  const hardEnd = start + totalMs
+  const childBudget = Math.max(1, totalMs - Math.min(10_000, Math.floor(totalMs / 3)))
+  const within = async <T>(work: Promise<T>, label: string): Promise<T> => {
+    const remaining = hardEnd - Date.now()
+    if (remaining <= 0) throw new Error(`HIP probe total 30000 ms deadline before ${label}`)
+    let timer: ReturnType<typeof setTimeout> | null = null
+    try { return await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`HIP probe total 30000 ms deadline during ${label}`)), remaining) })]) }
+    finally { if (timer) clearTimeout(timer) }
+  }
   let minRam = readRam(), child: ChildProcess | null = null, owned: OwnedProcess | null = null
   let stdout = '', stderr = '', exitCode: number | null = null, exitSignal: string | null = null, failure: unknown = null
   let before: Awaited<ReturnType<typeof fingerprints>> | null = null
+  let wrapperSha256 = '', teardownVerified = false, teardownAt = '', survivors: string[] = []
+  let integrity: HipProbeResult['runtimeIntegrity'] = { verified: false, error: 'not checked' }
   const checkRam = () => {
     const available = readRam(); minRam = Math.min(minRam, available)
     if (available < 4 * GiB && !controller.signal.aborted) controller.abort(new Error(`HIP probe RAM ${Math.round(available / GiB * 100) / 100} GiB < 4 GiB`))
   }
   const watch = setInterval(checkRam, deps.watchIntervalMs ?? 500)
-  const deadline = setTimeout(() => { if (!controller.signal.aborted) controller.abort(new Error('HIP probe exceeded 30000 ms deadline')) }, Math.min(deps.timeoutMs ?? MAX_MS, MAX_MS))
+  const deadline = setTimeout(() => { if (!controller.signal.aborted) controller.abort(new Error('HIP probe exceeded 30000 ms total deadline')) }, totalMs)
+  const childDeadline = setTimeout(() => { if (!controller.signal.aborted) controller.abort(new Error('HIP --list-devices child exceeded bounded deadline')) }, childBudget)
   let closed: Promise<void> | null = null
   try {
     checkRam(); controller.signal.throwIfAborted()
-    before = await fingerprints(exe, hash, controller.signal)
+    wrapperSha256 = await within(hash(fileURLToPath(import.meta.url), controller.signal), 'wrapper hash')
+    before = await within(fingerprints(exe, hash, controller.signal), 'preflight runtime hash')
     controller.signal.throwIfAborted()
     child = (deps.spawnFn ?? spawn)(exe, ['--list-devices'], { shell: false, windowsHide: true, env: safeEnv, stdio: ['ignore', 'pipe', 'pipe'] })
     closed = new Promise<void>((ok, fail) => {
@@ -80,38 +102,48 @@ export async function runHipProbe(exePath: string, outPath: string, deps: HipPro
     void closed.catch(() => {})
     child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8') })
     child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
-    owned = await trackOwnedProcess(child, deps.processTree)
+    owned = await within(trackOwnedProcess(child, deps.processTree), 'process ownership')
     const aborted = new Promise<never>((_, reject) => {
       if (controller.signal.aborted) return reject(controller.signal.reason)
       controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true })
     })
-    await Promise.race([closed, aborted])
+    await within(Promise.race([closed, aborted]), 'child close')
+    clearTimeout(childDeadline)
     controller.signal.throwIfAborted()
     if (exitCode !== 0) throw new Error(`HIP --list-devices exited ${String(exitCode)} (${exitSignal ?? 'no signal'})`)
   } catch (e) { failure = e }
   finally {
     if (failure && !controller.signal.aborted) controller.abort(failure)
-    if (owned) try { await owned.stop() } catch (e) { failure = failure ? new AggregateError([failure, e], 'HIP probe and teardown failed') : e }
+    if (owned) try { await within(owned.stop(), 'owned-process teardown'); teardownVerified = true }
+    catch (e) { survivors.push(message(e)); failure = failure ? new AggregateError([failure, e], 'HIP probe and teardown failed') : e }
     else if (child) {
       child.kill()
-      try { if (closed) await Promise.race([closed, new Promise((_, reject) => setTimeout(() => reject(new Error('unverified HIP child did not close')), 10_000))]) }
-      catch (e) { failure = failure ? new AggregateError([failure, e], 'HIP child did not close') : e }
+      try { if (closed) await within(closed, 'unverified child close') }
+      catch (e) { survivors.push(message(e)); failure = failure ? new AggregateError([failure, e], 'HIP child did not close') : e }
       failure ??= new Error('HIP child identity was never verified')
     }
+    teardownAt = new Date().toISOString()
     if (before) try {
-      const after = await fingerprints(exe, hash, AbortSignal.any([controller.signal, AbortSignal.timeout(MAX_MS)]))
+      const fresh = new AbortController()
+      const remaining = Math.max(1, hardEnd - Date.now())
+      const after = await within(fingerprints(exe, hash, AbortSignal.any([fresh.signal, AbortSignal.timeout(remaining)])), 'postflight runtime hash')
       if (JSON.stringify(after) !== JSON.stringify(before)) throw new Error('HIP executable or DLL set changed during probe')
-    } catch (e) { failure = failure ? new AggregateError([failure, e], 'HIP runtime changed during probe') : e }
+      integrity = { verified: true, error: null }
+    } catch (e) { integrity = { verified: false, error: message(e) }; failure = failure ? new AggregateError([failure, e], 'HIP runtime changed during probe') : e }
     try { checkRam() } catch (e) { failure = failure ? new AggregateError([failure, e], 'HIP RAM check failed') : e }
     if (controller.signal.aborted && !failure) failure = controller.signal.reason
     if (!controller.signal.aborted) controller.abort(new Error('HIP probe finished'))
-    clearInterval(watch); clearTimeout(deadline)
+    clearInterval(watch); clearTimeout(deadline); clearTimeout(childDeadline)
     deps.signal?.removeEventListener('abort', parentAbort)
   }
   const result: HipProbeResult = {
     kind: 'local-ai-optimizer/hip-device-probe-v1', exe: before?.exe ?? { path: exe, bytes: 0, sha256: '' }, dlls: before?.dlls ?? [], argv: ['--list-devices'],
     startedAt: startedAt.toISOString(), finishedAt: new Date().toISOString(), elapsedMs: Date.now() - start,
-    pid: child?.pid ?? null, exitCode, exitSignal, stdout, stderr, ramMinGiB: +(minRam / GiB).toFixed(2),
+    pid: child?.pid ?? null, exitCode, exitSignal, stdout, stderr,
+    devices: parseDevices(`${stdout}\n${stderr}`).map(({ id, name }) => ({ id, name, backend: 'hip' as const })),
+    rocm0: parseDevices(`${stdout}\n${stderr}`).filter((d) => d.id === 'ROCm0').map(({ id, name }) => ({ id, name, backend: 'hip' as const }))[0] ?? null,
+    wrapperSha256, runtimeIntegrity: integrity, verifiedTeardownAt: teardownVerified ? teardownAt : null,
+    teardown: { at: teardownAt, verified: teardownVerified, survivors }, ramMinGiB: +(minRam / GiB).toFixed(2),
     abortReason: controller.signal.reason && message(controller.signal.reason) !== 'HIP probe finished' ? message(controller.signal.reason) : null,
     error: failure ? message(failure) : null
   }

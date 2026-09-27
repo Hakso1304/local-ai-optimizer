@@ -32,12 +32,15 @@ describe('HIP device probe with an injected fake process (no vendor launch)', ()
       expect(_exe).toBe(f.exe); expect(args).toEqual(['--list-devices'])
       expect(opts).toMatchObject({ windowsHide: true, shell: false })
       expect(Object.keys(opts.env ?? {}).some((k) => k.toUpperCase() === 'GGML_CUDA_ENABLE_UNIFIED_MEMORY')).toBe(false)
-      setTimeout(() => { f.child.stdout.write('ROCm0: fake\n'); f.child.stderr.write('stderr detail\n'); f.close() }, 10)
+      setTimeout(() => { f.child.stdout.write('ROCm0: fake (1024 MiB, 512 MiB free)\n'); f.child.stderr.write('stderr detail\n'); f.close() }, 10)
       return f.child as unknown as ChildProcess
     }) as unknown as typeof import('node:child_process').spawn
     const result = await runHipProbe(f.exe, f.out, { spawnFn, processTree: f.tree, readRam: () => 6 * GiB,
       hash: async () => 'A'.repeat(64), env: { Path: 'x' }, timeoutMs: 1000, watchIntervalMs: 5 })
-    expect(result).toMatchObject({ exitCode: 0, error: null, argv: ['--list-devices'], stdout: 'ROCm0: fake\n', stderr: 'stderr detail\n', ramMinGiB: 6 })
+    expect(result).toMatchObject({ exitCode: 0, error: null, argv: ['--list-devices'], stdout: 'ROCm0: fake (1024 MiB, 512 MiB free)\n', stderr: 'stderr detail\n', ramMinGiB: 6,
+      devices: [{ id: 'ROCm0', name: 'fake', backend: 'hip' }], rocm0: { id: 'ROCm0', name: 'fake', backend: 'hip' },
+      wrapperSha256: 'A'.repeat(64), runtimeIntegrity: { verified: true, error: null }, teardown: { verified: true, survivors: [] } })
+    expect(result.verifiedTeardownAt).toMatch(/^2026-/)
     expect(result.dlls).toHaveLength(1)
     expect(JSON.parse(readFileSync(f.out, 'utf8'))).toEqual(result)
     expect(spawnFn).toHaveBeenCalledTimes(1)
@@ -48,11 +51,13 @@ describe('HIP device probe with an injected fake process (no vendor launch)', ()
     const f = fixture()
     const spawnFn = vi.fn(() => f.child as unknown as ChildProcess) as unknown as typeof import('node:child_process').spawn
     await expect(runHipProbe(f.exe, f.out, { spawnFn, processTree: f.tree, readRam: () => 6 * GiB,
-      hash: async () => 'A'.repeat(64), timeoutMs: 20, watchIntervalMs: 5 })).rejects.toThrow()
-    const row = JSON.parse(readFileSync(f.out, 'utf8')) as { error: string; abortReason: string; argv: string[] }
+      hash: async () => 'A'.repeat(64), timeoutMs: 80, watchIntervalMs: 5 })).rejects.toThrow()
+    const row = JSON.parse(readFileSync(f.out, 'utf8')) as { error: string; abortReason: string; argv: string[]; runtimeIntegrity: { verified: boolean }; teardown: { verified: boolean } }
     expect(row.argv).toEqual(['--list-devices'])
     expect(row.error).toMatch(/deadline|teardown|scan/i)
     expect(row.abortReason).toMatch(/deadline/i)
+    expect(row.runtimeIntegrity.verified).toBe(true)
+    expect(row.teardown.verified).toBe(false)
   })
 
   it('refuses mixed-case unified-memory keys before spawn', async () => {
