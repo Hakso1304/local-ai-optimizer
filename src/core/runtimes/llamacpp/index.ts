@@ -91,7 +91,7 @@ export interface ProcessTree {
   kill(pid: number, opts: { tree: boolean; force: boolean }): Promise<void>
   isAlive(pid: number): Promise<boolean>
   alivePids?(pids: number[]): Promise<number[]>
-  inspect?(pid: number): Promise<ProcessIdentity | null>
+  inspect?(pid: number, timeoutMs?: number): Promise<ProcessIdentity | null>
   killVerified?(record: ProcessIdentity): Promise<boolean>
 }
 
@@ -128,9 +128,9 @@ const defaultProcessTree: ProcessTree = {
     const parsed = JSON.parse(raw || '[]') as number | number[] | null
     return Array.isArray(parsed) ? parsed : typeof parsed === 'number' ? [parsed] : []
   },
-  async inspect(pid) {
+  async inspect(pid, timeoutMs = 5_000) {
     if (!Number.isSafeInteger(pid) || pid <= 0) return null
-    const raw = await runPowerShell(`$w=Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}';$p=Get-Process -Id ${pid} -ErrorAction SilentlyContinue;if($w -and $p -and $w.CreationDate.ToUniversalTime().Ticks -eq $p.StartTime.ToUniversalTime().Ticks){@{pid=[int]$w.ProcessId;parentPid=[int]$w.ParentProcessId;name=[string]$w.Name;startedAt=$p.StartTime.ToUniversalTime().ToString('o')} | ConvertTo-Json -Compress}`, 5_000)
+    const raw = await runPowerShell(`$w=Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}';$p=Get-Process -Id ${pid} -ErrorAction SilentlyContinue;if($w -and $p -and $w.CreationDate.ToUniversalTime().Ticks -eq $p.StartTime.ToUniversalTime().Ticks){@{pid=[int]$w.ProcessId;parentPid=[int]$w.ParentProcessId;name=[string]$w.Name;startedAt=$p.StartTime.ToUniversalTime().ToString('o')} | ConvertTo-Json -Compress}`, timeoutMs)
     if (!raw.trim()) return null
     const record = JSON.parse(raw) as ProcessIdentity
     return record.pid === pid && Number.isSafeInteger(record.parentPid) && typeof record.startedAt === 'string' ? record : null
@@ -402,7 +402,7 @@ export class LlamaCppBackend implements InferenceBackend {
     })
     if (p.pid && this.processTree.inspect) {
       try {
-        const root = await this.processTree.inspect(p.pid)
+        const root = await this.processTree.inspect(p.pid, 15_000)
         if (!root || !alive(p)) throw new Error('spawned server identity could not be verified')
         this.ownedRootIdentity = root
       } catch (e) {
@@ -453,7 +453,7 @@ export class LlamaCppBackend implements InferenceBackend {
     // a matching numeric parent PID is no longer evidence of ancestry.
     if (p.pid && alive(p)) {
       if (this.processTree.inspect && (!this.ownedRootIdentity ||
-          (await this.processTree.inspect(p.pid))?.startedAt !== this.ownedRootIdentity.startedAt)) {
+          (await this.processTree.inspect(p.pid, 15_000))?.startedAt !== this.ownedRootIdentity.startedAt)) {
         throw new ServerStuckError('root identity changed before child snapshot')
       }
       try {

@@ -268,10 +268,12 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   let backend = cur.instance()
   /** Run `c` on its own backend build: unload the current server first when switching. */
   const backendFor = async (c: CandidateConfig) => {
+    checkStuck()
     const s = stateOf(c)
     if (!s) return false
     if (s === cur) return true
     await unload((e) => log('warn', `unload before switching to ${s.kind}: ${(e as Error).message}`))
+    checkStuck()
     cur = s
     backend = s.instance()
     log('info', `backend: ${s.kind}${s.runtimeVersion ? ` ${s.runtimeVersion}` : ''} (${s.exePath || 'default'})`)
