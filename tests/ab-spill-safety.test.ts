@@ -3,7 +3,7 @@ import type { ChildProcess } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { bounded, idle, launch, ramFloor, safeEnv, stopOwned, unifiedMemoryKeys, watchRam, type LaunchProbe } from '../scripts/ab-spill'
+import { bounded, idle, launch, ramFloor, safeEnv, stopOwned, unifiedMemoryKeys, watchRam, type CollisionEvidence, type LaunchProbe } from '../scripts/ab-spill'
 
 const GiB = 1024 ** 3
 
@@ -121,4 +121,60 @@ describe('ab-spill launch with a fake Node HTTP child (no GPU)', { timeout: 15_0
     expect(row.ramAbort).toMatch(/< 4 GiB/)
     expect(isGone(Number(readFileSync(pidFile, 'utf8')))).toBe(true)
   }))
+})
+
+describe('ab-spill evidence from a fake Node child (no GPU)', { timeout: 15_000 }, () => {
+  const fake = join(__dirname, 'fixtures', 'fake-ab-spill-server.cjs')
+  const probe: LaunchProbe = {
+    readRam: () => 5 * GiB, countServers: () => 0, devices: () => ['fake MiB'],
+    startSampler: () => ({ rows: [], stop: async () => {} }),
+    requestTimeoutMs: 500, loadTimeoutMs: 1_000, healthTimeoutMs: 100, watchIntervalMs: 20,
+    settleMs: 0, postMs: 0
+  }
+  const runFake = (mode: string, promptTokens: number | null) => launch(mode, [fake, '--fake-mode', mode], promptTokens, process.execPath, probe)
+
+  it('drains and preserves stdout plus stderr and parses buffer declarations from both streams', async () => {
+    const row = await runFake('streams', null)
+    expect(row.error).toBeNull()
+    expect(row.stdoutLog).toContain('Vulkan0 model buffer size = 800.50 MiB')
+    expect(row.stderrLog).toContain('Vulkan0 KV buffer size = 256.25 MiB')
+    expect(row.buffersMiB).toEqual({
+      model: [{ dev: 'Vulkan0', mib: 800.5 }], kv: [{ dev: 'Vulkan0', mib: 256.25 }], compute: [{ dev: 'Vulkan0', mib: 64 }]
+    })
+    expect(row.largestBufferMiB).toBe(800.5)
+    expect(row.stdoutTruncated).toBe(false)
+    expect(row.stderrTruncated).toBe(false)
+  })
+
+  it('reports missing buffer declarations as unavailable rather than zero', async () => {
+    const row = await runFake('no-buffers', null)
+    expect(row.error).toBeNull()
+    expect(row.buffersMiB).toEqual({ model: [], kv: [], compute: [] })
+    expect(row.largestBufferMiB).toBeNull()
+    expect(row.pidSharedBaselineGiB).toBeNull()
+  })
+
+  it('records server prefill timing separately from unmeasured client TTFT', async () => {
+    const measured = await runFake('streams', 16)
+    expect(measured.error).toBeNull()
+    expect(measured.reps).toHaveLength(2)
+    expect(measured.reps.every((r) => r.prefillMs === 12.5 && r.prefillTps === 1280 && r.clientTtftMs === null && r.requestWallMs >= 0)).toBe(true)
+    const missing = await runFake('no-timings', 16)
+    expect(missing.error).toBeNull()
+    expect(missing.reps).toHaveLength(2)
+    expect(missing.reps.every((r) => r.prefillMs === null && r.prefillTps === null && r.clientTtftMs === null && r.requestWallMs >= 0)).toBe(true)
+  })
+
+  it('idle collision reports injected PID, path and command line without launching or killing it', async () => {
+    const evidence: CollisionEvidence = {
+      observedAt: '2026-09-28T01:55:57.840Z', tasklist: { observedAt: '2026-09-28T01:55:57.800Z', processes: [{ pid: 4242, image: 'llama-server.exe' }] },
+      cim: [{ pid: 4242, parentPid: 1212, path: 'C:/foreign/llama-server.exe', commandLine: 'llama-server.exe --version', creationDate: '2026-09-28T01:55:55Z' }]
+    }
+    const inspect = vi.fn(() => evidence)
+    await expect(idle(0, () => 5 * GiB, () => 1, inspect)).rejects.toThrow(/4242.*foreign.*--version/)
+    expect(inspect).toHaveBeenCalledTimes(1)
+    let calls = 0
+    await expect(idle(5, () => 5 * GiB, () => ++calls > 1 ? 1 : 0, inspect)).rejects.toThrow(/appeared during idle.*4242/)
+    expect(inspect).toHaveBeenCalledTimes(2)
+  })
 })
