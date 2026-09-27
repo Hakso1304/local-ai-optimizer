@@ -1,0 +1,60 @@
+# Status — evidence matrix (2026-09-27)
+
+This is the MVP Definition of Done, the later user requirements and the cross-cutting spec requirements, each with evidence.
+
+**Status legend:**
+- **DONE**: verified.
+- **DONE-WITH-CAVEAT**: works, with the stated limit.
+- **PARTIAL**: works in part.
+- **BLOCKED(env)**: cannot be verified on this machine (AMD RX 9070 XT 16 GB, Ryzen 7 9800X3D, 31 GB RAM, Windows 11, no NVIDIA / Ollama / LM Studio).
+
+**Where the evidence lives:**
+- Commits are in `git log`.
+- Tests: `npm test` = 28 files / 355 tests green at 5dacad4.
+- E2E runs are `docs/session-run-*.json` (A = coding session, B = cancel, C = RAM-guard skip path, H = heavy).
+- Calibration is in `docs/calibration-2026-09-27.md` and `docs/calibration-heavy-2026-09-27.md`.
+- Criteria IDs (A1–A26, X1–X20) refer to `docs/ACCEPTANCE.md`.
+- The full caveat list is in `docs/LIMITATIONS.md`.
+
+## MVP Definition of Done
+
+| # | Item | Status | Evidence | Caveat |
+|---|---|---|---|---|
+| 1 | App launches | DONE-WITH-CAVEAT | e60e25d scaffold; e315e7b wired app; the UI was verified on LAO_SEED_DEMO=1 and on a real coding session (184eb33 notes) (A1) | Unsigned builds, so SmartScreen warns |
+| 2 | Real hardware scan | DONE | e60e25d `scanner.ts` + `tests/scanner.test.ts` on a captured real scan (A2–A5: 16 GB from qwMemorySize, no stale RTX 3080, iGPU flagged) | AMD temperature/power UNAVAILABLE (no native SDK) |
+| 3 | ≥ 1 runtime detected | DONE | llama.cpp b11208 Vulkan detected/installed (e60e25d, a3dc31e System-page install); Ollama/LM Studio HTTP detection (`runtimes/others.ts`) (A6) | Ollama/LM Studio not installed here: their detection shows unavailable |
+| 4 | ≥ 1 local model identified | DONE | `gguf.ts` header reader (cb0cfac, a456679 layout keys, b0f2fca incomplete-file flag) + `tests/gguf.test.ts`; 5 real GGUFs in D:\llm-models (A7, A8) | Ollama/LM Studio stores are fixture-tested only (70552a9, acbd169) |
+| 5 | Select a workload | DONE | 7 profiles in `scoring/workloads.ts` (527f86c); workload picker (78c616d); weights sum to 1 in `scoring.test.ts` (A9, X6) | — |
+| 6 | Run a real benchmark | DONE | Run A: coding session, 1.5B + 8B, 183 s, real llama-server (2d46405, e315e7b) (A10) | — |
+| 7 | Real metrics | DONE-WITH-CAVEAT | TTFT (wall clock), prefill/decode from llama-server `timings`, load time, per-PID VRAM/shared/private WS; calibration tables (05b153e) (A11, A12) | 1 s typeperf granularity: sub-second steps may have 0 samples, shown as unavailable |
+| 8 | Multiple context sizes | DONE | Ladder 2K→64K on the 8B, 2K→32K + a real cliff on the 14B (5a871ce); `detectCliffs` fixtures (A13, A15) | 128K rung never reached on this machine (memory-bound) |
+| 9 | Resource utilization | DONE-WITH-CAVEAT | typeperf sampler (cb0cfac), glitch-row drop, request-window means (1027926); per-run TelemetryChart (089e204, wired 184eb33) (A14) | English PDH counter names only; GPU util is display-only |
+| 10 | Recommendation from measured data | DONE | `recommend.ts` (527f86c, c5e8a56); run A: "Best for Coding: …8B… 96.5/100"; `calibration.test.ts` per-workload picks (A16–A19) | Profiles calibrated on one GPU and 2–3 model families |
+| 11 | Inspect why | DONE | Breakdown + plain-English reasons, cliff messages, recommended vs scoring ctx, "Not benchmarked: … — reason" (9e014c2, 5dacad4); Results page (78c616d) | — |
+| 12 | Reopen without losing history | DONE | node:sqlite storage + `tests/storage.test.ts` / `sessions.test.ts`; interrupted sessions marked on start (07dcd84) (A20, A21) | Newer-than-build DB is refused (2fa68f4): upgrade-only |
+
+## Later user requirements
+
+| Item | Status | Evidence | Caveat |
+|---|---|---|---|
+| Heavy-model mode | PARTIAL | e38ce73, 4ad9884 (UI toggle), 1027926, 5dacad4 (RAM safety, ordering); `tests/scoring/heavy.test.ts`, `kv.test.ts`; `calibration-heavy-2026-09-27.md` (Qwen3.8-27B 55/65 layers: 12–13 t/s, no spill) | One real dense model; MoE, -nkvo and CPU-baseline paths not yet measured |
+| Heavy-model live re-run | pending: #3 heavy re-run | — | — |
+| Pareto chart + SLO filter | DONE-WITH-CAVEAT | 184eb33 `ParetoChart.tsx`, `SloFilter.tsx`, `tests/results/pareto-slo.test.ts` | Hidden configs don't show why (review finding 1) |
+| HF download with login | DONE-WITH-CAVEAT | Core 282b3ec + `tests/hub.test.ts` (local servers: resume, redirect/no token leak, sha256, 401/403/404); IPC/page 2a349e7, 09fbf8b; wired fa491b0, 486f958 | No real huggingface.co call in the test suite; not yet verified live |
+
+## Cross-cutting requirements
+
+| Item | Status | Evidence | Caveat |
+|---|---|---|---|
+| MEASURED / ESTIMATED / DECLARED / UNAVAILABLE labels | DONE | `Metric` type (527f86c); unavailable scores a neutral 50 (c5e8a56); ESTIMATED quality never plotted (184eb33) (X20) | — |
+| No fabricated data | DONE | Unavailable ≠ 0 everywhere; peaks unavailable when n = 0 (d71eb57); demo data only in a separate DB, flagged (78c616d) (A22) | — |
+| Cancel | DONE | Run B: abort → cancelled in 783 ms, 0 leftover llama-server; `session.test.ts` cancel/pause tests (A23) | — |
+| Timeouts | DONE-WITH-CAVEAT | Per-prompt timeout (60 s + 10 ms × ctx), quality 180 s; `req_timeout` test (A24) | Load wait is a fixed 120 s |
+| Memory guard | DONE-WITH-CAVEAT | Pre-check + in-step floor (54eb829, 1027926, 5dacad4); run C: RAM-guard skip path; `session.test.ts` guard tests (A25) | Thresholds are heuristics; the first heavy run hit 1.0 GiB free before the 5dacad4 fix |
+| Process cleanup | DONE-WITH-CAVEAT | kill → taskkill /T /F, pid file + stale kill, samplers stopped on quit (06c8140), NSIS pid kill (2fa68f4); `llamacpp-lifecycle.test.ts` (A26) | A hard kill of the Electron main process leaves the server until the next launch |
+| Pause / resume / retry / rerun | DONE | 7442817, 07dcd84 (IPC), 38bb53c + 3d5968c (stored plan); `session.test.ts` pause/retryFailed/rerunConfigIds/plan tests | — |
+| Export / apply params | DONE-WITH-CAVEAT | 01e5c9e generators + `tests/export.test.ts`; export menu e31dc64 | Ollama Modelfile / LM Studio keys unverified (neither installed) |
+| Tests | DONE | 355 tests: scanner, GGUF, telemetry, llama.cpp fake-process lifecycle, quality/sandbox, scoring + adversarial (c217b85) + calibration fixtures, runner, storage, hub, export | No real-GPU test in CI; real runs are scripted (`scripts/calibrate.ts`, `run-session.ts`) |
+| Packaging | DONE-WITH-CAVEAT | a3dc31e electron-builder portable + NSIS; 2fa68f4 review fixes (dev `-dev` userData, DB refusal, NSIS cleanup) | Unsigned |
+| Packaged build verification | pending: #2 packaged verification | — | — |
+| NVIDIA / CUDA path | BLOCKED(env) | 56c1bbb, acbd169 wired; `tests/nvidia.test.ts` fixtures | No NVIDIA GPU here (nvidia-smi: insufficient permissions) |
