@@ -126,6 +126,7 @@ export async function launchManifest(manifest: MeasurementManifest, deps: Launch
   let closed: Promise<number> | null = null
   let exitCode = 1
   let sessionId: string | null = null, sessionStartLine: string | null = null
+  let explicitMarkers = 0
   let launchError: unknown = null
   const checkRam = () => {
     const free = readRam(); minRam.bytes = Math.min(minRam.bytes, free)
@@ -151,15 +152,22 @@ export async function launchManifest(manifest: MeasurementManifest, deps: Launch
       createInterface({ input: stream }).on('line', (line) => {
         dest.write(`${line}\n`)
         if (!parse) return
-        const explicit = /\bSESSION_ID=(\d+)\b/.exec(line)
-        if (explicit) { sessionId = explicit[1]; sessionStartLine = line; return }
+        const explicit = /^(?:\s*\d+(?:\.\d+)?s\s+)?SESSION_ID=(\d+)$/.exec(line)
+        if (explicit) {
+          explicitMarkers++
+          if (explicitMarkers > 1 || (sessionId && sessionId !== explicit[1])) {
+            controller.abort(new Error(`conflicting or repeated SESSION_ID marker: ${line}`))
+            return
+          }
+          sessionId = explicit[1]; sessionStartLine = line; return
+        }
         const at = line.indexOf('{')
         if (at < 0) return
         try {
           const event = JSON.parse(line.slice(at)) as { type?: string; sessionId?: string }
           if (event.type === 'session:started' && /^\d+$/.test(event.sessionId ?? '')) {
             if (sessionId && sessionId !== event.sessionId) throw new Error('multiple session IDs in runner output')
-            sessionId = event.sessionId!; sessionStartLine = line
+            sessionId = event.sessionId!; sessionStartLine ??= line
           }
         } catch (e) { if ((e as Error).message === 'multiple session IDs in runner output') controller.abort(e) }
       })
