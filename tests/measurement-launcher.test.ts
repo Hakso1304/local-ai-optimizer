@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { type ChildProcess, type SpawnOptions } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -40,7 +40,37 @@ function fixture() {
   return { config, dll, out: join(cwd, 'manifest.json') }
 }
 
+function fakeManifest(config: ReturnType<typeof fixture>['config']): MeasurementManifest {
+  return { kind: 'local-ai-optimizer/measurement-gate-v1', createdAt: new Date().toISOString(), snapshotHead: config.snapshotHead,
+    command: { cwd: config.cwd, dbPath: config.dbPath, args: config.args, exportOut: config.exportOut },
+    files: ['node', 'packageLock', 'installedLock', 'tsxCli', 'launcher', 'runner', 'exporter', 'runtimeExe', 'model', 'sourceZip', 'dll:fake.dll'].map((role) =>
+      ({ role: role as MeasurementManifest['files'][number]['role'], path: config.tsxCli, bytes: 1, sha256: '0'.repeat(64) })) }
+}
+
 describe('measurement launcher gate (fake files and processes only)', () => {
+  it('W2: rejects a changed extracted source file that was not a listed manifest role', async () => {
+    const { config, out } = fixture()
+    const sourceDir = join(config.cwd, 'src', 'core', 'benchmark')
+    mkdirSync(sourceDir, { recursive: true })
+    const importedSource = join(sourceDir, 'session.ts')
+    writeFileSync(importedSource, 'export const scope = 1\n')
+    const manifest = await createManifest(config, out)
+    await expect(verifyManifest(manifest)).resolves.toBeUndefined()
+    writeFileSync(importedSource, 'export const scope = 2\n')
+    await expect(verifyManifest(manifest)).rejects.toThrow(/source|session|changed|hash|manifest/i)
+  })
+
+  it.each([
+    ['backend', ['--backend', 'hip']],
+    ['model', ['--models', 'other.gguf']]
+  ] as const)('W3: rejects a changed %s selection after manifest creation', async (_name, changedArgs) => {
+    const { config, out } = fixture()
+    const manifest = await createManifest(config, out)
+    await expect(verifyManifest(manifest)).resolves.toBeUndefined()
+    manifest.command.args.push(...changedArgs)
+    await expect(verifyManifest(manifest)).rejects.toThrow(/backend|model|command|manifest|selection/i)
+  })
+
   it('pins every role and DLL, refuses overwrite, and detects byte and DLL-set tampering', async () => {
     const { config, dll, out } = fixture()
     const manifest = await createManifest(config, out)
@@ -115,5 +145,30 @@ describe('measurement launcher gate (fake files and processes only)', () => {
     await expect(launchManifest(manifest, { spawnFn: spawnFn as typeof import('node:child_process').spawn,
       tree, countNamed: async () => 0, readRam: () => 16 * GiB, verify: async () => {} }))
       .rejects.toThrow(/measurement gate failed after execution/)
+  })
+
+  it.each([
+    ['two explicit markers', ['SESSION_ID=7', 'SESSION_ID=8']],
+    ['marker and event disagree', ['SESSION_ID=7', '{"type":"session:started","sessionId":"8"}']]
+  ] as const)('W4: rejects %s before exporting another session', async (_name, lines) => {
+    const { config } = fixture()
+    const root: ProcessIdentity = { pid: 771122, name: 'node.exe', startedAt: '2026-09-28T00:00:00.000Z' }
+    const p = new EventEmitter() as EventEmitter & { pid: number; exitCode: number | null; signalCode: string | null; kill: () => boolean; stdout: PassThrough; stderr: PassThrough }
+    p.pid = root.pid; p.exitCode = null; p.signalCode = null; p.kill = () => true
+    p.stdout = new PassThrough(); p.stderr = new PassThrough()
+    let rootLive = true
+    const tree: ProcessTree = {
+      descendants: async () => [], kill: async () => {}, isAlive: async () => false,
+      inspect: async (pid) => pid === root.pid && rootLive ? root : null,
+      killVerified: async () => true
+    }
+    const spawnFn = () => {
+      setTimeout(() => { p.stdout.end(lines.join('\n') + '\n'); p.stderr.end(); rootLive = false; p.exitCode = 0; p.emit('close', 0) }, 30)
+      return p as unknown as ChildProcess
+    }
+    await expect(launchManifest(fakeManifest(config), { spawnFn: spawnFn as typeof import('node:child_process').spawn,
+      tree, countNamed: async () => 0, readRam: () => 16 * GiB, verify: async () => {} }))
+      .rejects.toThrow(/session|identity|marker|conflict/i)
+    expect(existsSync(config.exportOut)).toBe(false)
   })
 })

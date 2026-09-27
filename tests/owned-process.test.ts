@@ -59,4 +59,28 @@ describe('identity-bound harness process teardown (injected fake tree)', () => {
     await expect(owned.stop()).rejects.toThrow(/teardown could not be verified/)
     expect([...owned.descendants.values()]).toEqual([descendant])
   })
+
+  it('W1: never reports success when an owned child appears at root kill after every earlier scan', async () => {
+    const p = fakeProcess()
+    let rootLive = true, lateChildLive = false
+    const killed: number[] = []
+    const tree: ProcessTree = {
+      descendants: async () => lateChildLive && rootLive ? [descendant] : [],
+      kill: async () => {}, isAlive: async () => false,
+      inspect: async (pid) => pid === root.pid ? rootLive ? root : null : pid === descendant.pid && lateChildLive ? descendant : null,
+      killVerified: async (record) => {
+        killed.push(record.pid)
+        if (record.pid === root.pid) {
+          lateChildLive = true // born immediately before the root dies; earlier scans saw no child
+          rootLive = false; p.exitCode = 0; p.emit('close', 0)
+        } else if (record.pid === descendant.pid) lateChildLive = false
+        return true
+      }
+    }
+    const owned = await trackOwnedProcess(p as unknown as ChildProcess, tree, 10_000)
+    expect([...owned.descendants.values()]).toEqual([])
+    const error = await owned.stop().then(() => null, (reason: unknown) => reason)
+    expect(error !== null || !lateChildLive, 'uncaptured live child cannot be reported as clean teardown').toBe(true)
+    if (error === null) expect(killed).toContain(descendant.pid)
+  })
 })
