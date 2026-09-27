@@ -1,5 +1,7 @@
 import { runChecker, runCheckerAsync, type CheckerSpec } from './checkers'
 import suiteV1 from './tests.v1.json'
+import suiteV2 from './tests.v2.json'
+import { GENERATOR_VERSION, resolveSuiteV2, type V2Manifest } from './generators.v2'
 
 export type QualityCategory = 'instruction' | 'reasoning' | 'coding' | 'structured' | 'extraction' | 'context'
 
@@ -46,6 +48,21 @@ export interface QualityResult {
 }
 
 export const defaultTestSet = suiteV1 as QualityTestSet
+
+export type QualityMode = 'quick' | 'thorough'
+/** The suite a session runs, resolved once: prompts AND checkers come from this same object (docs/quality-v2.md). */
+export interface SelectedSuite extends QualityTestSet {
+  /** v2 only: the persisted seed the 13 generated items were derived from (shared by every candidate). */
+  suiteSeed: number | null
+  generatorVersion: string | null
+}
+
+/** 'thorough' → qb-2.0.0 (60 items: 47 static + 13 generated from suiteSeed). Anything else → qb-1.1.0 (17 fixed tests).
+ *  ponytail: an unset qualityMode stays on v1 so existing sessions keep their suite; opt into v2 explicitly. */
+export function suiteFor(mode: QualityMode | undefined, suiteSeed: number): SelectedSuite {
+  if (mode !== 'thorough') return { ...defaultTestSet, suiteSeed: null, generatorVersion: null }
+  return { ...resolveSuiteV2(suiteV2 as unknown as V2Manifest, suiteSeed >>> 0), suiteSeed: suiteSeed >>> 0, generatorVersion: GENERATOR_VERSION }
+}
 
 // Deterministic 32-bit PRNG (mulberry32): same seed → same filler on every machine/build.
 function rng(seed: number): () => number {

@@ -9,7 +9,7 @@ import type { ExitInfo } from '../runtimes/llamacpp'
 import type { LoadConfig, LoadResult, PromptRequest, PromptResult } from '../runtimes/types'
 import type { Field, TelemetrySample } from '../telemetry/sampler'
 import { peaks } from '../telemetry/sampler'
-import { buildQualityPrompts, defaultTestSet, evaluateAsync, needlePrompt, type QualityTest } from '../quality'
+import { buildQualityPrompts, evaluateAsync, needlePrompt, suiteFor, type QualityTest } from '../quality'
 import { detectCliffs, fmtCtx, isUsable, val } from '../scoring/cliff'
 import { recommend } from '../scoring/recommend'
 import { DEFAULT_SCORING_CONFIG, effectiveProfile, withProfile } from '../scoring/workloads'
@@ -174,6 +174,10 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   const scoringCfg = withProfile(DEFAULT_SCORING_CONFIG, profile)
   const required = req.requiredContext ?? null
   const { storage, clock, signal } = deps
+  // Quality suite, resolved ONCE per session: every candidate gets the same items, prompts and checkers come from
+  // the same resolved object, and the v2 seed is persisted with the request so resume reproduces it.
+  const suiteSeed = req.qualitySeed ?? (Math.floor(clock.now()) >>> 0)
+  const suite = suiteFor(req.qualityMode, suiteSeed)
   const machine = machineFromProfile(deps.machine, deps.gpuDevice)
   const vramTotal = val(machine.vramBytes, true)
   // L1: the saturation share for spill is taken against what this process could get — VRAM total minus what other
@@ -204,7 +208,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   signal?.addEventListener('abort', onAbort)
 
   try {
-    if (!sessionId) sessionId = await storage.createSession({ workload: req.workload, request: req, startedAt: clock.now() })
+    if (!sessionId) sessionId = await storage.createSession({ workload: req.workload, request: suite.suiteSeed === null ? req : { ...req, qualitySeed: suite.suiteSeed }, startedAt: clock.now() })
     await storage.setSessionStatus(sessionId, 'running')
     // Resume re-runs steps that never really ran: cancelled ones and RAM-guard skips (memory may be free now).
     // retryFailed also re-runs fail/timeout steps (not config_drift: same config → same drift; a changed config has a
@@ -269,8 +273,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       // same suite version). Rows without genId are the baseline (stored before the gen-config search).
       const stored = (req.resumeSessionId ? await storage.listQuality(sessionId, modelId) : []) as GenRow[]
       const rowsOf = (g: GenConfig) => stored.filter((r) => (r.genId ?? BASELINE_GEN.id) === g.id)
-      const complete = stored.length > 0 && stored.every((r) => (r as { suite?: string }).suite === defaultTestSet.suite) &&
-        gens.every((g) => defaultTestSet.tests.every((t) => rowsOf(g).filter((r) => r.testId === t.id).length >= samplesOf(g)))
+      const complete = stored.length > 0 && stored.every((r) => (r as { suite?: string }).suite === suite.suite && ((r as { suiteSeed?: number | null }).suiteSeed ?? null) === suite.suiteSeed) &&
+        gens.every((g) => suite.tests.every((t) => rowsOf(g).filter((r) => r.testId === t.id).length >= samplesOf(g)))
       if (complete) {
         const list = gens.map((g) => summarizeGen(g, rowsOf(g), samplesOf(g)))
         quality.set(modelId, list[0].results)
@@ -301,7 +305,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         quality.set(modelId, results)
         if (gens.length > 1) genQ.set(modelId, perGen)
         // One transaction for every gen config of the model (resume needs all of them or re-runs).
-        await storage.saveQuality(sessionId, modelId, best.config.id, qctx, perGen.flatMap((g) => g.results).map((r) => ({ ...r, suite: defaultTestSet.suite })))
+        await storage.saveQuality(sessionId, modelId, best.config.id, qctx, perGen.flatMap((g) => g.results).map((r) => ({ ...r, suite: suite.suite })))
       }
     }
     const withQuality = () => {
@@ -428,7 +432,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         loadTimeMs: na('not loaded'), ttftMs: na('no request'), prefillTps: na('no request'), decodeTps: na('no request'), totalMs: na('no request'),
         peakVramBytes: na('no telemetry'), peakSharedGpuBytes: na('no telemetry'), peakRamBytes: na('no telemetry'),
         avgGpuUtil: na('no telemetry'), avgCpuUtil: na('no telemetry'), warm: false,
-        versions: { benchmark: BENCHMARK_VERSION, prompts: PROMPT_VERSION, quality: defaultTestSet.suite, runtime: deps.runtimeVersion ?? null, rules: RULES_VERSION },
+        versions: { benchmark: BENCHMARK_VERSION, prompts: PROMPT_VERSION, quality: suite.suite, runtime: deps.runtimeVersion ?? null, rules: RULES_VERSION },
         ramFloorBytes: ramFloor, ...extra
       },
       detail: {
@@ -721,7 +725,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     send({ type: 'phase', configId: cand.id, ctx, phase: 'quality' })
     const g = await guardedLoad(cand, model, ctx, 'quality suite')
     if (!g.ok) { log('error', `${cand.id}: ${g.reason}`); return [] }
-    const prompts = buildQualityPrompts(defaultTestSet, { fillerTokens: Math.min(cfg.qualityFillerMax, Math.floor(ctx * 0.6)), thinking: false })
+    const prompts = buildQualityPrompts(suite, { fillerTokens: Math.min(cfg.qualityFillerMax, Math.floor(ctx * 0.6)), thinking: false })
     const done: GenQuality[] = []
     const renders: (string | null)[] = []
     try {
@@ -736,8 +740,9 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
             const why = g.tripped()
             if (why) { log('error', `${cand.id}: ${why}`); interrupted = true; break }
             if (signal?.aborted || backend.lastExit) { interrupted = true; break }
-            const test = defaultTestSet.tests.find((t) => t.id === p.testId)!
-            const tag = { genId: gen.id, sample }
+            const test = suite.tests.find((t) => t.id === p.testId)!
+            // v2: record which seeds produced this item (replay / audit); v1 rows carry no seed.
+            const tag = { genId: gen.id, sample, ...(suite.suiteSeed !== null ? { suiteSeed: suite.suiteSeed, instanceSeed: (test as { instanceSeed?: number }).instanceSeed ?? null, generatorVersion: suite.generatorVersion } : {}) }
             try {
               const prompt = await backend.applyTemplate(p.messages, templateKwargs ? { templateKwargs } : undefined)
               firstRender ??= prompt
@@ -757,7 +762,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
               const counts = {
                 answerTokens: toks === null || reasoningTokens === null ? null : toks - reasoningTokens, reasoningTokens, totalMs: r.totalMs ?? null,
                 tokenSource: (r.reasoningTokens !== undefined ? 'runtime' : 'estimated') as GenRow['tokenSource'], promptTokens: r.promptTokens, ctx,
-                maxTokens: preq.maxTokens, checkerVersion: defaultTestSet.suite, outputTruncated: truncated,
+                maxTokens: preq.maxTokens, checkerVersion: suite.suite, outputTruncated: truncated,
                 // A failed request is an infrastructure failure, never a wrong answer (rule I-5.7); a budget stop is truncation (I-5.8).
                 evaluationStatus: (r.error && !r.timedOut ? 'infra_error' : truncated ? 'truncated' : 'valid') as GenRow['evaluationStatus'],
                 ...(templateKwargs ? { requestedTemplateKwargs: templateKwargs } : {})
@@ -766,7 +771,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
                 ? { testId: test.id, category: test.category, weight: test.weight, pass: false, score: 0, detail: `request failed: ${r.error}`, ...tag, ...counts }
                 : { ...(await evaluate(test, r.text)), ...tag, ...counts })
             } catch (e) {
-              rows.push({ testId: test.id, category: test.category, weight: test.weight, pass: false, score: 0, detail: `request failed: ${(e as Error).message}`, ...tag, evaluationStatus: 'infra_error', checkerVersion: defaultTestSet.suite, ctx })
+              rows.push({ testId: test.id, category: test.category, weight: test.weight, pass: false, score: 0, detail: `request failed: ${(e as Error).message}`, ...tag, evaluationStatus: 'infra_error', checkerVersion: suite.suite, ctx })
             }
           }
         }
