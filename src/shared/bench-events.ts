@@ -33,8 +33,9 @@ export interface SessionRequest {
   genSearch?: boolean
   /** Explicit generation configs (overrides the search; max 3). */
   genConfigs?: GenConfig[]
-  /** Quality depth. 'thorough': suite qb-2.0.0 (60 items, 13 generated from qualitySeed) and 3 seeded samples per test for
-   *  stochastic (T > 0) gen configs. 'quick': qb-1.1.0 (17 fixed tests), 1 sample. Unset: qb-1.1.0 with 3 samples for T > 0. */
+  /** Quality depth. 'thorough' (default when unset): suite qb-2.0.0 (60 items, 13 generated from qualitySeed; ≈3.5× the
+   *  quick suite's runtime, once per model on its best-offload config) and 3 seeded samples per test for stochastic (T > 0)
+   *  gen configs. 'quick' (explicit opt-in): qb-1.1.0 (17 fixed tests), 1 sample. */
   qualityMode?: 'quick' | 'thorough'
   /** qb-2.0.0 problem seed (not the sampling seed). Unset: derived from the session start time and persisted with the
    *  stored request, so resume and every candidate in the session get the same generated items. */

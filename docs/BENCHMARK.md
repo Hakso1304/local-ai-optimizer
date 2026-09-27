@@ -34,7 +34,7 @@ A step is one candidate config at one context size. The server is started with `
 | `avgGpuUtil`, `avgCpuUtil` | mean over samples: GPU = max over the PID's 3D/Compute engine groups; CPU = `Processor(_Total)` | measured |
 | `status`, `failureKind` | see §4 | — |
 | `warm` | true when the size-matched warmup succeeded before the measured reps (X13) | — |
-| `versions` | `{benchmark: BENCHMARK_VERSION ('bench-1.0.0'), prompts: PROMPT_VERSION ('ladder-1'), quality: defaultTestSet.suite (now 'qb-1.1.0'), runtime: SessionDeps.runtimeVersion}` (X17) | declared |
+| `versions` | `{benchmark: BENCHMARK_VERSION ('bench-1.0.0'), prompts: PROMPT_VERSION ('ladder-1'), quality: the session's selected suite id ('qb-2.0.0' default, 'qb-1.1.0' when qualityMode='quick'), runtime: SessionDeps.runtimeVersion}` (X17) | declared |
 
 - Telemetry: `startSampler({pid})` (`src/core/telemetry/sampler.ts`) runs `typeperf -si 1`.
   - It starts **during load**, as soon as the new server pid exists, and runs through warmup and reps.
@@ -79,6 +79,12 @@ A step is one candidate config at one context size. The server is started with `
 ACCEPTANCE A11 mapping: ok → pass; failed / oom / device_lost / crashed → fail + kind.
 
 ## 5. Quality suite (`qb-1.1.0`, file `tests.v1.json`)
+
+- **Suite selection (since ccc0a4c).**
+  - The default, unset or `qualityMode: 'thorough'`, is **qb-2.0.0** (`tests.v2.json` + `generators.v2.ts`, see docs/quality-v2.md): 60 items, of which 13 are generated from a per-session `qualitySeed` persisted with the request. It uses 3 seeded samples only for stochastic (T > 0) gen configs.
+  - `qualityMode: 'quick'` is an explicit opt-in to qb-1.1.0 below: 17 items, 1 sample.
+  - Runtime: the thorough suite is ≈3.5× the quick one. It runs once per model on the best-offload config, not once per configuration.
+  - Every candidate in a session gets the same resolved items. Stored quality is reused only for the same suite id and seed.
 
 - Files: `src/core/quality/tests.v1.json` (17 tests), `checkers.ts`, `index.ts`.
 - Categories: instruction IF-01..03, reasoning RS-01..04 (since qb-1.1.0: step-by-step reasoning allowed, ending in a final `Answer: X` line; the `finalAnswer` checker takes the last Answer line, tolerating case, bold and backticks, and applies the inner exact/number check), coding CD-01..03 (`jsCode` cases `{expr, expected}`, compared as the JSON string of the value — order-sensitive for object keys, D18), structured SO-01..02, extraction EX-01..02, context CR-10/50/90 (needle at 10/50/90 % depth in seeded filler).

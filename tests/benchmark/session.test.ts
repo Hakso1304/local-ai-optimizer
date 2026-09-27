@@ -11,6 +11,10 @@ import { generateCandidates, machineFromProfile } from '../../src/core/benchmark
 import { WORKLOADS } from '../../src/core/scoring/workloads'
 import { ConfigDriftError } from '../../src/core/runtimes/llamacpp'
 import { load } from '../scoring/helpers'
+import { suiteFor } from '../../src/core/quality'
+
+/** Items in the DEFAULT suite (unset qualityMode = 'thorough' = qb-2.0.0); explicit 'quick' runs keep 17 (qb-1.1.0). */
+const N = suiteFor(undefined, 0).tests.length
 
 const GiB = 1024 ** 3
 const model: ModelMeta = { ...load('sweep-smooth.json').models[0], id: 'C:/models/llama8b.gguf', ctxTrain: 32768 }
@@ -302,7 +306,7 @@ describe('runSession', () => {
     const m = { ...model, supportsThinking: true, genKnobs }
     const r = await run(() => ({}), { workload: 'coding', runQuality: true, ladder: [2048] }, { models: [m], backend })
     const kw = ref!.calls.templateOpts.map((o) => JSON.stringify((o as { templateKwargs?: unknown } | undefined)?.templateKwargs))
-    expect(kw.length).toBe(17 + 17 * 3 * 2)
+    expect(kw.length).toBe(N + N * 3 * 2)
     expect([...new Set(kw)]).toEqual(['{"enable_thinking":false}', '{"enable_thinking":true,"reasoning_effort":"low"}', '{"enable_thinking":true,"reasoning_effort":"medium"}'])
     expect(ref!.calls.loads).toHaveLength(2) // one ladder step + ONE quality load for all three gen configs
     const stoch = seen.filter((q) => q.temperature === 0.6) as (PromptRequest & { topP?: number })[]
@@ -310,13 +314,13 @@ describe('runSession', () => {
     expect([...new Set(stoch.map((q) => q.seed))].sort()).toEqual([1, 2, 3])
     const rows = r.s.quality[0].results as (QualityResult & { genId: string; evaluationStatus: string; checkerVersion: string; maxTokens: number; appliedTemplateKwargs?: unknown })[]
     expect([...new Set(rows.map((x) => x.genId))]).toEqual(['off', 'think-low-t0.6', 'think-medium-t0.6'])
-    expect(rows.every((x) => x.evaluationStatus === 'valid' && x.checkerVersion === 'qb-1.1.0' && x.maxTokens > 0)).toBe(true)
+    expect(rows.every((x) => x.evaluationStatus === 'valid' && x.checkerVersion === 'qb-2.0.0' && x.maxTokens > 0)).toBe(true)
     // The fake template ignores kwargs (identical renders) → nothing counts as applied (I-8.0)
     expect(rows.some((x) => x.appliedTemplateKwargs)).toBe(false)
     const quick = await run(() => ({}), { workload: 'coding', runQuality: true, ladder: [2048], qualityMode: 'quick' }, { models: [m] })
     expect(quick.backend.calls.templates).toBe(17 * 3)
     const off = await run(() => ({}), { workload: 'coding', runQuality: true, ladder: [2048], genSearch: false }, { models: [m] })
-    expect(off.backend.calls.templates).toBe(17)
+    expect(off.backend.calls.templates).toBe(N)
   })
 
   it('data contract: template kwargs count as applied only when they change the render; failed requests are infra_error', async () => {
@@ -338,7 +342,7 @@ describe('runSession', () => {
 
   it('thinking models: quality templates use enable_thinking=false; others get no kwargs', async () => {
     const thinking = await run(() => ({}), { workload: 'fast_assistant', runQuality: true, ladder: [2048, 4096], genSearch: false }, { models: [{ ...model, supportsThinking: true }] })
-    expect(thinking.backend.calls.templateOpts.length).toBe(17)
+    expect(thinking.backend.calls.templateOpts.length).toBe(N)
     expect(thinking.backend.calls.templateOpts.every((o) => JSON.stringify(o) === '{"templateKwargs":{"enable_thinking":false}}')).toBe(true)
     expect(thinking.rec?.insights?.map((i) => i.text).join('\n')).toMatch(/\[I-5\.4\] .*: quality measured with thinking off \(T=0\)/)
     const plain = await run(() => ({}), { runQuality: true, ladder: [2048] })
@@ -526,14 +530,14 @@ describe('runSession', () => {
   it('F5: resume reuses stored quality only when it is the complete current suite', async () => {
     const first = await run(() => ({}), { ladder: [2048], runQuality: true })
     const stored = first.s.quality[0]
-    expect(stored.results).toHaveLength(17)
+    expect(stored.results).toHaveLength(N)
     const resume = (q: typeof first.s.quality) => run(() => ({}), { ladder: [2048], runQuality: true, resumeSessionId: 's1' }, {}, first.s.runs, q)
     const full = await resume([stored])
     expect(full.backend.calls.templates).toBe(0) // complete + same suite → reused
     const partial = await resume([{ ...stored, results: stored.results.slice(0, 1) }])
-    expect(partial.backend.calls.templates).toBe(17) // incomplete → re-run
+    expect(partial.backend.calls.templates).toBe(N) // incomplete → re-run
     const legacy = await resume([{ ...stored, results: stored.results.map(({ ...r }) => { delete (r as { suite?: string }).suite; return r }) }])
-    expect(legacy.backend.calls.templates).toBe(17) // no suite version → re-run
+    expect(legacy.backend.calls.templates).toBe(N) // no suite version → re-run
   })
 
   it('F12: without llama timings, TPS are estimated from the streamed-token count and the prompt size', async () => {
@@ -594,7 +598,7 @@ describe('runSession', () => {
     const on = await run(() => ({}), { runQuality: true })
     expect(on.s.quality).toHaveLength(1)
     expect(on.s.quality[0]).toMatchObject({ ctx: 8192 }) // min(target 8K, ceiling), a passed rung (D09)
-    expect(on.s.quality[0].results).toHaveLength(17)
+    expect(on.s.quality[0].results).toHaveLength(N)
     expect(on.rec?.best?.score.breakdown.find((b) => b.component === 'quality')?.input.kind).toBe('measured')
   })
 

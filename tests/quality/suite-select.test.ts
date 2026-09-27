@@ -3,14 +3,18 @@ import { buildQualityPrompts, defaultTestSet, evaluate, suiteFor } from '../../s
 import { runChecker } from '../../src/core/quality/checkers'
 
 describe('suiteFor (quality mode → suite)', () => {
-  it("'quick' and unset stay on qb-1.1.0 (17 fixed tests, no seed)", () => {
-    for (const mode of ['quick', undefined] as const) {
+  it("'quick' (explicit) is qb-1.1.0 (17 fixed tests, no seed)", () => {
+    for (const mode of ['quick'] as const) {
       const s = suiteFor(mode, 42)
       expect(s.suite).toBe('qb-1.1.0')
       expect(s.tests).toHaveLength(17)
       expect(s.suiteSeed).toBeNull()
       expect(s.tests).toEqual(defaultTestSet.tests)
     }
+  })
+
+  it("unset defaults to 'thorough'", () => {
+    expect(suiteFor(undefined, 5)).toEqual(suiteFor('thorough', 5))
   })
 
   it("'thorough' resolves qb-2.0.0: 60 concrete items, generator version and seed recorded", () => {

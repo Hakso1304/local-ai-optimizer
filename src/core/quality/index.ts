@@ -57,10 +57,10 @@ export interface SelectedSuite extends QualityTestSet {
   generatorVersion: string | null
 }
 
-/** 'thorough' → qb-2.0.0 (60 items: 47 static + 13 generated from suiteSeed). Anything else → qb-1.1.0 (17 fixed tests).
- *  ponytail: an unset qualityMode stays on v1 so existing sessions keep their suite; opt into v2 explicitly. */
+/** Default / 'thorough' → qb-2.0.0 (60 items: 47 static + 13 generated from suiteSeed; ≈3.5× the quick suite's runtime).
+ *  'quick' (explicit opt-in) → qb-1.1.0 (17 fixed tests). Credible quality is the default (product decision 2026-09-27). */
 export function suiteFor(mode: QualityMode | undefined, suiteSeed: number): SelectedSuite {
-  if (mode !== 'thorough') return { ...defaultTestSet, suiteSeed: null, generatorVersion: null }
+  if (mode === 'quick') return { ...defaultTestSet, suiteSeed: null, generatorVersion: null }
   return { ...resolveSuiteV2(suiteV2 as unknown as V2Manifest, suiteSeed >>> 0), suiteSeed: suiteSeed >>> 0, generatorVersion: GENERATOR_VERSION }
 }
 
