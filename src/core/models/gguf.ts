@@ -117,14 +117,22 @@ export async function readGgufMetadata(path: string): Promise<GgufMetadata> {
     }
     if (nTensors > MAX_TENSORS) throw new Error(`implausible tensor count ${nTensors}`)
     let params = 0
+    let last = { offset: -1, bytes: 0 } // tensor with the highest data offset
     for (let i = 0; i < nTensors; i++) {
       c.skip(await c.u64()) // name
       const nDims = await c.u32()
       let p = 1
       for (let d = 0; d < nDims; d++) p *= await c.u64()
       params += p
-      c.skip(4 + 8) // ggml_type, offset
+      const type = await c.u32()
+      const offset = await c.u64()
+      if (offset > last.offset) last = { offset, bytes: tensorBytes(type, p) }
     }
+    // Tensor data starts at the next alignment boundary; a file shorter than data start + last tensor end is a
+    // partial download (seen: a 1.22 GiB piece of a 16 GiB model parsed as a valid 27B).
+    const align = num(kv.get('general.alignment')) ?? 32
+    const dataStart = Math.ceil(c.pos / align) * align
+    const expectedMinBytes = nTensors > 0 ? dataStart + last.offset + last.bytes : c.pos
 
     const arch = str(kv.get('general.architecture'))
     const a = (k: string) => (arch ? kv.get(`${arch}.${k}`) : undefined)
@@ -166,6 +174,8 @@ export async function readGgufMetadata(path: string): Promise<GgufMetadata> {
       fileType,
       quantName: fileType != null ? (FTYPE[fileType] ?? `ftype_${fileType}`) : quantFromFilename(path),
       fileSizeBytes: size,
+      incomplete: size < expectedMinBytes, // split shards describe only their own tensors, so this holds per shard
+      expectedMinBytes,
       keyLength: keyLen,
       valueLength: valLen,
       nVocab: num(a('vocab_size')) ?? arrLen(kv.get('tokenizer.ggml.tokens')),
@@ -187,6 +197,18 @@ export async function readGgufMetadata(path: string): Promise<GgufMetadata> {
   } finally {
     await fh.close()
   }
+}
+
+// ggml_type → [block size in elements, bytes per block] (ggml.c type_traits). Unknown types count 0 (lower bound).
+const GGML_BLOCK: Record<number, [number, number]> = {
+  0: [1, 4], 1: [1, 2], 2: [32, 18], 3: [32, 20], 6: [32, 22], 7: [32, 24], 8: [32, 34], 9: [32, 36], 10: [256, 84],
+  11: [256, 110], 12: [256, 144], 13: [256, 176], 14: [256, 210], 15: [256, 292], 16: [256, 66], 17: [256, 74],
+  18: [256, 98], 19: [256, 50], 20: [32, 18], 21: [256, 110], 22: [256, 82], 23: [256, 136], 24: [1, 1], 25: [1, 2],
+  26: [1, 4], 27: [1, 8], 28: [1, 8], 29: [256, 56], 30: [1, 2]
+}
+function tensorBytes(type: number, elements: number): number {
+  const b = GGML_BLOCK[type]
+  return b ? Math.ceil(elements / b[0]) * b[1] : 0
 }
 
 /** f16 K+V bytes for one token (below any sliding window), layer by layer: recurrent layers (hybrid archs) hold no
@@ -237,6 +259,7 @@ export async function findGgufModels(dirs: string[]): Promise<ModelInfo[]> {
 export function toModelMeta(info: ModelInfo): { meta: ModelMeta } | { meta: null; reason: string } {
   const g = info.meta
   if (!g) return { meta: null, reason: info.metaError ?? 'no GGUF metadata' }
+  if (g.incomplete) return { meta: null, reason: `file incomplete (${(g.fileSizeBytes / 1024 ** 3).toFixed(2)} of ≥${(g.expectedMinBytes / 1024 ** 3).toFixed(2)} GiB) — still downloading?` }
   const missing = (['arch', 'blockCount', 'embeddingLength', 'headCount', 'nVocab'] as const).filter((k) => g[k] == null)
   if (missing.length) return { meta: null, reason: `GGUF lacks ${missing.join(', ')}` }
   return {

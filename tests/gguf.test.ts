@@ -22,12 +22,19 @@ function kvBytes([k, t, v]: Kv): Buffer {
   }[t]()
   return Buffer.concat([gstr(k), val])
 }
+/** F32 tensors with real (zero) data at 32-byte aligned offsets, like a complete file. */
 function gguf(version: number, kvs: Kv[], tensors: number[][]): Buffer {
-  return Buffer.concat([
+  const sizes = tensors.map((dims) => dims.reduce((a, b) => a * b, 1) * 4)
+  const offsets: number[] = []
+  let off = 0
+  for (const sz of sizes) { offsets.push(off); off += Math.ceil(sz / 32) * 32 }
+  const head = Buffer.concat([
     u32(0x46554747), u32(version), u64(tensors.length), u64(kvs.length),
     ...kvs.map(kvBytes),
-    ...tensors.map((dims, i) => Buffer.concat([gstr(`t${i}`), u32(dims.length), ...dims.map(u64), u32(0), u64(0)]))
+    ...tensors.map((dims, i) => Buffer.concat([gstr(`t${i}`), u32(dims.length), ...dims.map(u64), u32(0), u64(offsets[i])]))
   ])
+  const pad = Buffer.alloc((Math.ceil(head.length / 32) * 32) - head.length)
+  return Buffer.concat([head, pad, Buffer.alloc(off)])
 }
 
 const dir = mkdtempSync(join(tmpdir(), 'lao-gguf-'))
@@ -128,6 +135,18 @@ describe('readGgufMetadata', () => {
     expect(m.estimated.kvCacheBytesPerToken).toBeNull() // no dims -> no estimate, not a guess
   })
 
+  it('flags a partially downloaded file (header complete, tensor data missing) and refuses to plan it', async () => {
+    const full = gguf(3, KVS, [[64, 100], [64, 64]])
+    const p = join(dir, 'partial.gguf')
+    writeFileSync(p, full.subarray(0, full.length - 1000))
+    const m = await readGgufMetadata(p)
+    expect(m.incomplete).toBe(true)
+    expect(m.expectedMinBytes).toBe(full.length)
+    expect(toModelMeta({ id: p, name: 'x', path: p, sizeBytes: 1, runtime: 'llamacpp', meta: m })).toMatchObject({ meta: null, reason: expect.stringMatching(/incomplete/) })
+    writeFileSync(p, full)
+    expect((await readGgufMetadata(p)).incomplete).toBe(false)
+  })
+
   it('rejects non-GGUF and truncated files', async () => {
     writeFileSync(join(dir, 'bad.gguf'), 'hello world, not gguf')
     await expect(readGgufMetadata(join(dir, 'bad.gguf'))).rejects.toThrow(/bad magic/)
@@ -143,6 +162,7 @@ describe('readGgufMetadata', () => {
       fileType: 7, quantName: 'Q8_0', estimated: { kvCacheBytesPerToken: 12288 }
     })
     expect(m.nVocab).toBeGreaterThan(150_000)
+    expect(m.incomplete).toBe(false) // real, fully downloaded file: data start + last tensor end fits exactly
     expect(m.parameterCount.value).toBeGreaterThan(400e6)
   })
 })

@@ -71,6 +71,10 @@ export interface GgufMetadata {
   fileType: number | null
   quantName: string | null // from general.file_type, else parsed from the filename
   fileSizeBytes: number
+  /** File shorter than the tensor data the header describes (partial download). Such models are not benchmarked. */
+  incomplete: boolean
+  /** Data start + end of the last tensor (lower bound for a complete file). */
+  expectedMinBytes: number
   keyLength: number | null
   valueLength: number | null
   /** <arch>.vocab_size, else the length of tokenizer.ggml.tokens. */

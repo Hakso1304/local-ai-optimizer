@@ -40,7 +40,7 @@ export function ModelsPage() {
         <tbody>
           {models?.map((m) => (
             <tr key={m.id}>
-              <td>{m.name}</td>
+              <td>{m.name}{m.meta?.incomplete && <span className="pill warn-pill" title={`${m.meta.fileSizeBytes} of ≥${m.meta.expectedMinBytes} bytes`}>incomplete download</span>}</td>
               <td className="muted" title={m.ollamaName}>{SOURCE[m.runtime]}</td>
               {m.meta ? (
                 <>
