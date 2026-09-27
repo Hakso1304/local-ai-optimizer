@@ -10,15 +10,22 @@ export interface Pt { t: number; v: number | null }
  *  bucket containing a null keeps one null so gaps survive. */
 export function downsample(pts: Pt[], maxPoints: number): Pt[] {
   if (pts.length <= maxPoints || maxPoints < 2) return pts
-  const buckets = Math.floor(maxPoints / 2)
+  // Up to 3 points per bucket: min, max (of the measured values) and one gap marker if any sample was unavailable.
+  // ponytail: maxPoints < 3 still yields one full bucket (≤ 3 points); nothing charts at that size.
+  const buckets = Math.max(1, Math.floor(maxPoints / 3))
   const size = pts.length / buckets
   const out: Pt[] = []
   for (let b = 0; b < buckets; b++) {
     const chunk = pts.slice(Math.floor(b * size), Math.floor((b + 1) * size))
     const vals = chunk.filter((p) => p.v != null)
-    if (vals.length < chunk.length) { out.push({ t: chunk.find((p) => p.v == null)!.t, v: null }); continue }
-    const lo = vals.reduce((a, p) => (p.v! < a.v! ? p : a)), hi = vals.reduce((a, p) => (p.v! > a.v! ? p : a))
-    out.push(...(lo === hi ? [lo] : lo.t <= hi.t ? [lo, hi] : [hi, lo]))
+    const keep: Pt[] = []
+    if (vals.length) {
+      const lo = vals.reduce((a, p) => (p.v! < a.v! ? p : a)), hi = vals.reduce((a, p) => (p.v! > a.v! ? p : a))
+      keep.push(...(lo === hi ? [lo] : [lo, hi]))
+    }
+    const gap = chunk.find((p) => p.v == null)
+    if (gap) keep.push({ t: gap.t, v: null })
+    out.push(...keep.sort((x, y) => x.t - y.t))
   }
   return out
 }

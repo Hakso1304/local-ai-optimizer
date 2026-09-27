@@ -100,13 +100,37 @@ describe('downloadFile', () => {
   })
 
   it('resumes from an existing .part with a Range request', async () => {
+    const id = { repoId: 'org/repo-GGUF', revision: 'main', path: 'model.gguf', sizeBytes: content.length, sha256: sha }
     writeFileSync(join(dir, 'model.gguf.part'), content.subarray(0, 100_000))
+    writeFileSync(join(dir, 'model.gguf.part.json'), JSON.stringify(id))
     seen.ranges.length = 0
     const r = await dl()
     expect(seen.ranges).toEqual(['bytes=100000-'])
     expect(readFileSync(r.filePath).equals(content)).toBe(true)
     expect(r.sha256Verified).toBe(true) // hash covers the resumed prefix too
+    expect(existsSync(join(dir, 'model.gguf.part.json'))).toBe(false)
     rmSync(r.filePath)
+    // F9: a partial from another repo (or with no sidecar) is never resumed
+    writeFileSync(join(dir, 'model.gguf.part'), content.subarray(0, 100_000))
+    writeFileSync(join(dir, 'model.gguf.part.json'), JSON.stringify({ ...id, repoId: 'other/repo' }))
+    seen.ranges.length = 0
+    rmSync((await dl()).filePath)
+    expect(seen.ranges).toEqual([undefined])
+  })
+
+  it('F10: rejects ADS, reserved device names and trailing dot/space in any segment', async () => {
+    for (const path of ['a.gguf:x', 'CON', 'sub/nul.gguf', 'lpt1.txt', 'dir./m.gguf', 'm.gguf ', 'a|b.gguf'])
+      await expect(dl({ path })).rejects.toMatchObject({ kind: 'bad_path' })
+  })
+
+  it('F3: token only to the exact https hub origins (or the configured base)', async () => {
+    const { tokenAllowed } = await import('../src/core/hub/hf')
+    expect(tokenAllowed('https://huggingface.co/x')).toBe(true)
+    expect(tokenAllowed('https://cdn-lfs.huggingface.co/x')).toBe(true)
+    expect(tokenAllowed('http://huggingface.co/x')).toBe(false)
+    expect(tokenAllowed('https://huggingface.co:8443/x')).toBe(false)
+    expect(tokenAllowed('https://evilhuggingface.co/x')).toBe(false)
+    expect(tokenAllowed('http://127.0.0.1:9/x', 'http://127.0.0.1:9')).toBe(true)
   })
 
   it('sha256 mismatch → error, corrupt .part deleted; unknown sha → sha256Verified null', async () => {

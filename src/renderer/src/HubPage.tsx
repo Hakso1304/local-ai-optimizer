@@ -1,10 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { HfGgufFile, HfModel, HubAccount, HubApi, HubProgress } from '../../shared/hub-types'
 
 // Hub methods are spread into window.api by the preload (src/preload/hub.ts); listModels refreshes the Models list.
 const api = () => window.api as unknown as HubApi & { listModels?: () => Promise<unknown> }
 
 const gib = (b: number) => (b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(2)} GiB` : `${(b / 1024 ** 2).toFixed(0)} MiB`)
+/** Immutable identity of one transfer: Resume and progress always refer to this, never to the repo being browsed. */
+interface Transfer { readonly repoId: string; readonly path: string; readonly destDir: string }
+const same = (a: Transfer | null, repoId: string, path: string) => !!a && a.repoId === repoId && a.path === path
+
 const eta = (s: number | null) => (s === null ? '—' : s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m` : s >= 60 ? `${Math.floor(s / 60)}m ${Math.round(s % 60)}s` : `${Math.round(s)}s`)
 
 export function HubPage() {
@@ -16,7 +20,8 @@ export function HubPage() {
   const [files, setFiles] = useState<HfGgufFile[] | null>(null)
   const [dirs, setDirs] = useState<string[]>([])
   const [dest, setDest] = useState('')
-  const [target, setTarget] = useState<HfGgufFile | null>(null)
+  const [target, setTarget] = useState<Transfer | null>(null)
+  const opened = useRef<string | null>(null)
   const [progress, setProgress] = useState<HubProgress | null>(null)
   const [state, setState] = useState<'idle' | 'downloading' | 'paused' | 'done'>('idle')
   const [err, setErr] = useState<string | null>(null)
@@ -41,13 +46,14 @@ export function HubPage() {
   }
   const open = async (id: string) => {
     setErr(null); setRepo(id); setFiles(null)
+    opened.current = id
     const r = await api().hubFiles(id)
+    if (opened.current !== id) return // a later Files click superseded this reply
     if (r.ok) setFiles(r.files); else setErr(r.error)
   }
-  const download = async (f: HfGgufFile) => {
-    if (!repo || !dest) return
-    setErr(null); setNote(null); setTarget(f); setState('downloading')
-    const r = await api().hubDownload({ repoId: repo, path: f.path, destDir: dest })
+  const download = async (t: Transfer) => {
+    setErr(null); setNote(null); setTarget(t); setState('downloading')
+    const r = await api().hubDownload({ repoId: t.repoId, path: t.path, destDir: t.destDir })
     if (r.ok) {
       setState('done')
       setNote(`Model ready: ${r.filePath}${r.sha256Verified ? ' (sha256 verified)' : ''}`)
@@ -62,7 +68,7 @@ export function HubPage() {
   const pause = async () => { setState('paused'); await api().hubCancel(false) }
   const cancel = async () => { setState('idle'); setProgress(null); await api().hubCancel(true) }
 
-  const p = progress && target && progress.path === target.path ? progress : null
+  const p = progress && same(target, progress.repoId, progress.path) ? progress : null
   return (
     <section>
       <header className="bar"><h1>Download models</h1></header>
@@ -122,8 +128,8 @@ export function HubPage() {
                   <tr key={f.path}>
                     <td>{f.path}{f.shard ? <span className="muted"> (part {f.shard.index}/{f.shard.count})</span> : null}</td>
                     <td>{f.quant ?? '—'}</td><td>{gib(f.sizeBytes)}</td>
-                    <td><button className="mini" disabled={state === 'downloading' || !dest} onClick={() => void download(f)}>
-                      {state === 'paused' && target?.path === f.path ? 'Resume' : 'Download'}</button></td>
+                    <td><button className="mini" disabled={state === 'downloading' || !dest} onClick={() => void (state === 'paused' && same(target, repo, f.path) && target!.destDir === dest ? download(target!) : download({ repoId: repo, path: f.path, destDir: dest }))}>
+                      {state === 'paused' && same(target, repo, f.path) && target!.destDir === dest ? 'Resume' : 'Download'}</button></td>
                   </tr>
                 ))}
                 {!files.length && <tr><td colSpan={4} className="muted">This repository has no .gguf files.</td></tr>}
@@ -135,7 +141,7 @@ export function HubPage() {
 
       {target && state !== 'idle' && (
         <div className="card">
-          <h2>{target.path}</h2>
+          <h2>{target.repoId} / {target.path}</h2>
           <div className="scorebar" style={{ gridTemplateColumns: '1fr auto' }}>
             <span className="track"><span className="fill" style={{ width: `${p?.pct ?? (state === 'done' ? 100 : 0)}%` }} /></span>
             <span className="val">{p?.pct != null ? `${p.pct.toFixed(1)} %` : ''}</span>

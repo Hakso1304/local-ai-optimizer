@@ -14,7 +14,7 @@ it('clears the previous model rates and telemetry at candidate start', () => {
   const next = applyEvent(state, { sessionId: '1', type: 'candidate:started', configId: 'new', model: 'new', gpuLayers: 1, ctxSteps: [2048] })
   expect(next.rate).toBeNull()
 })
-it.fails('preserves measured peaks in a bucket that also contains an unavailable sample', () => {
+it('preserves measured peaks in a bucket that also contains an unavailable sample', () => {
   const points = [{ t: 0, v: 1 }, { t: 1, v: 99 }, { t: 2, v: null }, { t: 3, v: 2 }]
   expect(downsample(points, 2).some((p) => p.v === 99)).toBe(true)
 })
