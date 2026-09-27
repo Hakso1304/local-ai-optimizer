@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionEvent, SessionRequest } from '../../src/shared/bench-events'
-import type { BenchmarkRunResult, ModelMeta, QualityResult, Recommendation } from '../../src/shared/bench-types'
+import type { BenchmarkRunResult, ModelMeta, QualityResult, Recommendation, VramBudgetObservation } from '../../src/shared/bench-types'
 import type { SystemProfile } from '../../src/shared/types'
 import type { LoadConfig, PromptRequest, PromptResult } from '../../src/core/runtimes/types'
 import type { ExitInfo } from '../../src/core/runtimes/llamacpp'
@@ -94,7 +94,8 @@ function memStorage(seed: BenchmarkRunResult[] = [], seedQuality: { modelId: str
     runs: [...seed] as BenchmarkRunResult[],
     details: [] as RunDetail[],
     quality: [...seedQuality] as { modelId: string; configId: string; ctx: number; results: QualityResult[] }[],
-    recs: [] as Recommendation[]
+    recs: [] as Recommendation[],
+    budget: [] as { key: string; o: VramBudgetObservation }[]
   }
   const storage: SessionStorage = {
     createSession: () => 's1',
@@ -103,7 +104,9 @@ function memStorage(seed: BenchmarkRunResult[] = [], seedQuality: { modelId: str
     saveRun: (_id, run, detail) => { s.runs.push(run); s.details.push(detail) },
     listQuality: (_id, modelId) => s.quality.find((q) => q.modelId === modelId)?.results ?? [],
     saveQuality: (_id, modelId, configId, ctx, results) => { s.quality.push({ modelId, configId, ctx, results }) },
-    saveRecommendation: (_id, rec) => { s.recs.push(rec) }
+    saveRecommendation: (_id, rec) => { s.recs.push(rec) },
+    listVramBudget: (key) => s.budget.filter((b) => b.key === key).map((b) => b.o),
+    saveVramBudgetObservation: (key, o) => { s.budget.push({ key, o }) }
   }
   return { s, storage }
 }
@@ -491,9 +494,12 @@ describe('runSession', () => {
     expect(r[0].adapterFreeAtSharedPeakBytes?.value).toBeGreaterThan(3 * GiB)
     expect(r[1]).toMatchObject({ placementRetry: true, placementFirst: { peakSharedGpuRawBytes: { value: 1.08 * GiB } } })
     expect(r[1].peakSharedGpuRawBytes?.value).toBe(0.02 * GiB)
-    // without a same-window adapter reading the rule is not evaluable → no retry
-    const noAdapter = (pid: number) => { const v = [{ ...sample(pid - 1000), vramDedicatedBytes: null, procVramSharedBytes: 1.08 * GiB }] as TelemetrySample[]; return { samples: v, unavailable: {}, stop: () => v } }
-    expect(ctxOf((await run(() => ({}), { ladder: [2048, 4096] }, { startSampler: noAdapter })).backend)).toEqual([2048, 4096])
+    expect(s.budget).toEqual([]) // placement cleared by the restart → not a capacity observation
+    // at its per-process budget (12.5 of the estimated 12.74 GiB) → capacity: no retry, the ceiling is recorded
+    const atBudget = (pid: number) => { const v = [{ ...sample(pid - 1000), procVramDedicatedBytes: 12.5 * GiB, vramDedicatedBytes: 12.8 * GiB, procVramSharedBytes: pid - 1000 === 4096 ? 1.5 * GiB : 0.02 * GiB }]; return { samples: v, unavailable: {}, stop: () => v } }
+    const cap = await run(() => ({}), { ladder: [2048, 4096] }, { startSampler: atBudget })
+    expect(ctxOf(cap.backend)).toEqual([2048, 4096])
+    expect(cap.s.budget).toEqual([{ key: 'RX 9070 XT|?|vulkan:?', o: expect.objectContaining({ ceilingBytes: 12.5 * GiB, ctx: 4096, modelId: model.id, kvType: 'f16' }) }])
   })
 
   it('L1: spill saturation is taken against the effective budget (total − VRAM in use by other processes)', async () => {

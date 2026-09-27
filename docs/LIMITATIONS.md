@@ -14,6 +14,11 @@ This is the single consolidated list, and every item is checked against the code
 - **DONE: util overshoot no longer drops rows (H7 root cause).** Heavy steps of 29–62 s had 0 samples with no sampler error: every row with util slightly > 100 % was being discarded as a glitch. Percentages in (100, 1000] are now clamped to 100. Only negative or > 1000 values mark a glitch row (e.g. 1.3e13 % with garbage RAM cells), which is still dropped whole. `stop()` reports "typeperf rows dropped: N misaligned, M impossible" in `RunDetail.samplerErrors`, so an empty step says why.
 - **DONE-WITH-CAVEAT: GPU util is the max over the PID's 3D/Compute engine groups.** It is display-only; scoring and cliff rules don't use it.
 - **DONE-WITH-CAVEAT: per-PID VRAM comes from WDDM counters.** One scoped observation on this GPU (CAL-14, 14B at 32K, raw per-PID shared): spill began at ≈83 % dedicated. Under contention (H-LONG) spill-like growth began at 67–73 %. Neither is a Windows constant; other drivers may differ.
+- **DONE-WITH-CAVEAT: effective per-process VRAM budget.** The usable VRAM for one model is the per-process ceiling of the GPU + driver + backend, not the card total.
+  - Here (llama.cpp Vulkan) it was ≈ 11.6–13.25 GiB of 15.92, about 73–83 %, so a 16 GB card behaved like ≈ 12–13 GB. Ollama's ROCm/HIP backend on an RX 6800 used the full 16 GB. HIP allocates device memory directly, while Vulkan on this driver keeps a per-process ceiling.
+  - Ceilings are learned per GPU/driver/backend-build key from runs that spilled, and only measured ones prune planning. Until one exists, the 80 % figure is shown as an estimate.
+  - The app measures only the backend it runs: a ROCm/HIP backend (LM Studio or Ollama on AMD) may allocate differently from Vulkan, and its ceiling is not inferred from ours.
+- **FOLLOW-UP: AMD backend choice.** llama.cpp also ships HIP (ROCm) Windows builds for supported gfx targets, and a HIP backend may use more VRAM than Vulkan on the same card. It is not integrated yet; whether the HIP SDK supports the RX 9070 XT (gfx1201) is still to be checked.
 - **BLOCKED (env): NVIDIA telemetry is wired but fixture-tested only.** `withNvidia` merges nvidia-smi temp/power into samples when `probeNvidiaSmi()` works (acbd169). nvidia-smi here fails with "insufficient permissions" (stale driver, exit 4).
 
 ## Runtimes and models

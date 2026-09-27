@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import type {
-  BenchmarkRunResult, CandidateConfig, CandidateInput, FailureKind, GenQuality, Metric, ModelMeta, QualityResult, Recommendation, RunStatus, WorkloadId
+  BenchmarkRunResult, CandidateConfig, CandidateInput, FailureKind, GenQuality, Metric, ModelMeta, QualityResult, Recommendation, RunStatus, VramBudgetObservation, WorkloadId
 } from '../../shared/bench-types'
 import type { SessionDetail, SessionPayload, SessionSummary } from '../../shared/types'
 import type { SessionRequest } from '../../shared/bench-events'
@@ -18,6 +18,19 @@ import { recommend } from '../scoring/recommend'
 // Read/write side for benchmark sessions. Rows keep whole objects in `payload` (see SessionPayload).
 
 const json = <T>(s: string): T => JSON.parse(s) as T
+
+// Per-process VRAM ceilings per GPU/driver/backend key. Created on first use (no schema bump: older builds still open
+// the file and simply ignore the table).
+const ensureBudgetTable = (db: DatabaseSync) => db.exec(`CREATE TABLE IF NOT EXISTS vram_budget_observation (
+  id INTEGER PRIMARY KEY, created_at TEXT NOT NULL DEFAULT (datetime('now')), budget_key TEXT NOT NULL, payload TEXT NOT NULL)`)
+export function listVramBudget(db: DatabaseSync, key: string): VramBudgetObservation[] {
+  ensureBudgetTable(db)
+  return (db.prepare('SELECT payload FROM vram_budget_observation WHERE budget_key = ? ORDER BY id').all(key) as { payload: string }[]).map((r) => json<VramBudgetObservation>(r.payload))
+}
+export function saveVramBudgetObservation(db: DatabaseSync, key: string, o: VramBudgetObservation): void {
+  ensureBudgetTable(db)
+  db.prepare('INSERT INTO vram_budget_observation (budget_key, payload) VALUES (?, ?)').run(key, JSON.stringify(o))
+}
 
 export function saveSession(db: DatabaseSync, payload: SessionPayload, status: string): number {
   return Number(db.prepare('INSERT INTO benchmark_session (status, payload) VALUES (?, ?)').run(status, JSON.stringify(payload)).lastInsertRowid)
@@ -254,7 +267,9 @@ export function makeSessionStorage(db: DatabaseSync, planFor: PlanFor): SessionS
     // The runner sets `suite` (v1 or v2); only rows from callers that don't are labelled with the v1 default.
     saveQuality: (id, modelId, configId, ctx, results) =>
       saveQualityResults(db, sid(id), modelId, results.map((r) => ({ ...r, configId, ctx, suite: (r as { suite?: string }).suite ?? defaultTestSet.suite, expected: results.length }))),
-    saveRecommendation: (id, rec) => { saveRecommendation(db, sid(id), rec, rec.best ? modelOf(id, rec.best.configId) : null) }
+    saveRecommendation: (id, rec) => { saveRecommendation(db, sid(id), rec, rec.best ? modelOf(id, rec.best.configId) : null) },
+    listVramBudget: (key) => listVramBudget(db, key),
+    saveVramBudgetObservation: (key, o) => saveVramBudgetObservation(db, key, o)
   }
 }
 

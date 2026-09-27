@@ -130,7 +130,7 @@ describe('F8 saturation needs the versioned pre-spill window', () => {
     c.runs[1] = { ...c.runs[1], peakSharedGpuBytes: m(1 * GiB), peakVramBytes: m(8 * GiB), peakVramPlateauSamples: 3 }
     expect(text(interpret(V([c])), 'I-4.5')).toBe('')
     c.runs[1] = { ...c.runs[1], peakVramPlateauVersion: 'pre-spill-1' }
-    expect(text(interpret(V([c])), 'I-4.5')).toMatch(/spill began at ≈50 %/)
+    expect(text(interpret(V([c])), 'I-4.5')).toMatch(/≈50 % of the adapter total/)
   })
 })
 
@@ -252,25 +252,29 @@ describe('A/B/C (review-w4l): generation contract strictness', () => {
 })
 
 describe('I-2.8 placement spill', () => {
+  const B = (g: number) => ({ ...machine(), vramEffectiveBudgetBytes: m(g * GiB) })
   it('shared residency with ≥ 1 GiB dedicated free in the same window → placement insight with restart-runtime', () => {
     const c = candidate('a', [2048, 4096])
-    // run-14 shape: dedicated below saturation → the gated spill is 0, the per-PID shared reading is 1.08 GiB
-    c.runs[1] = { ...c.runs[1], peakSharedGpuBytes: m(0), peakSharedGpuRawBytes: m(1.08 * GiB), adapterFreeAtSharedPeakBytes: m(3.1 * GiB) }
-    const i = interpret(V([c])).find((x) => x.ruleId === 'I-2.8')!
+    // run-14 shape: 11.6 GiB dedicated, the gated spill is 0, per-PID shared 1.08 GiB; the 14B showed a 13.25 GiB budget
+    c.runs[1] = { ...c.runs[1], peakVramBytes: m(11.6 * GiB), peakSharedGpuBytes: m(0), peakSharedGpuRawBytes: m(1.08 * GiB), adapterFreeAtSharedPeakBytes: m(3.1 * GiB) }
+    const i = interpret(V([c], 'max_quality', { machine: B(13.25) })).find((x) => x.ruleId === 'I-2.8')!
     expect(i).toMatchObject({ severity: 'warn', action: 'restart-runtime' })
-    expect(i.text).toMatch(/1\.08 GiB of this process is resident in shared memory although 3\.10 GiB dedicated VRAM was free .* driver placement/)
+    expect(i.text).toMatch(/1\.08 GiB of this process is resident in shared memory although 1\.65 GiB of its per-process budget \(13\.25 GiB, measured\) was still free in the same window — driver placement/)
+    // the same spill AT the budget (14B at 13.25 GiB) is a capacity limit, not placement
+    c.runs[1] = { ...c.runs[1], peakVramBytes: m(13.25 * GiB) }
+    expect(interpret(V([c], 'max_quality', { machine: B(13.25) })).some((x) => x.ruleId === 'I-2.8')).toBe(false)
   })
   it('without a same-window adapter reading, or with the card full, the rule is not evaluable / does not fire', () => {
     const c = candidate('a', [2048, 4096])
     c.runs[1] = { ...c.runs[1], peakSharedGpuRawBytes: m(1.08 * GiB) }
-    expect(interpret(V([c])).some((x) => x.ruleId === 'I-2.8')).toBe(false)
+    expect(interpret(V([c])).some((x) => x.ruleId === 'I-2.8')).toBe(false) // no budget → not evaluable
     c.runs[1] = { ...c.runs[1], adapterFreeAtSharedPeakBytes: m(0.2 * GiB) }
-    expect(interpret(V([c])).some((x) => x.ruleId === 'I-2.8')).toBe(false)
+    expect(interpret(V([c], 'max_quality', { machine: B(13.25) })).some((x) => x.ruleId === 'I-2.8')).toBe(false) // card full
   })
   it('a retried rung that came back clean is a note that records both observations', () => {
     const c = candidate('a', [2048, 4096])
     c.runs[1] = { ...c.runs[1], placementRetry: true, placementFirst: { peakVramBytes: m(11.6 * GiB), peakSharedGpuBytes: m(0), peakSharedGpuRawBytes: m(1.08 * GiB), adapterFreeAtSharedPeakBytes: m(3.1 * GiB), decodeTps: m(37) } }
-    const i = interpret(V([c])).find((x) => x.ruleId === 'I-2.8')!
+    const i = interpret(V([c], 'max_quality', { machine: B(13.25) })).find((x) => x.ruleId === 'I-2.8')!
     expect(i.severity).toBe('note')
     expect(i.text).toMatch(/after a fresh restart the rung measured 0\.00 GiB shared \(decode 40\.0 vs 37\.0 t\/s before\)/)
   })

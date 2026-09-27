@@ -60,6 +60,24 @@ export interface MachineLimits {
   physicalCores: number
   /** Runtime device id, e.g. 'Vulkan0'. null = CPU only. */
   gpuDevice: string | null
+  /** Per-process dedicated VRAM ceilings observed on this GPU + driver + backend build (spill began there). */
+  vramBudgetObservations?: VramBudgetObservation[]
+  /** The most conservative per-process budget (min of observations), or the 80 % fallback labelled estimated. */
+  vramEffectiveBudgetBytes?: Metric
+}
+
+/** One observed per-process ceiling: the per-PID dedicated peak of a run in which shared residency began
+ *  (after the I-2.8 placement retry, so driver placement is not recorded as capacity). */
+export interface VramBudgetObservation {
+  ceilingBytes: number
+  modelId: string
+  ctx: number
+  kvType: KvType
+  /** KV buffer on the GPU (declared by the runtime at load, else the planning estimate). */
+  kvBytes: number | null
+  /** Largest single device buffer (model / KV / compute) — allocations of similar size behave alike. */
+  largestBufferBytes: number | null
+  observedAt: number
 }
 
 /** GGUF header facts; every field is DECLARED (paramCount derived from tensor dims). null = key absent. */
@@ -197,6 +215,9 @@ export interface PlanningSnapshot {
   planningVramBudgetBytes: number | null
   /** Safety margin kept free (candidate rules vramMarginBytes). */
   planningReserveBytes: number
+  /** Per-process budget used for this candidate (at its largest planned buffer); the planning budget is
+   *  min(total − in use − reserve, this). Absent on plans made before cand-1.5. */
+  effectiveBudget?: Metric
   ramAvailableBytes: number | null
   ramReserveBytes: number
   candidateRulesVersion: string

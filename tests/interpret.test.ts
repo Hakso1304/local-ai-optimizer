@@ -213,7 +213,10 @@ describe('§3 speed', () => {
 
 describe('§4 memory', () => {
   it('I-4.1 budget basis from the planning snapshot (signed, with reserve); otherwise per-PID vs total, not evaluable', () => {
-    expect(text(panel(eight(), 'coding'), 'I-4.1')).toMatch(/planning budget remaining [+−][\d.]+ GiB \(budget [\d.]+ GiB − reserve 1\.00 GiB − peak [\d.]+ GiB; in use at planning [\d.]+ GiB measured\)/)
+    expect(text(panel(eight(), 'coding'), 'I-4.1')).toMatch(/planning budget remaining [+−][\d.]+ GiB \(budget [\d.]+ GiB − reserve 1\.00 GiB − peak [\d.]+ GiB; per-process budget [\d.]+ GiB estimated — no measured budget on this machine yet; assuming 80 % of the adapter total \(some GPUs\/backends allow 100 %\); not applied to planning; in use at planning [\d.]+ GiB measured\)/)
+    // a measured per-process budget tighter than the adapter budget becomes the basis and is named
+    const tight = eight().map((c) => ({ ...c, config: { ...c.config, planning: { ...c.config.planning!, effectiveBudget: { value: 11.6 * GiB, kind: 'measured' as const, source: 'test' } } } }))
+    expect(text(panel(tight, 'coding'), 'I-4.1')).toMatch(/planning budget remaining [+−][\d.]+ GiB \(effective per-process budget 11\.60 GiB \(measured on this GPU\/driver\/backend\) − peak [\d.]+ GiB; adapter budget [\d.]+ GiB − reserve 1\.00 GiB is looser;/)
     const bare = panel(full8(), 'coding').find((i) => i.ruleId === 'I-4.1')!
     expect(bare).toMatchObject({ evaluable: false })
     expect(bare.text).toMatch(/per-PID vs adapter total; planning budget not recorded — headroom not evaluable/)
@@ -240,7 +243,7 @@ describe('§4 memory', () => {
   })
   it('I-4.5 saturation only with ≥ 3 plateau samples before the spill; not with one', () => {
     const c = withQuality(inputs(f14)).map((x) => ({ ...x, runs: x.runs.map((r) => (r.ctx === 32768 ? { ...r, peakVramPlateauSamples: 4, peakVramPlateauVersion: 'pre-spill-1' } : r)) }))
-    expect(text(panel(c, 'reasoning'), 'I-4.5')).toMatch(/spill began at ≈83 % dedicated VRAM \(4 samples at the plateau, this run\)/)
+    expect(text(panel(c, 'reasoning'), 'I-4.5')).toMatch(/per-process budget ≈ [\d.]+ GiB on this GPU\/driver\/backend for this allocation \(measured: spill began there, ≈83 % of the adapter total, 4 plateau samples, this run\) — specific to GPU, driver, backend and allocation pattern, not a fixed share of the card\./)
     expect(has(panel(withQuality(inputs(f14)), 'reasoning'), 'I-4.5')).toBe(false)
   })
 })

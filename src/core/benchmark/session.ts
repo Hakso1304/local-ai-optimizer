@@ -2,7 +2,7 @@
 // telemetry → quality once per model → recommend. One plain async function; every failure becomes data.
 import type { SessionEvent, SessionEventBody, SessionRequest } from '../../shared/bench-events'
 import type {
-  BenchmarkRunResult, CandidateConfig, CandidateInput, FailureKind, GenConfig, GenQuality, Metric, ModelMeta, QualityResult, Recommendation, RunStatus
+  BenchmarkRunResult, CandidateConfig, CandidateInput, FailureKind, GenConfig, GenQuality, Metric, ModelMeta, QualityResult, Recommendation, RunStatus, VramBudgetObservation
 } from '../../shared/bench-types'
 import type { SystemProfile } from '../../shared/types'
 import type { ExitInfo } from '../runtimes/llamacpp'
@@ -13,7 +13,7 @@ import { buildQualityPrompts, evaluateAsync, needlePrompt, suiteFor, type Qualit
 import { detectCliffs, fmtCtx, isUsable, val } from '../scoring/cliff'
 import { recommend } from '../scoring/recommend'
 import { DEFAULT_SCORING_CONFIG, effectiveProfile, withProfile } from '../scoring/workloads'
-import { DEFAULT_CANDIDATE_RULES, estimateMemory, generateCandidates, machineFromProfile, rulesForRequest, type CandidateRules } from './candidates'
+import { DEFAULT_CANDIDATE_RULES, budgetFor, estimateMemory, generateCandidates, machineFromProfile, vramBudgetKey, rulesForRequest, type CandidateRules } from './candidates'
 import { CHARACTER_PROMPT_VERSION, LADDER_FILL, LADDER_FILL_TOLERANCE, LADDER_PREDICT, LADDER_SIZE_ROUNDS, PROMPT_VERSION, ladderPrompt } from './prompts'
 import { RULES_VERSION, type InterpretData, type StoredRun } from '../interpret'
 import { BASELINE_GEN, genConfigsFor, genLabel, samplingFor, splitReasoning, summarizeGen, templateKwargsFor, type GenRow } from './gen'
@@ -77,6 +77,9 @@ export interface SessionStorage {
   listQuality(sessionId: string, modelId: string): Awaitable<QualityResult[]>
   saveQuality(sessionId: string, modelId: string, configId: string, ctx: number, results: QualityResult[]): Awaitable<void>
   saveRecommendation(sessionId: string, rec: Recommendation): Awaitable<void>
+  /** Per-process VRAM ceilings observed for this GPU/driver/backend key (I-4.1 effective budget); optional. */
+  listVramBudget?(key: string): Awaitable<VramBudgetObservation[]>
+  saveVramBudgetObservation?(key: string, o: VramBudgetObservation): Awaitable<void>
 }
 
 export const DEFAULT_SESSION_CONFIG = {
@@ -187,8 +190,30 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   // the same resolved object, and the v2 seed is persisted with the request so resume reproduces it.
   const suiteSeed = req.qualitySeed ?? (Math.floor(clock.now()) >>> 0)
   const suite = suiteFor(req.qualityMode, suiteSeed)
-  const machine = machineFromProfile(deps.machine, deps.gpuDevice)
+  // Effective per-process budget: learned per GPU + driver + backend build (never generalised across them).
+  const budgetKey = vramBudgetKey(deps.machine, deps.backendKind ?? 'vulkan', deps.runtimeVersion)
+  const machine = machineFromProfile(deps.machine, deps.gpuDevice, undefined, budgetKey ? [...((await storage.listVramBudget?.(budgetKey)) ?? [])] : [])
   const vramTotal = val(machine.vramBytes, true)
+  /** Per-PID shared − host-pinned − the config's unsaturated baseline (not the saturation-gated spill metric). */
+  const residentShared = (r: BenchmarkRunResult, base: number): number | null => {
+    const raw = val(r.peakSharedGpuRawBytes)
+    return raw === null ? val(r.peakSharedGpuBytes) : raw - (val(r.hostPinnedBytes) ?? 0) - base
+  }
+  /** Device buffers the runtime declared at load (MiB per device; CPU entries excluded). */
+  const buffersOf = (d: RunDetail) => {
+    const dev = (x: Record<string, number> | undefined) => Object.entries(x ?? {}).filter(([k]) => !/^cpu/i.test(k)).map(([, v]) => v * 1024 ** 2)
+    const dl = d.load?.declared
+    const all = dl ? [...dev(dl.modelBufferMiB), ...dev(dl.kvBufferMiB), ...dev(dl.computeBufferMiB)] : []
+    const kv = dl ? dev(dl.kvBufferMiB) : []
+    return { largestBytes: all.length ? Math.max(...all) : null, kvBytes: kv.length ? kv.reduce((a, b) => a + b, 0) : null }
+  }
+  /** I-2.8: dedicated room the process still had — per-process budget (at this allocation's largest buffer) minus
+   *  its dedicated peak, capped by adapter-wide free VRAM in the same window when that was read. */
+  const freeWithinBudget = (r: BenchmarkRunResult, d: RunDetail): number | null => {
+    const budget = val(budgetFor(machine, buffersOf(d).largestBytes), true), ded = val(r.peakVramBytes), adapterFree = val(r.adapterFreeAtSharedPeakBytes)
+    if (budget === null || ded === null) return null
+    return adapterFree === null ? budget - ded : Math.min(budget - ded, adapterFree)
+  }
   // L1: the saturation share for spill is taken against what this process could get — VRAM total minus what other
   // processes held at planning (measured), not the adapter total.
   const vramEffective = vramTotal === null ? null : vramTotal - (val(machine.vramInUseBytes) ?? 0)
@@ -376,8 +401,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
           // I-2.8: a spill while ≥ 1 GiB dedicated was free in the same window is driver placement, not capacity —
           // restart the server once and re-measure the rung before recording a spill verdict (both rows persisted).
           // Per-PID shared − pinned − baseline, not the saturation-gated spill (that is 0 below 80 % — exactly this case).
-          const free = val(out.run.adapterFreeAtSharedPeakBytes), rawSh = val(out.run.peakSharedGpuRawBytes)
-          const sh0 = rawSh === null ? val(out.run.peakSharedGpuBytes) : rawSh - (val(out.run.hostPinnedBytes) ?? 0) - spillBase
+          const sh0 = residentShared(out.run, spillBase), free = freeWithinBudget(out.run, out.detail)
           if (isUsable(out.run) && sh0 !== null && sh0 > DEFAULT_SCORING_CONFIG.cliff.sharedSpillBytes && free !== null && free >= cfg.placementFreeBytes && !signal?.aborted) {
             await storage.saveRun(sessionId, out.run, out.detail)
             recordAttempt(out.run, out.detail)
@@ -393,6 +417,16 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
           run = out.run
           await storage.saveRun(sessionId, run, out.detail)
           recordAttempt(run, out.detail)
+          // A spill that survived the placement retry (or had no free budget) is a capacity observation.
+          const shN = residentShared(run, spillBase), dedN = val(run.peakVramBytes)
+          if (budgetKey && shN !== null && shN > DEFAULT_SCORING_CONFIG.cliff.sharedSpillBytes && dedN !== null) {
+            const b = buffersOf(out.detail)
+            const o: VramBudgetObservation = { ceilingBytes: dedN, modelId: model.id, ctx, kvType: cand.kvType, kvBytes: b.kvBytes, largestBufferBytes: b.largestBytes, observedAt: clock.now() }
+            machine.vramBudgetObservations = [...(machine.vramBudgetObservations ?? []), o]
+            machine.vramEffectiveBudgetBytes = budgetFor(machine, null)
+            try { await storage.saveVramBudgetObservation?.(budgetKey, o) } catch (e) { log('warn', `VRAM budget observation not saved: ${(e as Error).message}`) }
+            log('info', `${cand.id} @${ctx}: per-process VRAM ceiling observed at ${(dedN / GiB).toFixed(2)} GiB dedicated (largest buffer ${b.largestBytes === null ? '?' : (b.largestBytes / GiB).toFixed(2) + ' GiB'})`)
+          }
           if (run.failureKind === 'device_lost') gpuLost = true
           if (out.detail.reason) log(run.status === 'pass' ? 'warn' : 'error', `${cand.id} @${ctx}: ${out.detail.reason}`)
         }

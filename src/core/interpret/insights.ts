@@ -134,19 +134,26 @@ export function interpret(v: Verdicts): Insight[] {
           [num('peakSharedGpuBytes', spill.to, 'measured', spill.toCtx, id(c), { algorithm: 'adjusted-spill' })], { configId: id(c), action: act })
       }
     }
-    // I-2.8 placement spill: shared residency with free dedicated VRAM in the same window (else not evaluable)
+    // I-2.8 placement spill: shared residency while the process was below its own per-process budget (capped by
+    // adapter-wide free VRAM when read). Spill AT the budget is a capacity limit. No budget or no peak → not evaluable.
     // resident shared = per-PID shared − host-pinned (the saturation-gated spill is 0 exactly when dedicated was free)
     const resident = (x: { peakSharedGpuRawBytes?: Metric; peakSharedGpuBytes: Metric }, pin: number) => { const raw = x.peakSharedGpuRawBytes ? val(x.peakSharedGpuRawBytes) : null; return raw === null ? val(x.peakSharedGpuBytes) : Math.max(0, raw - pin) }
+    const budget = c.input.config.planning?.effectiveBudget ?? machine.vramEffectiveBudgetBytes
+    const bud = budget ? val(budget, true) : null
+    const room = (x: { peakVramBytes: Metric; adapterFreeAtSharedPeakBytes?: Metric }) => {
+      const ded = val(x.peakVramBytes), af = x.adapterFreeAtSharedPeakBytes ? val(x.adapterFreeAtSharedPeakBytes) : null
+      return bud === null || ded === null ? null : af === null ? bud - ded : Math.min(bud - ded, af)
+    }
     for (const r of c.input.runs) {
       const pin = val(r.hostPinnedBytes) ?? 0
-      const sh = resident(r, pin), fr = val(r.adapterFreeAtSharedPeakBytes)
-      const first = r.placementFirst, fsh = first ? resident(first, pin) : null, ffr = first ? val(first.adapterFreeAtSharedPeakBytes) : null
+      const sh = resident(r, pin), fr = room(r)
+      const first = r.placementFirst, fsh = first ? resident(first, pin) : null, ffr = first ? room(first) : null
       const obs = sh !== null && sh > v.cfg.cliff.sharedSpillBytes && fr !== null && fr >= P('ctx.placement-spill', 'freeBytes') ? { sh, fr, retried: false }
         : fsh !== null && fsh > v.cfg.cliff.sharedSpillBytes && ffr !== null && ffr >= P('ctx.placement-spill', 'freeBytes') ? { sh: fsh, fr: ffr, retried: true } : null
       if (!obs) continue
       const retry = obs.retried ? `; after a fresh restart the rung measured ${sh === null ? 'no shared reading' : `${gib(sh)} shared`} (decode ${val(r.decodeTps, true) === null ? '?' : t1(val(r.decodeTps, true)!)} vs ${val(first!.decodeTps, true) === null ? '?' : t1(val(first!.decodeTps, true)!)} t/s before)` : r.placementRetry ? '' : ' — not yet re-measured'
-      add('ctx.placement-spill', { config: id(c), ctx: fmtCtx(r.ctx), shared: gib(obs.sh), free: gib(obs.fr), retry },
-        [ev('peakSharedGpuRawBytes', (obs.retried ? first!.peakSharedGpuRawBytes : r.peakSharedGpuRawBytes) ?? (obs.retried ? first!.peakSharedGpuBytes : r.peakSharedGpuBytes), r.ctx, id(c)), ev('adapterFreeAtSharedPeakBytes', obs.retried ? first!.adapterFreeAtSharedPeakBytes : r.adapterFreeAtSharedPeakBytes, r.ctx, id(c))],
+      add('ctx.placement-spill', { config: id(c), ctx: fmtCtx(r.ctx), shared: gib(obs.sh), free: gib(obs.fr), budget: gib(bud!), basis: budget!.kind, retry },
+        [ev('peakSharedGpuRawBytes', (obs.retried ? first!.peakSharedGpuRawBytes : r.peakSharedGpuRawBytes) ?? (obs.retried ? first!.peakSharedGpuBytes : r.peakSharedGpuBytes), r.ctx, id(c)), ev('peakVramBytes', obs.retried ? first!.peakVramBytes : r.peakVramBytes, r.ctx, id(c)), ev('vramEffectiveBudgetBytes', budget!)],
         { configId: id(c), action: obs.retried && (sh === null || sh <= v.cfg.cliff.sharedSpillBytes) ? null : action('restart-runtime'), severity: obs.retried && (sh === null || sh <= v.cfg.cliff.sharedSpillBytes) ? 'note' : 'warn' })
     }
     // I-2.6 recovered dip; disclose skipped rungs between
@@ -305,10 +312,18 @@ export function interpret(v: Verdicts): Insight[] {
     const plan = lead.input.config.planning
     if (rc && lead.input.config.gpuLayers > 0) {
       if (peak !== null && plan?.planningVramBudgetBytes != null) {
-        const remaining = plan.planningVramBudgetBytes - plan.planningReserveBytes - peak
+        // Budget = min(total − in use − reserve, the effective per-process budget) — the tighter one is named.
+        const eff = plan.effectiveBudget ? val(plan.effectiveBudget, true) : null
+        const adapterLeft = plan.planningVramBudgetBytes - plan.planningReserveBytes
+        // Only a measured per-process budget is a planning basis (the estimated fallback is disclosed, not applied).
+        const measuredEff = eff !== null && plan.effectiveBudget!.kind === 'measured'
+        const perProcess = measuredEff && eff! < adapterLeft
+        const remaining = (perProcess ? eff! : adapterLeft) - peak
         const low = remaining < P('mem.budget-basis', 'warnBytes')
-        push('mem.budget-basis', tag('mem.budget-basis', `${id(lead)} at ${fmtCtx(rc.ctx)}: planning budget remaining ${sgib(remaining)} (budget ${gib(plan.planningVramBudgetBytes)} − reserve ${gib(plan.planningReserveBytes)} − peak ${gib(peak)}; in use at planning ${val(plan.vramInUse) === null ? `unavailable (${plan.vramInUse.reason ?? 'not measured'})` : `${gib(val(plan.vramInUse)!)} ${plan.vramInUse.kind}${plan.vramInUse.kind === 'estimated' ? ' — an assumed default, not a reading' : ''}`})${low ? ' — less room for other apps, spill risk increases' : ''}`),
-          [ev('peakVramBytes', rc.peakVramBytes, rc.ctx, id(lead)), num('planningVramBudgetBytes', plan.planningVramBudgetBytes, 'measured'), num('planningReserveBytes', plan.planningReserveBytes, 'declared'), ev('vramInUseBytes', plan.vramInUse)],
+        const effText = eff === null ? '' : measuredEff ? `effective per-process budget ${gib(eff)} (measured on this GPU/driver/backend)`
+          : `per-process budget ${gib(eff)} estimated — ${plan.effectiveBudget!.source}; not applied to planning`
+        push('mem.budget-basis', tag('mem.budget-basis', `${id(lead)} at ${fmtCtx(rc.ctx)}: planning budget remaining ${sgib(remaining)} (${perProcess ? `${effText} − peak ${gib(peak)}; adapter budget ${gib(plan.planningVramBudgetBytes)} − reserve ${gib(plan.planningReserveBytes)} is looser` : `budget ${gib(plan.planningVramBudgetBytes)} − reserve ${gib(plan.planningReserveBytes)} − peak ${gib(peak)}${effText ? `; ${effText}${measuredEff ? ' is looser' : ''}` : ''}`}; in use at planning ${val(plan.vramInUse) === null ? `unavailable (${plan.vramInUse.reason ?? 'not measured'})` : `${gib(val(plan.vramInUse)!)} ${plan.vramInUse.kind}${plan.vramInUse.kind === 'estimated' ? ' — an assumed default, not a reading' : ''}`})${low ? ' — less room for other apps, spill risk increases' : ''}`),
+          [ev('peakVramBytes', rc.peakVramBytes, rc.ctx, id(lead)), num('planningVramBudgetBytes', plan.planningVramBudgetBytes, 'measured'), num('planningReserveBytes', plan.planningReserveBytes, 'declared'), ev('vramInUseBytes', plan.vramInUse), ...(plan.effectiveBudget ? [ev('vramEffectiveBudgetBytes', plan.effectiveBudget)] : [])],
           { configId: id(lead), severity: low ? 'warn' : 'info', action: low && lead.coverage.largestCleanTested ? action('use-context', fmtCtx(lead.coverage.largestCleanTested)) : null })
       } else if (peak !== null && val(machine.vramBytes, true) !== null) {
         push('mem.budget-basis', tag('mem.budget-basis', `${id(lead)} at ${fmtCtx(rc.ctx)}: per-PID dedicated ${gib(peak)} of the adapter total ${gib(val(machine.vramBytes, true)!)} (basis: per-PID vs adapter total; planning budget not recorded — headroom not evaluable)`),
@@ -348,7 +363,7 @@ export function interpret(v: Verdicts): Insight[] {
     const at = sp && c.input.runs.find((r) => r.ctx === sp.ctx)
     const total = val(machine.vramBytes, true), ded = at ? val(at.peakVramBytes) : null
     if (at && total && ded !== null && at.peakVramPlateauVersion === 'pre-spill-1' && (at.peakVramPlateauSamples ?? 0) >= P('mem.saturation-observed', 'minSamples')) {
-      add('mem.saturation-observed', { config: cid, pct: Math.round((ded / total) * 100), samples: at.peakVramPlateauSamples }, [ev('peakVramBytes', at.peakVramBytes, sp!.ctx, cid, { samples: at.peakVramPlateauSamples })], { configId: cid })
+      add('mem.saturation-observed', { config: cid, ded: gib(ded), pct: Math.round((ded / total) * 100), samples: at.peakVramPlateauSamples }, [ev('peakVramBytes', at.peakVramBytes, sp!.ctx, cid, { samples: at.peakVramPlateauSamples })], { configId: cid })
     }
   }
 

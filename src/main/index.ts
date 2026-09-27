@@ -8,13 +8,13 @@ import { detectRuntimes } from '../core/runtimes'
 import { LlamaCppBackend, killStaleServer } from '../core/runtimes/llamacpp'
 import { pickDiscreteDevice } from '../core/runtimes/llamacpp/parse'
 import { openDb } from '../core/storage/db'
-import { sessionInputs, getSession, getSessionResume, latestRecommendation, listSessions, makeSessionStorage, markInterrupted, seedDemoSession, telemetryForRun, type PlanFor } from '../core/storage/sessions'
+import { sessionInputs, getSession, getSessionResume, latestRecommendation, listSessions, listVramBudget, makeSessionStorage, markInterrupted, seedDemoSession, telemetryForRun, type PlanFor } from '../core/storage/sessions'
 import { REQUIRED_CTX, insideSomeRoot, isWorkloadId, rowId, sanitizeRequest } from './validate'
 import { registerHubIpc } from './hub'
 import { WORKLOADS } from '../core/scoring/workloads'
 import { val } from '../core/scoring/cliff'
 import { runSession, type SessionStorage } from '../core/benchmark/session'
-import { generateCandidates, machineFromProfile, rulesForRequest } from '../core/benchmark/candidates'
+import { generateCandidates, machineFromProfile, rulesForRequest, vramBudgetKey } from '../core/benchmark/candidates'
 import { findGgufModels, toModelMeta } from '../core/models/gguf'
 import { fetchGenerationConfig, readSidecar, writeSidecar } from '../core/hub/modelcard'
 import { defaultLmStudioDirs, defaultOllamaRoot, listOllamaModels, toModelInfo as toOllamaModelInfo } from '../core/runtimes/ollama/models'
@@ -137,7 +137,8 @@ ipcMain.handle('models:fit', async (_e, w: WorkloadId): Promise<ModelFit> => {
   const devices = await llama.listDevices().catch(() => null)
   if (!devices) return { reasons: Object.fromEntries(infos.map((m) => [m.id, 'llama.cpp runtime not installed (System page)'])), vramInUseBytes: null, vramTotalBytes: null }
   const device = pickDiscreteDevice(devices)?.id ?? null
-  const machine = machineFromProfile(await withVramInUse(profileCache), device)
+  const bk = vramBudgetKey(profileCache, device ? 'vulkan' : 'cpu', (await llama.detect()).version)
+  const machine = machineFromProfile(await withVramInUse(profileCache), device, undefined, bk ? listVramBudget(needDb(), bk) : [])
   const vramInUseBytes = machine.vramInUseBytes.kind === 'measured' ? machine.vramInUseBytes.value : null
   const out: Record<string, string | null> = {}
   for (const info of infos) {
@@ -289,7 +290,9 @@ async function startSession(req: SessionRequest, storedMachine?: SystemProfile, 
     // Same deterministic candidate generation the runner does (rulesForRequest keeps heavyMode), so stored sessions
     // carry full configs.
     const planFor: PlanFor = (r) => {
-      const machine = machineFromProfile(profile, device)
+      // Same per-process budget observations the runner reads (key: GPU + driver + backend build).
+      const bk = vramBudgetKey(profile, backendKind, runtime.version)
+      const machine = machineFromProfile(profile, device, undefined, bk ? listVramBudget(needDb(), bk) : [])
       return {
         machine: profile,
         vramBytes: val(machine.vramBytes, true),
