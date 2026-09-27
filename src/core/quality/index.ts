@@ -1,4 +1,4 @@
-import { runChecker, type CheckerSpec } from './checkers'
+import { runChecker, runCheckerAsync, type CheckerSpec } from './checkers'
 import suiteV1 from './tests.v1.json'
 
 export type QualityCategory = 'instruction' | 'reasoning' | 'coding' | 'structured' | 'extraction' | 'context'
@@ -105,9 +105,16 @@ export function buildQualityPrompts(set: QualityTestSet = defaultTestSet, opts: 
   })
 }
 
-/** Check one model output (message.content, not reasoning_content). Never throws on model output. */
+/** Check one model output (message.content, not reasoning_content). Never throws on model output.
+ *  Sync: jsCode runs in-process (CPU-timeout safe, NOT memory safe) — use evaluateAsync for real model output. */
 export function evaluate(test: QualityTest, output: string): QualityResult {
   const r = runChecker(test.checker, output ?? '')
+  return { testId: test.id, category: test.category, weight: test.weight, ...r }
+}
+
+/** Production path: jsCode tests run in a memory-capped child process (sandbox.ts). */
+export async function evaluateAsync(test: QualityTest, output: string): Promise<QualityResult> {
+  const r = await runCheckerAsync(test.checker, output ?? '')
   return { testId: test.id, category: test.category, weight: test.weight, ...r }
 }
 

@@ -1,4 +1,5 @@
 import vm from 'node:vm'
+import { runSandboxed } from './sandbox'
 
 // Deterministic output checkers. Every checker takes the raw model message content and returns
 // {pass, score 0..1, detail}; none of them throws on model output.
@@ -155,37 +156,24 @@ export function extractCode(output: string): string {
     .replace(/^\s*export\s+(?=(async\s+)?(function|const|let|var|class)\b)/gm, '')
 }
 
-/**
- * Run model code in a fresh V8 context and evaluate each case expression after it.
- * Isolation: DONT_CONTEXTIFY context (no host objects inside, so no `this.constructor.constructor`
- * escape), string code generation disabled (no eval/new Function), no require/process/fetch/timers,
- * sync timeout covers microtasks. Only a primitive string crosses back to the host.
- * ponytail: vm does NOT cap memory — a `new Array(1e9)` bomb can OOM the caller. Run evaluate() in a
- * worker_threads Worker with resourceLimits (or the DESIGN §4 child-process harness) in the app.
- */
-export function jsCode(output: string, cases: { expr: string; expected: unknown }[], timeoutMs = 2000): CheckResult {
-  const code = extractCode(output)
+type JsCase = { expr: string; expected: unknown }
+
+/** Model code + one probe per case; evaluates to a JSON string array (one JSON.stringify per case). */
+function harnessScript(output: string, cases: JsCase[]): string {
   const probes = cases
     .map((c) => `try{__r.push(JSON.stringify(${c.expr}))}catch(e){__r.push("!"+String(e&&e.message))}`)
     .join('\n')
-  const script = `var module={exports:{}},exports=module.exports;\n${code}\n;(function(){var __r=[];\n${probes}\nreturn JSON.stringify(__r)})()`
-  let raw: unknown
-  try {
-    const ctx = vm.createContext(vm.constants.DONT_CONTEXTIFY, {
-      codeGeneration: { strings: false, wasm: false },
-      microtaskMode: 'afterEvaluate'
-    })
-    raw = vm.runInContext(script, ctx, { timeout: timeoutMs })
-  } catch (e) {
-    return res(false, 0, `execution failed: ${String((e as Error)?.message ?? e)}`)
-  }
+  return `var module={exports:{}},exports=module.exports;\n${extractCode(output)}\n;(function(){var __r=[];\n${probes}\nreturn JSON.stringify(__r)})()`
+}
+
+function scoreHarness(raw: unknown, cases: JsCase[]): CheckResult {
   let got: (string | null)[]
   try {
     got = typeof raw === 'string' ? JSON.parse(raw) : []
   } catch {
     got = []
   }
-  if (got.length !== cases.length) return res(false, 0, 'harness result tampered or missing')
+  if (!Array.isArray(got) || got.length !== cases.length) return res(false, 0, 'harness result tampered or missing')
   const fails: string[] = []
   cases.forEach((c, i) => {
     const want = JSON.stringify(c.expected)
@@ -193,6 +181,33 @@ export function jsCode(output: string, cases: { expr: string; expected: unknown 
   })
   const passed = cases.length - fails.length
   return res(fails.length === 0, cases.length ? passed / cases.length : 0, fails.length ? `${passed}/${cases.length}: ${fails.slice(0, 2).join('; ')}` : `${passed}/${cases.length} cases`)
+}
+
+/**
+ * In-process: run model code in a fresh V8 context and evaluate each case expression after it.
+ * Isolation: DONT_CONTEXTIFY context (no host objects inside, so no `this.constructor.constructor`
+ * escape), string code generation disabled (no eval/new Function), no require/process/fetch/timers,
+ * sync timeout covers microtasks. Only a primitive string crosses back to the host.
+ * NOT memory-safe: an allocation bomb aborts the calling process. Real model output → jsCodeAsync.
+ */
+export function jsCode(output: string, cases: JsCase[], timeoutMs = 2000): CheckResult {
+  let raw: unknown
+  try {
+    const ctx = vm.createContext(vm.constants.DONT_CONTEXTIFY, {
+      codeGeneration: { strings: false, wasm: false },
+      microtaskMode: 'afterEvaluate'
+    })
+    raw = vm.runInContext(harnessScript(output, cases), ctx, { timeout: timeoutMs })
+  } catch (e) {
+    return res(false, 0, `execution failed: ${String((e as Error)?.message ?? e)}`)
+  }
+  return scoreHarness(raw, cases)
+}
+
+/** Same checks as jsCode, but in a memory-capped child process (see sandbox.ts). Never throws. */
+export async function jsCodeAsync(output: string, cases: JsCase[], timeoutMs = 2000, memoryMb?: number): Promise<CheckResult> {
+  const o = await runSandboxed(harnessScript(output, cases), { timeoutMs, memoryMb })
+  return o.ok ? scoreHarness(o.raw, cases) : res(false, 0, `execution failed: ${o.error}`)
 }
 
 export function runChecker(spec: CheckerSpec, output: string): CheckResult {
@@ -208,4 +223,9 @@ export function runChecker(spec: CheckerSpec, output: string): CheckResult {
     case 'jsCode': return jsCode(output, spec.cases, spec.timeoutMs)
     default: throw new Error(`unknown checker type ${(spec as { type: string }).type}`)
   }
+}
+
+/** Production path: jsCode goes through the child-process sandbox, everything else is sync. */
+export async function runCheckerAsync(spec: CheckerSpec, output: string): Promise<CheckResult> {
+  return spec.type === 'jsCode' ? jsCodeAsync(output, spec.cases, spec.timeoutMs) : runChecker(spec, output)
 }
