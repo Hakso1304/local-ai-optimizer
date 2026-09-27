@@ -58,11 +58,12 @@ function wrap(b: LlamaCppBackend): SessionBackend {
   return {
     get pid() { return b.pid },
     get lastExit() { return b.lastExit },
-    loadModel: (c) => b.loadModel(c),
+    // Forward every argument: dropping applyTemplate's opts once silently disabled enable_thinking=false.
+    loadModel: (...a: Parameters<LlamaCppBackend['loadModel']>) => b.loadModel(...a),
     unloadModel: () => b.unloadModel(),
-    warmup: (p) => b.warmup(p),
+    warmup: (...a: Parameters<LlamaCppBackend['warmup']>) => b.warmup(...a),
     cancel: () => b.cancel(),
-    applyTemplate: async (m) => (lastTemplated = await b.applyTemplate(m)),
+    applyTemplate: async (...a: Parameters<LlamaCppBackend['applyTemplate']>) => (lastTemplated = await b.applyTemplate(...a)),
     runPrompt: async (req) => {
       const r = await b.runPrompt(req)
       if (lastTemplated !== null && req.prompt === lastTemplated) transcripts.push({ configId: currentConfig, templated: req.prompt.slice(-400), reply: r.text, stopType: r.stopType })
@@ -137,7 +138,7 @@ async function main(): Promise<void> {
   }, (e) => {
     events.push(e)
     if (e.type === 'telemetry') return
-    if (e.type === 'candidate:started') currentConfig = e.configId
+    if (e.type === 'candidate:started' || (e.type === 'phase' && e.phase === 'quality')) currentConfig = e.configId // quality runs after all ladders
     if (scenario === 'B' && e.type === 'step:started' && /Llama-3\.1-8B/i.test(e.configId) && !abortScheduled) {
       abortScheduled = true
       setTimeout(() => { abortAt = Date.now(); console.log(`${el()} >>> ABORT`); ctl.abort() }, 20_000)
