@@ -9,8 +9,8 @@ renderer (React, sandboxed)            main (Electron, Node 24)                 
 ────────────────────────────           ────────────────────────────                 ──────────────────────────────
 Dashboard / Benchmark / Models   ──►   preload: window.api (contextBridge)   ──►   system/scanner.ts      hardware scan
 Results (ExportMenu, TelemetryChart)   ipcMain.handle(...) in main/index.ts        runtimes/*             llama.cpp, Ollama, LM Studio
-System / HubPage (HF, pending wire)    main/validate.ts (request sanitizing)        hub/hf.ts              Hugging Face client
-                                       main/hub.ts (HF IPC, pending wire)
+System / HubPage (HF download)        main/validate.ts (request sanitizing)        hub/hf.ts              Hugging Face client
+                                       main/hub.ts (HF IPC + op lock)     
 benchState.ts (event fold)      ◄──   'bench:event' channel (sendBenchEvent) ◄──   benchmark/session.ts   session runner
                                        settings.json (userData)                     benchmark/candidates.ts  config generation
                                        optimizer.db (node:sqlite, userData)         telemetry/sampler.ts   typeperf sampler
@@ -44,7 +44,7 @@ shared/ (types only): types.ts (scan, IPC API, stored payloads), bench-types.ts 
 Each `ModelInfo` carries `meta` (GGUF header, streamed in 1 MiB windows, including per-layer KV / hybrid / SWA layout keys since a456679) or `metaError`. `models:fit` tells the UI which models need heavy mode.
 
 **Benchmark (live).** The renderer calls `startBench(SessionRequest)`, which goes to `bench:start` → `startSession` (`main/index.ts`):
-1. Only one session or smoke run at a time. `sanitizeRequest` (`main/validate.ts`) whitelists fields, clamps reps and the ladder, and checks that model paths are inside a model root (`isInside`, resolve-based).
+1. One app instance (`requestSingleInstanceLock`, taken before any DB/pid cleanup; a second instance focuses the first and exits). Only one session or smoke run at a time, and none while a runtime install holds its lock. `sanitizeRequest` (`main/validate.ts`) whitelists fields, clamps reps and the ladder, and checks that model paths are inside a model root (`isInside`, resolve-based).
 2. The system scan is cached per app run.
 3. `findGgufModels` + `toModelMeta`, then `listDevices()` → `pickDiscreteDevice`, and `detect()` for the runtime version.
 4. `runSession(req, {backend: () => llama, startSampler: (pid) => startSampler({pid}), storage: makeSessionStorage(db, planFor), readRamAvailableBytes: os.freemem, evaluate: evaluateAsync, runtimeVersion, signal}, sendBenchEvent)`.
@@ -59,11 +59,14 @@ Events go to every window on `bench:event`, and the renderer folds them in `benc
 - **Export** (wired in e31dc64): `ExportMenu.tsx` uses `core/export/config.ts`. It offers the llama-server command (mirrors the measured launch exactly), an Ollama Modelfile, LM Studio settings (unverified keys), JSON and the provenance note, saved via `file:save`.
 - **Per-run telemetry:** `telemetry:run(runId)` → `TelemetryChart.tsx`, showing GPU/CPU % and per-PID VRAM/shared/private GiB over time, with gaps for null readings.
 
-**Hugging Face download** (`core/hub/hf.ts`, `main/hub.ts`, `preload/hub.ts`, `HubPage.tsx`): **pending wiring by #2** (three insertions).
+**Hugging Face download** (`core/hub/hf.ts`, `main/hub.ts`, `preload/hub.ts`, `HubPage.tsx`, wired in fa491b0):
 - Channels: `hub:whoami/login/logout/openTokenPage/dirs/search/files/download/cancel` and the `hub:progress` event.
-- The token is stored encrypted with safeStorage (`userData/hf-token.bin`). The token page opens in a sandboxed window with its own `persist:huggingface` partition.
+- The token is stored encrypted with safeStorage (`userData/hf-token.bin`). The token page opens in a sandboxed window with its own `persist:huggingface` partition. Logout invalidates an in-flight login; whoami times out after 15 s.
+- The token is sent only to an exact origin allowlist (`tokenAllowed`), checked on every page and redirect hop; redirects are followed by hand, and CDN URLs get no token.
+- Downloads: per-segment path checks (`safeSegment`: ADS, device names, trailing dot/space), a `<part>.json` identity sidecar for resume, the 206 Content-Range must start at the offset, and the stream runs through `stream.pipeline` (disk errors → `disk_error`, bytes past the expected size stop it). Links/junctions on the way to the `.part` are refused (check-then-open); main checks destDir by the realpath of its nearest existing ancestor.
+- One download at a time: the op and its AbortController are claimed synchronously. HubPage keys a transfer by {repoId, path, destDir}, so Resume and progress never follow the repo being browsed.
 
-**IPC channels** (main/index.ts): `system:scan`, `runtimes:detect`, `runtime:install`, `models:list`, `models:fit`, `settings:get`, `settings:setWorkload`, `workloads:list`, `sessions:list`, `sessions:get`, `recommendation:latest`, `telemetry:run`, `file:save`, `bench:start|pause|cancel|resume|smoke`; events `bench:event`, `runtime:progress`.
+**IPC channels** (main/index.ts): `system:scan`, `runtimes:detect`, `runtime:install`, `models:list`, `models:fit`, `settings:get`, `settings:setWorkload`, `workloads:list`, `sessions:list`, `sessions:get`, `recommendation:latest`, `telemetry:run`, `file:save`, `bench:start|pause|cancel|resume|smoke`, plus the `hub:*` channels above; events `bench:event`, `runtime:progress`, `hub:progress`. Ids are checked as positive safe integers and workload ids with `Object.hasOwn`. The renderer ignores late replies and events of a previous session (the watched id is adopted only on `session:started`).
 
 **Smoke.** `bench:smoke` runs one tiny real request: ctx 2048, 32 tokens, one warmup, on the discrete Vulkan device chosen by `pickDiscreteDevice(listDevices())`.
 
@@ -85,7 +88,7 @@ interface InferenceBackend {
 - `runPrompt` streams `POST /completion` with `cache_prompt:false`. TTFT is client wall clock to the first content chunk; prefill and decode TPS come from the final `timings`. The request's own timeout aborts it.
 - `applyTemplate(messages)` calls `POST /apply-template`, so the chat-format quality prompts can use `runPrompt`.
 - The exit is recorded from the process `close` event: `lastExit = {code, reason: classifyExit(tail), tail}`, where reason is `oom` (allocation failure patterns), `device_lost` or `crash`.
-- `unloadModel` sends `kill()`, escalates to `taskkill /T /F` after 5 s, and throws if the process is still alive. The pid is persisted to `userData/llama-server.pid`. On startup, `killStaleServer` kills a leftover server, but only if that pid is still `llama-server.exe`. `before-quit` and `exit` call `killSync()`.
+- `unloadModel` sends `kill()`, escalates to `taskkill /T /F` after 5 s, and keeps the handle and pid file until the exit is confirmed; if the process is still alive it throws `ServerStuckError` (`.fatal`), which the runner treats as a hard stop. The pid is persisted to `userData/llama-server.pid`. On startup, `killStaleServer` kills a leftover server, but only if that pid is still `llama-server.exe`. `before-quit` and `exit` call `killSync()`.
 - **Ollama / LM Studio** (`runtimes/others.ts`) implement `detect()` only: an HTTP probe with a 1.5 s timeout plus a model-dir hint. Every other method throws `NotImplementedError`.
 
 ### Adding a backend
@@ -126,10 +129,10 @@ Flow:
    - If the GPU was lost earlier in the session, a GPU candidate is skipped.
    - For each ctx in `cand.ctxSteps` (2K…128K ∩ declared ctx ∩ VRAM estimate, ∩ `req.ladder`): a step already stored for this session is reused. Otherwise `runStep`:
      - Unload the previous step's server (and wait for exit), then the live RAM pre-check: resident estimate > available − floor → `fail/skipped_memory` without loading.
-     - `loadModel` with `-c ctx`, `-ngl 999|n`, `--device`, `-t`, `-b 2048`, `-ub 512`, `-fa on`, plus `-ctk/-ctv q8_0` for q8 candidates. The KV cache is allocated at load, so each step restarts the server.
+     - `loadModel` (with the session `signal`, so a cancel kills a loading server at once) with `-c ctx`, `-ngl 999|n`, `--device`, `-t`, `-b 2048`, `-ub 512`, `-fa on`, plus `-ctk/-ctv q8_0` for q8 candidates. The KV cache is allocated at load, so each step restarts the server.
        - A 50 ms poll starts the sampler once `backend.pid` changes, so typeperf's ~2 s start-up overlaps the load.
        - Load errors map to failure kinds: `ConfigDriftError` (`/props` n_ctx ≠ requested) → `config_drift`; exit reasons → `oom|device_lost|crash`; "healthy within" → `load_timeout`; otherwise `load_fail`.
-     - A 1 s guard timer emits `telemetry` and trips `guard_abort` (calling `backend.cancel()`) if RAM available < floor or per-PID shared GPU memory > 2 GiB.
+     - A guard timer (1 s; 250 ms for heavy configs), running from the start of load, emits `telemetry` and trips `guard_abort` (kill during load, else `backend.cancel()`) if RAM available + mmap credit < floor or per-PID shared GPU memory > 2 GiB (heavy configs: spill recorded, next config). RAM is read from the OS on every poll, independent of typeperf; 3 polls with no reading at all trip it too (fail-safe).
        - The request error that this cancel causes is attributed to the guard: the guard reason wins over "cancelled".
      - One size-matched warmup (sets `warm`), then `reps` measured prompts (median). Each rep emits `token-rate`.
      - If there are 0 samples after the reps, the runner waits for one real row until `firstSampleWaitMs` (3 s) after sampler start, then stops the sampler.
@@ -139,11 +142,12 @@ Flow:
    - Stop the ladder on the first FAIL verdict or after 2 consecutive DEGRADED steps.
    - `unloadModel` → `candidate:done {status: done|failed|cancelled|paused|skipped, reason}`.
 4. Quality runs after all ladders, once per model, on its **best-offload** usable candidate: most GPU layers, then fastest decode. It is never run on a CPU/-nkvo probe. The ctx is `min(targetContext, practical ceiling)`.
+   - The load goes through `guardedLoad` (unload, RAM pre-check, abortable load, RAM guard), checked between prompts; a trip discards the suite.
    - Thinking models (`supportsThinking`) run with `enable_thinking=false`.
-   - Skipped when `runQuality === false`; reused on resume via `listQuality`.
+   - Skipped when `runQuality === false`; reused on resume via `listQuality` only when it is the complete current-version suite.
 5. `recommend(inputs, machine, workload)` → `saveRecommendation` → status `done` → `session:done`. A pause at any point → status `paused` → `session:paused`.
    - Resume rules: cancelled and `skipped_memory` steps always re-run; `retryFailed` re-runs fail/timeout steps (not `config_drift`); `rerunConfigIds` re-runs every step of those configs. Reads keep the last row per (configId, ctx).
-6. Cancel: `signal` abort calls `backend.cancel()`; loops check `signal.aborted`; status `cancelled` → `session:cancelled`, with partial runs already persisted. Any thrown error is caught and becomes `session:failed` + status `failed`, and `finally` always unloads.
+6. Cancel: `signal` abort calls `backend.cancel()`; loops check `signal.aborted`; status `cancelled` → `session:cancelled`, with partial runs already persisted. Any thrown error is caught and becomes `session:failed` + status `failed`, and `finally` unloads — except after a `ServerStuckError`, which stops the session at the next boundary and skips the final unload so the pid file survives for the stale-server kill.
 
 ### SessionStorage (implemented by `makeSessionStorage(db, planFor)` in `storage/sessions.ts`)
 ```ts
@@ -152,7 +156,7 @@ setSessionStatus(id, 'running'|'done'|'cancelled'|'failed', error?)
 listRuns(id): BenchmarkRunResult[]                 // for resume
 saveRun(id, run, {samples, reason, stderrTail, load, startedAt, endedAt})
 listQuality(id, modelId): QualityResult[]
-saveQuality(id, modelId, configId, ctx, results)
+saveQuality(id, modelId, configId, ctx, results)   // one transaction, with suite version + expected count
 saveRecommendation(id, rec)
 ```
 Every method may be sync or async. For the event list see `src/shared/bench-events.ts`: `session:started`, `candidate:started`, `phase`, `step:started`, `step:done`, `telemetry`, `token-rate`, `log`, `candidate:done`, `session:done`, `session:cancelled`, `session:failed`. All events carry `sessionId`.
@@ -164,13 +168,15 @@ Every method may be sync or async. For the event list see `src/shared/bench-even
 | Explicit config | `llamacpp.loadModel` | `-fit off`, explicit `-c`, `-ngl` and `--device`, and `--parallel 1`, so llama-server never silently changes the config. `/props` n_ctx ≠ requested → `ConfigDriftError` (e.g. Qwen2.5 served 32K when 48K was requested). |
 | Discrete device only | `pickDiscreteDevice`, `machineFromProfile` | iGPU names are excluded, and the largest non-integrated GPU supplies the VRAM total. |
 | Memory pre-pruning | `candidates.ts` | RAM est (whole mmap'd file) > available − 4 GiB → step skipped (never kept). VRAM est > total − in-use − 1 GiB → the first such step is kept once if ≤ 1.15× the budget; the rest are skipped. |
-| Live RAM floor | `session.ts` | Before each step: est RAM > live available − max(4 GiB, 8 % RAM) → `skipped_memory`. From the start of load (250 ms poll for heavy configs): sample RAM available + mmap credit < floor → kill (during load) or cancel → `guard_abort`. |
-| Spill abort | `session.ts` | Per-PID shared GPU memory > 2 GiB → cancel, `guard_abort` (the guard reason takes precedence over the resulting "cancelled"). |
-| Telemetry glitches | `sampler.ts` | PDH rows with an impossible percentage (e.g. 1.3e13 % GPU util) are dropped whole, never reported. |
+| Live RAM floor | `session.ts` | Before each step and the quality load: est RAM > live available − max(4 GiB, 8 % RAM) → `skipped_memory`. From the start of load (250 ms poll for heavy configs): OS RAM available (else the telemetry row) + mmap credit < floor → kill (during load) or cancel → `guard_abort`. 3 blind polls → `guard_abort` (fail-safe). |
+| Spill abort | `session.ts` | Per-PID shared GPU memory > 2 GiB → cancel, `guard_abort` (the guard reason takes precedence over the resulting "cancelled"). Heavy configs record it and move on. |
+| Telemetry glitches | `sampler.ts` | Percentages in (100, 1000] are clamped to 100; rows with a negative or > 1000 value (e.g. 1.3e13 % GPU util) are dropped whole, and the drop counts go to `samplerErrors`. |
 | Timeouts | `llamacpp`, `session.ts` | load: 120 s health wait (hardcoded). prompt: 60 s + 10 ms × ctx. quality: 180 s per test. |
-| Process cleanup | `llamacpp` | kill → `taskkill /T /F` → throws if still alive. Pid file + stale-server kill at startup. `killSync` on quit. The runner unloads in `finally`. |
+| Process cleanup | `llamacpp` | kill → `taskkill /T /F` → `ServerStuckError` if still alive (session hard stop). Pid file + stale-server kill at startup. `killSync` on quit. The runner unloads in `finally`. No Job Object. |
+| Single instance / op locks | `main/index.ts`, `main/hub.ts` | `requestSingleInstanceLock` before any cleanup. Benchmark/smoke, runtime install and hub download each claim their lock synchronously. |
+| Hub download | `core/hub/hf.ts` | Token origin allowlist per request/hop, per-segment path checks, link refusal (check-then-open), sidecar identity + Content-Range offset check, size cap, `stream.pipeline` error handling. |
 | Device loss | `session.ts` | `device_lost` fails the step and skips all later GPU candidates in the session. |
-| Model code | `quality/sandbox.ts` | Runs in a child process (`ELECTRON_RUN_AS_NODE`, `--permission`, `--max-old-space-size`, fresh vm context, timeout, 64 KB stdout cap). Not in a worker, because a heap blow-up there aborts the host. |
+| Model code | `quality/sandbox.ts` | Runs in a child process (`ELECTRON_RUN_AS_NODE`, `--permission`, `--max-old-space-size`, fresh vm context, timeout, 64 KB stdout cap). Not in a worker, because a heap blow-up there aborts the host. Strict host code, `Error` frozen in the context, thrown values never read through getters/`toString`. RSS cap: the child checks its arrayBuffers/RSS after the run and the parent polls its working set every 250 ms (kill > 1.5× cap + 48 MiB); a burst shorter than one poll can briefly exceed it (no Job Object). |
 | Demo data isolation | `main/index.ts` | `LAO_SEED_DEMO=1` uses a separate `optimizer-demo.db`, and demo sessions are excluded from `latestRecommendation`. |
 | Request validation | `main/validate.ts` | Renderer requests are sanitized: whitelisted rule keys, reps and ladder clamped, model paths resolved and checked to be inside a root. |
 | Uninstall | `build/installer.nsh` | The NSIS uninstall kills only the llama-server whose pid is in the app's pid file. userData is kept on purpose. |

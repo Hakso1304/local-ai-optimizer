@@ -1,6 +1,7 @@
 # Limitations — Local AI Optimizer (state at 2026-09-27)
 
 This is the single consolidated list, and every item is checked against the code. Each item has one status:
+- **DONE**: a former limitation that is now fixed and tested; kept one release for the record.
 - **DONE-WITH-CAVEAT**: works and is tested, with the stated limit.
 - **PARTIAL**: implemented in core, or only part of it; not complete end to end.
 - **BLOCKED (env)**: cannot be verified on this machine (AMD RX 9070 XT, Windows 11, no NVIDIA/Ollama/LM Studio).
@@ -9,7 +10,7 @@ This is the single consolidated list, and every item is checked against the code
 - **DONE-WITH-CAVEAT: AMD temperature, power and clocks are UNAVAILABLE.** They need the ADLX/ADL native SDK. The app shows "—", never 0 (DESIGN §1.3).
 - **DONE-WITH-CAVEAT: English PDH counter names only.** On localized Windows the typeperf fields report unavailable. The WMI class fallback (DESIGN §1.2) is not implemented (`telemetry/sampler.ts`).
 - **DONE-WITH-CAVEAT: 1 s granularity.** typeperf's minimum is 1 s and its first row takes ~2 s. The sampler starts during load and waits up to 3 s (`firstSampleWaitMs`). Steps with no row at all report telemetry as unavailable, never as a made-up value.
-- **DONE-WITH-CAVEAT: PDH glitch rows are dropped.** Rows with an impossible percentage (1.3e13 % GPU util, and garbage RAM cells) are discarded whole, which can leave a step with fewer or zero samples.
+- **DONE: util overshoot no longer drops rows (H7 root cause).** Heavy steps of 29–62 s had 0 samples with no sampler error: every row with util slightly > 100 % was being discarded as a glitch. Percentages in (100, 1000] are now clamped to 100. Only negative or > 1000 values mark a glitch row (e.g. 1.3e13 % with garbage RAM cells), which is still dropped whole. `stop()` reports "typeperf rows dropped: N misaligned, M impossible" in `RunDetail.samplerErrors`, so an empty step says why.
 - **DONE-WITH-CAVEAT: GPU util is the max over the PID's 3D/Compute engine groups.** It is display-only; scoring and cliff rules don't use it.
 - **DONE-WITH-CAVEAT: per-PID VRAM comes from WDDM counters.** On this GPU the spill starts at ≈83 % dedicated, and other drivers may differ.
 - **BLOCKED (env): NVIDIA telemetry is wired but fixture-tested only.** `withNvidia` merges nvidia-smi temp/power into samples when `probeNvidiaSmi()` works (acbd169). nvidia-smi here fails with "insufficient permissions" (stale driver, exit 4).
@@ -21,7 +22,7 @@ This is the single consolidated list, and every item is checked against the code
 - **BLOCKED (env): the CUDA path is wired but untested on real NVIDIA hardware.** `runtime:install` picks the CUDA build + cudart via `pickReleaseAsset` from the driver's CUDA major, and falls back to Vulkan if `--version` fails (acbd169).
 - **PARTIAL: no ROCm / SYCL / CPU-only build selection.** A CPU-only machine gets ngl=0 candidates on the Vulkan build.
 - **DONE-WITH-CAVEAT: GGUF parsing is header-only.** Split shards and mmproj files are listed as-is, without grouping (`models/gguf.ts`).
-- **DONE-WITH-CAVEAT: loadModel waits a hardcoded 120 s for `/health`**, not configurable per phase. A served n_ctx ≠ requested is reported as `config_drift`.
+- **DONE-WITH-CAVEAT: loadModel waits a hardcoded 120 s for `/health`**, not configurable per phase. A served n_ctx ≠ requested is reported as `config_drift`. Every load (ladder and quality) gets the session signal, so a cancel during load kills the server at once.
 
 ## Benchmark method
 - **DONE-WITH-CAVEAT: calibrated on one GPU (RX 9070 XT 16 GB, WDDM) and two model families.**
@@ -41,6 +42,8 @@ This is the single consolidated list, and every item is checked against the code
 ## Quality
 - **DONE-WITH-CAVEAT: suite `qb-1.1.0` is small and strict.** It has 17 tests in 6 categories, with deterministic checkers and one rep at temperature 0. It is a relative signal, not a leaderboard; with few tests per category, one flaky answer moves Q by 5–33 points.
 - **DONE-WITH-CAVEAT: without a quality run, Q is an ESTIMATED prior** from parameter count and quantization. It is labelled in the breakdown and reasons, and it can decide close calls (e.g. 8B vs 14B for Document Analysis).
+- **DONE: the quality phase is guarded like a ladder step**: previous server unloaded, live RAM pre-check, abortable load, and the RAM-floor guard (with fail-safe) during the suite. A trip discards the suite.
+- **DONE: stored quality is transactional.** One suite is saved in one transaction with its suite version and expected test count. Resume reuses only a complete suite of the current version; anything else re-runs.
 - **DONE-WITH-CAVEAT: thinking models are scored with thinking OFF.** The quality suite passes `enable_thinking=false`, and the reason says so. A model's with-thinking quality is not measured; the ×4 token-boost path exists but is unused.
 - **DONE-WITH-CAVEAT: model-written JS runs in a child-process sandbox** (`--permission`, memory cap, vm context, timeout). Network is blocked by the vm context, not by `--permission`.
   - The sandbox spawns `process.execPath` with `ELECTRON_RUN_AS_NODE=1` (`quality/sandbox.ts`), so it depends on Electron's **RunAsNode fuse** staying enabled (the electron-builder default).
@@ -56,16 +59,26 @@ This is the single consolidated list, and every item is checked against the code
 - **DONE-WITH-CAVEAT: unavailable inputs score a neutral 50.** They are flagged "unknown", never counted as 0 or as a pass.
 - **DONE-WITH-CAVEAT: scoring vs recommended ctx.** Scores are taken at the workload's target ctx, while the recommended `-c` is the largest passing step within the TTFT tolerance. The reasons show both.
 - **DONE-WITH-CAVEAT: partial offload is ineligible** whenever the same model's full offload has a usable step (calibration: −83 % decode; a spilled full offload still beat ngl 30 by 4.7×).
-- **PARTIAL: heavy-model mode** is calibrated on **one real dense model** (Qwen3.8-27B at 55/65 layers: 12–13 t/s decode, no spill). The **MoE** model (Gemma-4-26B-A4B) and the `-nkvo` / CPU-baseline paths are not yet measured.
+- **DONE-WITH-CAVEAT: heavy-model mode** is calibrated on one GPU and two models (RX 9070 XT; runs of 2026-09-27, the Coding run still in progress):
+  - Qwen3.8-27B (dense): 55/65 layers 12–13 t/s at 2K–8K; in the Coding run 54/65 layers decode 12.6 → 10.8 t/s from 2K to 16K with no spill.
+  - Gemma-4-26B-A4B (MoE): 25 layers ≈ 46–50 t/s with a marginal spill (recorded, not aborted).
+  - `-nkvo` was dominated at short ctx on both (slower than the KV-on-GPU rungs), hence it runs last and only when the KV costs ≥ 8 layers. Its long-context benefit is not yet observed.
+  - The CPU baseline was never measured on these models: the > 50 %-of-RAM rule skips it.
   - The first real run showed a 27B CPU baseline driving RAM to 1.0 GiB free. The fixes: floor max(4 GiB, 8 %) in all modes, +1.5 GiB at ngl 0, the CPU baseline skipped when the file is > 50 % of RAM, the guard active from load with 250 ms polling for heavy configs, and heavy configs ordered most-offloaded first.
   - The `minDecodeTps` gate keeps such models out of Fast Assistant, Chat and Coding.
 - **PARTIAL: KV layout for hybrid / sliding-window archs.**
   - `kvLayout` handles per-layer KV heads, `full_attention_interval` (qwen35) and `sliding_window_pattern` (gemma4). gguf.ts reads those keys since a456679.
+  - GPU KV = the sum over the **last ngl layers** (llama.cpp offloads the tail), so hybrid/SWA layouts split per layer, not by layer share.
   - Unknown archs without layout keys get the all-layers **upper bound**: conservative, never OOM from an under-estimate.
   - Recurrent state (e.g. DeltaNet layers, about 150 MB) is not modelled; the 1 GiB VRAM margin covers it.
 
 ## Hugging Face download
-- **PARTIAL: HF search/list/resumable download works in core** (`core/hub/hf.ts`, tested against local servers). The Electron parts (`main/hub.ts`: safeStorage token, token-page window, IPC; `HubPage.tsx`) are **untested live until #2 wires them**.
+- **DONE-WITH-CAVEAT: HF search/list/resumable download** (`core/hub/hf.ts`, wired in fa491b0: `main/hub.ts`, `HubPage.tsx`), tested against local servers and mocked fetch/fs.
+  - The token goes only to an exact origin allowlist (https `huggingface.co` / `*.huggingface.co` on the default port, or the configured base), checked on every page and every redirect hop.
+  - Repo paths are refused per segment for `..`, NTFS ADS `:`, `<>"|?*\`, control chars, trailing dot/space and device names (CON, NUL, COMn, LPTn…).
+  - A `.part` resumes only with a matching `<part>.json` sidecar (repo, revision, path, size, sha256) and a 206 whose Content-Range starts at the offset. Bytes past the expected size stop the download. Disk errors reject as `disk_error` instead of crashing main.
+  - Links and junctions from destDir to the `.part` are refused; main also checks destDir by the realpath of its nearest existing ancestor. **Caveat: this is check-then-open** (NTFS has no O_NOFOLLOW from Node): a link swapped in between the check and the open is not caught. A fresh `.part` uses `wx`, so that case fails closed.
+  - One download at a time (op lock claimed synchronously); Cancel deletes only that op's own `.part` after it has settled.
 - **BLOCKED (env): no real huggingface.co call is in the test suite.** The API field names and the Link pagination follow the HF docs.
 
 ## Export
@@ -79,9 +92,9 @@ This is the single consolidated list, and every item is checked against the code
   - 2 GiB shared-spill abort
   - 1 GiB VRAM margin, keep-over ≤ 1.15×
   - The RAM estimate is resident-only (non-GPU weights + CPU KV + 0.5 GiB), checked after the previous server is unloaded. The in-step floor credits reclaimable mmap pages.
-- **DONE-WITH-CAVEAT: the guard reacts at 1 s telemetry granularity.** A very fast allocation can still reach OOM, which is then recorded as `oom`.
-- **DONE-WITH-CAVEAT: process cleanup** is kill → `taskkill /T /F`, a pid file and a stale-server kill at start, plus the NSIS uninstall killing the pid-file server. A hard kill of the Electron main process can still leave one llama-server until the next launch. Its session is shown as `interrupted` and is resumable.
-- **DONE-WITH-CAVEAT: one benchmark at a time per app instance.** Two app instances are not prevented from running at once.
+- **DONE-WITH-CAVEAT: the RAM guard reads OS free RAM itself** on every poll (1 s, 250 ms for heavy configs), independent of typeperf, and fails safe: 3 polls with neither an OS reading nor a telemetry row → `guard_abort`. An allocation faster than one poll can still reach OOM, which is then recorded as `oom`.
+- **DONE-WITH-CAVEAT: process cleanup** is kill → `taskkill /T /F`, a pid file and a stale-server kill at start, plus the NSIS uninstall killing the pid-file server. Unload keeps the handle and pid file until the exit is confirmed; a server that survives `taskkill /F` raises `ServerStuckError`, a hard stop (no further candidates, no cleanup that would drop its pid file). **No Job Object**: the OS does not tie llama-server to the app, so a hard kill of the Electron main process can still leave one llama-server until the next launch. Its session is shown as `interrupted` and is resumable.
+- **DONE: one app instance.** `requestSingleInstanceLock` runs before any DB or pid-file cleanup; a second instance focuses the first and exits (1f44374). Within the instance, benchmark, smoke, runtime install and hub download each claim an op lock synchronously, and late IPC replies/events from a previous session or repo are ignored (stale-reply guards).
 
 ## Platform and packaging
 - **DONE-WITH-CAVEAT: Windows 11 only** (PowerShell/WMI scanner, typeperf, taskkill). macOS and Linux are not supported.

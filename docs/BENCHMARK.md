@@ -39,7 +39,7 @@ A step is one candidate config at one context size. The server is started with `
   - Peaks (`peak*Bytes`) use every sample; memory stays allocated after load.
   - Averages (`avgGpuUtil`, `avgCpuUtil`) use only the warmup+measure window, so the load CPU spike is excluded (X10).
 - Short steps: typeperf needs ~2 s for its first row, and a 0.5B step can finish in ~1.5 s. After the reps the runner waits up to `firstSampleWaitMs` = 3 s (from sampler start) for one real row. If there are still **0 samples**, every telemetry field is `unavailable` rather than 0.
-- PDH glitch rows (an impossible percentage, with garbage in the other cells) are dropped whole by the sampler.
+- Percentages in (100, 1000] are clamped to 100 (real overshoot under full load). Only negative or > 1000 values mark a PDH glitch row, which is dropped whole; the counts are reported in `samplerErrors` ("typeperf rows dropped: N misaligned, M impossible"). Before this fix every overshooting row was dropped, which left 29–62 s heavy steps with 0 samples (H7).
 
 ## 3. Context ladder, warmup, reps
 
@@ -49,14 +49,17 @@ A step is one candidate config at one context size. The server is started with `
 - Reps: `reps = 2` measured prompts. The first failing rep fails the step.
 - Timeouts: prompt `60 s + 10 ms × ctx`; load 120 s (inside the backend); quality 180 s per test.
 - Pre-check before each step: est. RAM (`estimateMemory`) > live available − floor, where floor = **max(4 GiB, 8 % of RAM)** in every mode → `fail / skipped_memory`, and the model is not loaded. The guard polls from the start of **load** (every 250 ms for heavy configs). A trip during load kills the server, and the step is recorded as `guard_abort` before any request.
-- In-step guard (1 s poll of new samples): RAM available **+ mmap credit** < floor, or per-PID shared > 2 GiB → `backend.cancel()` → `fail / guard_abort`. The guard reason is recorded, not the "cancelled" error its own cancel caused.
+- In-step guard (1 s poll, 250 ms for heavy configs): RAM available **+ mmap credit** < floor, or per-PID shared > 2 GiB → `backend.cancel()` (or kill during load) → `fail / guard_abort`. The guard reason is recorded, not the "cancelled" error its own cancel caused.
+  - RAM available is read from the OS (`readRamAvailableBytes` = `os.freemem`) on every poll, independent of typeperf; typeperf rows are the second source. **Fail-safe:** `guardBlindPollsMax` = 3 polls with neither → `guard_abort` "RAM guard inputs unreadable".
+  - Heavy configs record a > 2 GiB spill (degraded + reason) and move to the next config instead of aborting; the RAM floor still aborts.
   - mmap credit = file × GPU layers / all layers. The weights already uploaded to the GPU are clean file pages the OS can drop. Calibration showed available RAM falls by ≈ the file size, so without the credit a 16 GiB model would falsely trip the floor.
-  - Heavy mode lowers the floor to the 2 GiB minimum and pre-checks the resident RAM only.
+  - Heavy mode uses the same floor; its pre-check counts only the resident RAM (`ramResidentBytes`).
 
 ### Stop rules (per candidate)
 1. The first **FAIL** verdict (§6): oom, device_lost, crash, load_fail, load_timeout, config_drift, req_timeout, request_error, guard_abort, skipped_memory, cancelled.
 2. **2 consecutive DEGRADED** steps (`maxConsecutiveDegraded`). The step right after a cliff therefore still runs.
 3. Cancel, or a lost device. `device_lost` also skips every later GPU candidate in the session.
+4. `ServerStuckError` (unload could not confirm the server exited, even after `taskkill /F`): a hard stop of the whole session. No further candidates or quality run, and no final cleanup that would drop the pid file.
 
 ## 4. Status vocabulary
 
@@ -79,9 +82,10 @@ ACCEPTANCE A11 mapping: ok → pass; failed / oom / device_lost / crashed → fa
 - Categories: instruction IF-01..03, reasoning RS-01..04 (since qb-1.1.0: step-by-step reasoning allowed, ending in a final `Answer: X` line; the `finalAnswer` checker takes the last Answer line, tolerating case, bold and backticks, and applies the inner exact/number check), coding CD-01..03 (`jsCode` cases `{expr, expected}`, compared as canonical JSON), structured SO-01..02, extraction EX-01..02, context CR-10/50/90 (needle at 10/50/90 % depth in seeded filler).
 - Runner (`session.ts` `runQuality`): runs once per **model**, after all ladders, on the model's **best-offload** usable candidate: most GPU layers, then fastest measured decode. It is never run on a CPU baseline or `-nkvo` probe just because that ran first.
   - It loads at ctx = min(profile.targetContext, practical ceiling) with filler `min(3000, 0.6·ctx)` tokens.
+  - The load is guarded like a ladder step (`guardedLoad`): previous server unloaded, live RAM pre-check, abortable load, the RAM-floor guard with fail-safe, checked between prompts. A trip discards the suite.
   - Each prompt goes `applyTemplate(messages)` → `runPrompt` (temp 0, seed 1) → `evaluateAsync` (`jsCode` runs in the child-process sandbox).
 - **Thinking models** (`ModelMeta.supportsThinking`, from a chat template with `enable_thinking`): the template is applied with `enable_thinking=false`, so results are deterministic and fast and the suite's `max_tokens` fit. The recommendation says "Quality measured with thinking disabled". The ×4 token boost is kept for a future thinking-on option.
-- A failed request counts as `pass:false` with the error in `detail`. An incomplete suite (cancel/crash) is **discarded**, not stored as partial.
+- A failed request counts as `pass:false` with the error in `detail`. An incomplete suite (cancel/crash/guard) is **discarded**, not stored as partial. A suite is saved in one transaction with its version and expected test count; on resume only a complete suite of the current version is reused.
 - Q = 100 · Σ_c W_c · passRate_c / Σ_c W_c over the categories that have results, where passRate_c = Σ weight·pass / Σ weight. W = instruction .2, reasoning .25, coding .25, structured .1, extraction .1, context .1. Scoring restricts c to the profile's `promptSetIds`.
 - With no results, the scorer uses the prior `min(90, 35 + 15·log2(params/1e9)) × {bpw ≥ 6: 1, ≥ 4.5: .97, ≥ 3.5: .9, else .75}`, labelled **estimated** in the breakdown and the reasons.
 
@@ -212,7 +216,7 @@ Estimates are `kind:'estimated'`, prune only, and never rank.
      The RAM check uses `ramResidentBytes` (non-GPU weights + CPU KV + 0.5 GiB, **+1.5 GiB more at ngl 0**) vs available − 4 GiB. There is no keep-over step.
      The **CPU baseline is skipped when the file is > 50 % of total RAM** ("CPU baseline skipped: model is >50% of system RAM"). In the real 27B run it drove available RAM to 1.0 GiB.
   4. ngl=0 only when there is no GPU (`cpuOnlyMaxParams` = 0 = off).
-  - `estimateMemory` splits KV by layer share (8B ngl 20/33: KV CPU 416 + Vulkan 608 MiB). `rulesForRequest(req)` gives the runner and any re-planner the same rules → the same configIds.
+  - `estimateMemory` splits KV per layer: GPU KV = the sum over the **last ngl layers** (llama.cpp offloads the tail; with a hybrid/SWA layout those layers' KV differs from the average). For a uniform model it equals the layer share (8B ngl 20/33: KV CPU 416 + Vulkan 608 MiB). `rulesForRequest(req)` gives the runner and any re-planner the same rules → the same configIds.
 - **Other rules:**
   - Max 4 per model.
   - Threads = physical cores.
@@ -245,7 +249,8 @@ Estimates are `kind:'estimated'`, prune only, and never rank.
   - Qwen3.8-27B (dense hybrid, 16.5 GB) at 55/65 layers, 2K/4K/8K: prefill 611/661/689 t/s, decode 12.4/13.0/13.0 t/s (flat: the CPU-side layers set the rate), TTFT 1.9/3.5/6.7 s, VRAM 12.7–13.0 GiB, shared 0.04 GiB (no spill).
   - For comparison, the 8B full offload decodes 110 → 79 t/s over 2K → 32K.
   - Outcomes asserted in `heavy.test.ts`: the 27B wins Maximum Quality when its quality is higher; it passes Coding's 10 t/s gate but loses to the 8B on speed; Fast Assistant rejects it.
-  - The MoE model (Gemma-4-26B-A4B) is not yet measured.
+  - Coding heavy run (2026-09-27, `docs/session-run-H-coding-heavy-*.json`, in progress): Qwen3.8-27B at 54/65 layers decodes 12.6 → 10.8 t/s from 2K to 16K with no spill; Gemma-4-26B-A4B (MoE) at 25 layers ≈ 46–50 t/s with a marginal spill (recorded, not aborted); the `-nkvo` rungs were dominated at short ctx.
+  - The CPU baseline was skipped for both (file > 50 % of RAM), so it is unmeasured.
 
 ## 10. Export (`src/core/export/config.ts`)
 - `exportConfigFrom(rec, cand, model, sessionId)` takes the winner at `recommendedCtx`.
