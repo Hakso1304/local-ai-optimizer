@@ -9,7 +9,7 @@ import { componentScores } from '../scoring/components'
 import { fmtCtx, val } from '../scoring/cliff'
 import { includesZero, pairedDifference, type UncertaintyRow } from '../scoring/uncertainty'
 import { DEFAULT_SCORING_CONFIG, effectiveProfile, withProfile, type ScoringConfig } from '../scoring/workloads'
-import { BASELINE_GEN, genLabel, templateKwargsFor } from '../benchmark/gen'
+import { BASELINE_GEN, genLabel, templateKwargsFor, type GenRow } from '../benchmark/gen'
 import { cite, P, rule, RULES, RULES_VERSION, tag } from './catalog'
 
 export type StoredRun = BenchmarkRunResult & { runId?: string; supersededBy?: string; startedAt?: number; endedAt?: number }
@@ -143,7 +143,7 @@ function sessionVersionOf(runs: BenchmarkRunResult[]): string | null {
   return [...count].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0]?.[0] ?? null
 }
 
-type ContractRow = UncertaintyRow & { appliedTemplateKwargs?: Record<string, unknown>; templateHash?: string | null; runtimeVersion?: string | null; modelFingerprint?: string | null; acceptedSampling?: Record<string, unknown> | null }
+type ContractRow = UncertaintyRow & { appliedTemplateKwargs?: Record<string, unknown>; templateKwargProof?: GenRow['templateKwargProof']; templateHash?: string | null; runtimeVersion?: string | null; modelFingerprint?: string | null; acceptedSampling?: Record<string, unknown> | null }
 /** F5: what is missing for a generation config to be comparable with its baseline (empty = contract met). */
 /** I-8.0 contract check for one generation config's rows: contradictions (errors — the rows say something other
  *  than the config) are separated from absent proof (missing — not evaluable). kwargs are compared with what the
@@ -156,6 +156,23 @@ function contractCheck(rows: ContractRow[], base: ContractRow[], gen: GenQuality
     const bad = applied.find((r) => Object.entries(expected).some(([k, x]) => r.appliedTemplateKwargs![k] !== x) || Object.keys(r.appliedTemplateKwargs!).some((k) => !(k in expected)))
     if (bad) errors.push(`applied template kwargs ${JSON.stringify(bad.appliedTemplateKwargs)} differ from the config's ${JSON.stringify(expected)}`)
     if (applied.length < rows.length) missing.push('applied template kwargs not verified on every row')
+    // A historical single-key on/off marker can still establish its sole toggle.
+    // Effort and other multi-key claims need independent per-key proof; when a
+    // row does carry new proof, never override an unchanged/failed probe.
+    const requirePerKey = Object.keys(expected).length > 1 || rows.some((r) => r.templateKwargProof !== undefined)
+    for (const [key, requested] of requirePerKey ? Object.entries(expected) : []) {
+      const evidence = rows.map((r) => r.templateKwargProof?.[key])
+      const contradicts = rows.some((r) => {
+        const p = r.templateKwargProof?.[key]
+        return p && (p.requested !== requested || (p.status === 'unchanged' && r.appliedTemplateKwargs?.[key] === requested) ||
+          (p.status === 'proved' && (p.counterfactual === requested || !/^[0-9a-f]{64}$/.test(p.requestedSha256) ||
+            !/^[0-9a-f]{64}$/.test(p.counterfactualSha256 ?? '') || p.requestedSha256 === p.counterfactualSha256)))
+      })
+      if (contradicts) {
+        errors.push(`per-key template proof for ${key} contradicts the config or render hashes`)
+      }
+      if (evidence.some((p) => p?.status !== 'proved')) missing.push(`per-key template proof for ${key} not verified on every row`)
+    }
   }
   for (const k of ['templateHash', 'runtimeVersion', 'modelFingerprint'] as const) {
     const present = [...rows, ...base].filter((r) => !!r[k]).map((r) => r[k])

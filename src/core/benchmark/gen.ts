@@ -89,6 +89,11 @@ export type GenRow = QualityResult & {
   requestedTemplateKwargs?: Record<string, unknown>
   /** Set only when the kwargs demonstrably changed the rendered prompt. */
   appliedTemplateKwargs?: Record<string, unknown>
+  /** First-item template-only counterfactuals; hashes disclose no rendered prompt text. */
+  templateKwargProof?: Record<string, {
+    requested: unknown; counterfactual: unknown; requestedSha256: string; counterfactualSha256: string | null
+    status: 'proved' | 'unchanged' | 'unavailable'
+  }>
   /** I-8.0 application contract (F5): identities the comparison needs; absent → the gen config is not evaluable. */
   templateHash?: string | null
   runtimeVersion?: string | null

@@ -1,5 +1,6 @@
 // Benchmark session runner (DESIGN §3): candidates → per context step (restart with -c) warmup + reps with
 // telemetry → quality once per model → recommend. One plain async function; every failure becomes data.
+import { createHash } from 'node:crypto'
 import type { SessionEvent, SessionEventBody, SessionRequest } from '../../shared/bench-events'
 import type {
   BenchmarkRunResult, CandidateConfig, CandidateInput, FailureKind, GenConfig, GenQuality, Metric, ModelMeta, GpuBackendKind, QualityResult, Recommendation, RunStatus, VramBudgetObservation
@@ -1028,11 +1029,12 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     if (!g.ok) { log('error', `${cand.id}: ${g.reason}`); return [] }
     const prompts = buildQualityPrompts(suite, { fillerTokens: Math.min(cfg.qualityFillerMax, Math.floor(ctx * 0.6)), thinking: false })
     const done: GenQuality[] = []
-    const renders: (string | null)[] = []
+    const sha256 = (s: string) => createHash('sha256').update(s).digest('hex')
     try {
       for (const { gen, samples } of gens) {
         const templateKwargs = templateKwargsFor(model, gen)
-        let firstRender: string | null = null
+        let proof: GenRow['templateKwargProof'] | null = null
+        let proofAttempted = false
         if (templateKwargs) log('info', `${model.name}: quality suite with ${genLabel(gen)}${samples > 1 ? `, ${samples} samples` : ''}`)
         const rows: GenRow[] = []
         let interrupted = false
@@ -1050,7 +1052,6 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
               ...(meta.instanceSeed !== undefined ? { generatorSeed: meta.instanceSeed, instanceSeed: meta.instanceSeed } : {}) }
             try {
               const prompt = await backend.applyTemplate(p.messages, templateKwargs ? { templateKwargs } : undefined)
-              firstRender ??= prompt
               const s = samplingFor(gen)
               const preq: PromptRequest & { topP?: number; topK?: number; minP?: number } = {
                 prompt, seed: sample, temperature: s.temperature, topP: s.top_p, topK: s.top_k, minP: s.min_p,
@@ -1058,6 +1059,34 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
                 timeoutMs: gen.thinking ? cfg.qualityTimeoutMs * 2 : cfg.qualityTimeoutMs
               }
               const r = await backend.runPrompt(preq)
+              // I-8.0: change one kwarg at a time on the SAME item, with all other
+              // kwargs held fixed. This is template-only; it sends no extra generation.
+              // An off/on difference alone cannot prove reasoning_effort was applied.
+              if (gens.length > 1 && templateKwargs && !proofAttempted && !r.error && !g.tripped() && !signal?.aborted && !deps.pauseSignal?.aborted && !backend.lastExit) {
+                proofAttempted = true
+                proof = {}
+                const effortKey = model.genKnobs?.effortKw ?? 'reasoning_effort'
+                for (const [key, requested] of Object.entries(templateKwargs)) {
+                  const alternate = key === 'enable_thinking' && typeof requested === 'boolean' ? !requested
+                    : key === effortKey ? model.genKnobs?.effortValues?.find((x) => x !== requested) : undefined
+                  const originalHash = sha256(prompt)
+                  if (alternate === undefined) {
+                    proof[key] = { requested, counterfactual: null, requestedSha256: originalHash, counterfactualSha256: null, status: 'unavailable' }
+                    continue
+                  }
+                  if (g.tripped() || signal?.aborted || deps.pauseSignal?.aborted || backend.lastExit) {
+                    proof[key] = { requested, counterfactual: alternate, requestedSha256: originalHash, counterfactualSha256: null, status: 'unavailable' }
+                    continue
+                  }
+                  try {
+                    const changed = await backend.applyTemplate(p.messages, { templateKwargs: { ...templateKwargs, [key]: alternate } })
+                    proof[key] = { requested, counterfactual: alternate, requestedSha256: originalHash,
+                      counterfactualSha256: sha256(changed), status: g.tripped() || signal?.aborted || deps.pauseSignal?.aborted || backend.lastExit ? 'unavailable' : changed === prompt ? 'unchanged' : 'proved' }
+                  } catch {
+                    proof[key] = { requested, counterfactual: alternate, requestedSha256: originalHash, counterfactualSha256: null, status: 'unavailable' }
+                  }
+                }
+              }
               const split = splitReasoning(r.text ?? '')
               const toks = r.decodeTokens ?? r.streamedTokens ?? null
               const chars = split.reasoningChars + split.answerChars
@@ -1095,15 +1124,11 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
           log('warn', `${cand.id}: quality suite (${gen.id}) incomplete (${rows.length}/${prompts.length * samples}); discarded`)
           break
         }
-        renders.push(firstRender)
+        if (proof) for (const r of rows) r.templateKwargProof = proof
+        if (templateKwargs && proof && Object.keys(templateKwargs).every((key) => proof[key]?.status === 'proved')) {
+          for (const r of rows) r.appliedTemplateKwargs = templateKwargs
+        }
         done.push(summarizeGen(gen, rows, samples))
-      }
-      // I-8.0: kwargs count as applied only when they changed the rendered prompt vs another gen config (a template
-      // that ignores enable_thinking renders identically — then the comparison is not evaluable).
-      for (let k = 0; k < done.length; k++) {
-        const kw = templateKwargsFor(model, done[k].gen)
-        if (!kw || renders[k] === null) continue
-        if (renders.some((x, j) => j !== k && x !== null && x !== renders[k])) for (const r of done[k].results as GenRow[]) r.appliedTemplateKwargs = kw
       }
     } finally {
       g.stop()
