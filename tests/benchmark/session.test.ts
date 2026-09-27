@@ -819,7 +819,7 @@ describe('runSession', () => {
   it('guard reason wins over the "cancelled" error its own cancel() causes (guard_abort, not request_error)', async () => {
     const spill = { ...sample(2048), procVramDedicatedBytes: 11.24 * GiB, procVramSharedBytes: 3 * GiB }
     const { s } = await run(() => ({ warmupBlocks: true }), { ladder: [2048] }, {
-      startSampler: () => ({ samples: [spill, spill], unavailable: {}, stop: () => [spill, spill] }), config: { guardPollMs: 5 }
+      startSampler: () => ({ samples: [spill, { ...spill, ts: spill.ts + 1 }], unavailable: {}, stop: () => [spill, { ...spill, ts: spill.ts + 1 }] }), config: { guardPollMs: 5 }
     })
     expect(s.runs[0]).toMatchObject({ status: 'fail', failureKind: 'guard_abort' })
     expect(s.details[0].reason).toMatch(/^shared GPU memory spill 3\.0 GiB exceeded the abort limit \(uncertain residency: residual per-PID shared above 2\.0 GiB on 2 consecutive samples/)
@@ -832,7 +832,7 @@ describe('runSession', () => {
 
   it('w4n-N1: advisory / non-comparable ceilings never change the abort decision', async () => {
     const x = { ...sample(2048), procVramDedicatedBytes: 5 * GiB, procVramSharedBytes: 3 * GiB }
-    const deps = { startSampler: () => ({ samples: [x, x], unavailable: {}, stop: () => [x, x] }), config: { guardPollMs: 5 } }
+    const deps = { startSampler: () => ({ samples: [x, { ...x, ts: x.ts + 1 }], unavailable: {}, stop: () => [x, { ...x, ts: x.ts + 1 }] }), config: { guardPollMs: 5 } }
     const plain = await run(() => ({ warmupBlocks: true }), { ladder: [2048] }, deps)
     const odd = { kind: 'capacity', qualified: false, ceilingBytes: GiB, modelId: 'x', ctx: 2048, kvType: 'f16', gpuLayers: 1, kvBytes: null, largestBufferBytes: 100 * GiB, observedAt: 0,
       origin: { sessionId: 's', configId: 'c', status: 'pass', attempts: 2, firstPeakVramBytes: null, firstResidentSharedBytes: null } } as VramBudgetObservation
@@ -849,7 +849,7 @@ describe('runSession', () => {
 
   it('w4n-N2: pressure below the saturation estimate is not masked — observed residual trips the guard and is stored', async () => {
     const x = { ...sample(2048), procVramDedicatedBytes: 8 * GiB, procVramSharedBytes: 3 * GiB }
-    const { s } = await run(() => ({ warmupBlocks: true, prompt: 'timeout' }), { ladder: [2048] }, { startSampler: () => ({ samples: [x, x], unavailable: {}, stop: () => [x, x] }), config: { guardPollMs: 5 } })
+    const { s } = await run(() => ({ warmupBlocks: true, prompt: 'timeout' }), { ladder: [2048] }, { startSampler: () => ({ samples: [x, { ...x, ts: x.ts + 1 }], unavailable: {}, stop: () => [x, { ...x, ts: x.ts + 1 }] }), config: { guardPollMs: 5 } })
     expect(s.runs[0]).toMatchObject({ failureKind: 'guard_abort', peakSharedGpuBytes: { value: 3 * GiB } })
     expect(s.details[0].reason).toMatch(/dedicated below the saturation share — may be placement/)
   })
