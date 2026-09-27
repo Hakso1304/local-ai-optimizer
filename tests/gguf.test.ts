@@ -56,6 +56,16 @@ const KVS: Kv[] = [
 ]
 
 describe('readGgufMetadata', () => {
+  it('findGgufModels merges the .meta.json sidecar (recommended sampling + repoId) so every caller sees it', async () => {
+    const sub = join(dir, 'card'); mkdirSync(sub, { recursive: true })
+    const p = join(sub, 'carded.gguf')
+    writeFileSync(p, gguf(3, KVS, [[64, 100], [64, 64], [64]]))
+    writeFileSync(`${p}.meta.json`, JSON.stringify({ repoId: 'Qwen/Qwen3.8-27B', generation: { temperature: 1, topP: 0.95, topK: 20 } }))
+    const [info] = await findGgufModels([sub])
+    const mm = toModelMeta(info)
+    expect(mm.meta?.genKnobs).toMatchObject({ repoId: 'Qwen/Qwen3.8-27B', recommended: { temperature: 1, topP: 0.95, topK: 20 } })
+  })
+
   it('parses a synthetic v3 file and derives params from tensor dims', async () => {
     const p = join(dir, 'tiny.gguf')
     writeFileSync(p, gguf(3, KVS, [[64, 100], [64, 64], [64]]))

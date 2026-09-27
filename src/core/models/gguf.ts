@@ -288,8 +288,10 @@ export async function findGgufModels(dirs: string[]): Promise<ModelInfo[]> {
       const base = { id: path, name: basename(path, '.gguf'), path, sizeBytes: statSync(path).size, runtime: 'llamacpp' as const }
       try {
         const meta = await readGgufMetadata(path)
-        const card = readSidecar(path)?.generation // cached generation_config.json (fetched lazily elsewhere)
-        return { ...base, meta: card ? { ...meta, genKnobs: { ...meta.genKnobs, recommended: card } } : meta }
+        // cached generation_config.json (fetched lazily elsewhere) and its repo; every caller (app, harness) sees them
+        const sc = readSidecar(path)
+        const knobs = { ...meta.genKnobs, ...(sc?.generation ? { recommended: sc.generation } : {}), ...(sc?.repoId ? { repoId: sc.repoId } : {}) }
+        return { ...base, meta: sc?.generation || sc?.repoId ? { ...meta, genKnobs: knobs } : meta }
       } catch (e) {
         return { ...base, meta: null, metaError: (e as Error).message }
       }

@@ -109,6 +109,8 @@ export interface GenKnobs {
   thinkingBudgetKw?: string
   /** Model-card sampling (generation_config.json). */
   recommended?: { temperature?: number; topP?: number; topK?: number; minP?: number }
+  /** Hugging Face repo `recommended` was read from (the model's .meta.json sidecar). */
+  repoId?: string
 }
 
 /** One generation setting the quality suite is run with. `id` is deterministic (e.g. 'off', 'think-low-t1'). */
