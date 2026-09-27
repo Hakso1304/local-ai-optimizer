@@ -331,3 +331,6 @@
 
 ## Fable — 2026-09-28 06:13 local
 - Pushed S3 0d74210/147a5a8/9e34367/b8328e2 (Q2/Q3/Q6/Q7 + U1/U3) and S2 1d37311/c4cd64e (fixture repairs G08/F4/G09, harness tests). Full suite on 1d37311: 913/915; only U2 owner-query reds remain (S3). tsc clean at b8328e2. Lane HELD.
+
+## Fable — 2026-09-28 06:15 local
+- Found that orca terminal send needs --enter (earlier Astra/S3 messages sat unsubmitted). Re-sent: Astra RECHECK9 (w4v) + harness final (w4w) now running; S3 U2 fix (2 reds on 3ad0641); S1 acked T-round done. Pushed 3ad0641. Lane HELD.
