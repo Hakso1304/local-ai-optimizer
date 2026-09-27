@@ -60,23 +60,21 @@ const storage: SessionStorage = {
 // Backend wrapper: records templated prompts + raw replies so the chat template can be checked by eye.
 const transcripts: { configId: string; templated: string; reply: string; stopType: string | null }[] = []
 let currentConfig = ''
+// Patch the REAL backend instance (only the two methods we observe) instead of re-listing methods in a new object:
+// a hand-written wrapper silently drops whatever the backend adds later (it once dropped applyTemplate's opts, then
+// tokenize/templateHash — so the runner fell back to untokenized prompt sizing). The app passes the backend directly.
 function wrap(b: LlamaCppBackend): SessionBackend {
   let lastTemplated: string | null = null
-  return {
-    get pid() { return b.pid },
-    get lastExit() { return b.lastExit },
-    // Forward every argument: dropping applyTemplate's opts once silently disabled enable_thinking=false.
-    loadModel: (...a: Parameters<LlamaCppBackend['loadModel']>) => b.loadModel(...a),
-    unloadModel: () => b.unloadModel(),
-    warmup: (...a: Parameters<LlamaCppBackend['warmup']>) => b.warmup(...a),
-    cancel: () => b.cancel(),
-    applyTemplate: async (...a: Parameters<LlamaCppBackend['applyTemplate']>) => (lastTemplated = await b.applyTemplate(...a)),
-    runPrompt: async (req) => {
-      const r = await b.runPrompt(req)
-      if (lastTemplated !== null && req.prompt === lastTemplated) transcripts.push({ configId: currentConfig, templated: req.prompt.slice(-400), reply: r.text, stopType: r.stopType })
-      return r
-    }
+  const applyTemplate = b.applyTemplate.bind(b)
+  const runPrompt = b.runPrompt.bind(b)
+  b.applyTemplate = async (...a: Parameters<LlamaCppBackend['applyTemplate']>) => (lastTemplated = await applyTemplate(...a))
+  b.runPrompt = async (...a: Parameters<LlamaCppBackend['runPrompt']>) => {
+    const r = await runPrompt(...a)
+    const req = a[0]
+    if (lastTemplated !== null && req.prompt === lastTemplated) transcripts.push({ configId: currentConfig, templated: req.prompt.slice(-400), reply: r.text, stopType: r.stopType })
+    return r
   }
+  return b
 }
 
 const servers = () =>
