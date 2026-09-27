@@ -91,7 +91,9 @@ describe('session storage', () => {
     await st.saveRun(id, run(4096, 'fail'), detail)
     await st.saveRun(id, run(4096, 'pass'), detail) // retry
     expect((await st.listRuns(id)).map((r) => `${r.ctx}:${r.status}`)).toEqual(['2048:pass', '4096:pass'])
-    expect(getSession(db, Number(id))!.candidates[0].runs.map((r) => `${r.ctx}:${r.status}`)).toEqual(['2048:pass', '4096:pass'])
+    const cand = getSession(db, Number(id))!.candidates[0]
+    expect(cand.runs.map((r) => `${r.ctx}:${r.status}`)).toEqual(['2048:pass', '4096:pass'])
+    expect(cand.runIds).toEqual([1, 3]) // row ids of the surviving rows, for telemetryForRun
     db.close()
   })
 

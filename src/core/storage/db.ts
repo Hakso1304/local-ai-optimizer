@@ -34,8 +34,13 @@ const MIGRATIONS: string[] = [
 /** Open (creating if needed) and bring the schema up to date. Caller owns close(). */
 export function openDb(path: string): DatabaseSync {
   const db = new DatabaseSync(path)
-  db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;')
-  migrate(db)
+  try {
+    db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;')
+    migrate(db)
+  } catch (e) {
+    db.close() // don't leave the file locked when the schema is unusable
+    throw e
+  }
   return db
 }
 
@@ -56,6 +61,7 @@ export function migrate(db: DatabaseSync): number {
   db.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)')
   const row = db.prepare('SELECT max(version) AS v FROM schema_version').get() as { v: number | null }
   let v = row.v ?? 0
+  if (v > MIGRATIONS.length) throw new Error(`database schema v${v} is newer than this build (v${MIGRATIONS.length}); update the app`)
   for (; v < MIGRATIONS.length; v++) {
     db.exec('BEGIN')
     try {

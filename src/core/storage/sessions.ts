@@ -26,7 +26,7 @@ export function setSessionStatus(db: DatabaseSync, id: number, status: string, e
 }
 
 /** Latest row per (configId, ctx): a retry/rerun inserts a new row that supersedes the old one. */
-const LATEST_RUNS = `SELECT payload FROM benchmark_run WHERE id IN (
+const LATEST_RUNS = `SELECT id, payload FROM benchmark_run WHERE id IN (
   SELECT max(id) FROM benchmark_run WHERE session_id = ? GROUP BY json_extract(payload, '$.configId'), ctx_size) ORDER BY id`
 
 /** What resume needs: the original request and the scan the plan was made from (so configIds come out identical). */
@@ -82,9 +82,9 @@ export function getSession(db: DatabaseSync, id: number): SessionDetail | null {
   const row = db.prepare('SELECT id, created_at, status, payload FROM benchmark_session WHERE id = ?').get(id) as SessionRow | undefined
   if (!row) return null
   const p = json<SessionPayload>(row.payload)
-  const runs = (db.prepare(LATEST_RUNS).all(id) as { payload: string }[]).map((r) => {
+  const rows = (db.prepare(LATEST_RUNS).all(id) as { id: number; payload: string }[]).map((r) => {
     const { detail: _d, ...run } = json<BenchmarkRunResult & { detail?: unknown }>(r.payload)
-    return run
+    return { rowId: r.id, run }
   })
   const quality = db.prepare('SELECT model_id, payload FROM quality_result WHERE session_id = ? ORDER BY id').all(id) as { model_id: string; payload: string }[]
   const recRow = db.prepare('SELECT payload FROM recommendation WHERE session_id = ? ORDER BY id DESC LIMIT 1').get(id) as { payload: string } | undefined
@@ -93,10 +93,10 @@ export function getSession(db: DatabaseSync, id: number): SessionDetail | null {
     session: summary(db, row),
     recommendation,
     candidates: p.candidates.map(({ config, model }) => {
-      const mine = runs.filter((r) => r.configId === config.id)
+      const mine = rows.filter((r) => r.run.configId === config.id)
       return {
-        config, model, runs: mine,
-        cliff: detectCliffs(mine, p.vramBytes),
+        config, model, runs: mine.map((r) => r.run), runIds: mine.map((r) => r.rowId),
+        cliff: detectCliffs(mine.map((r) => r.run), p.vramBytes),
         score: recommendation?.ranked.find((s) => s.configId === config.id) ?? null,
         quality: quality.filter((q) => q.model_id === model.id).map((q) => json<QualityResult>(q.payload))
       }

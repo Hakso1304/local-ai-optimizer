@@ -34,9 +34,11 @@ npm run package          # build + electron-builder -> dist/ (portable .exe and 
 LAO_SEED_DEMO=1 npm run dev   # UI demo with fixture data in a separate optimizer-demo.db, flagged "DEMO DATA"
 ```
 
-Models are read from `<project>/models` (dev) or `%APPDATA%\local-ai-optimizer\models` (packaged), plus
-`modelDirs` in `%APPDATA%\local-ai-optimizer\settings.json` (default `D:\llm-models`). Results live in
-`%APPDATA%\local-ai-optimizer\optimizer.db`. Small test model:
+Models are read from `<project>/models` (dev) or `%APPDATA%\local-ai-optimizer\models` (packaged), plus any
+`modelDirs` listed in `settings.json` in the same folder (none by default), plus LM Studio's model dirs and Ollama's
+blob store. Results live in `optimizer.db` there. Dev runs use `%APPDATA%\local-ai-optimizer-dev` so they never touch
+the installed app's data. Uninstalling keeps `%APPDATA%\local-ai-optimizer` (database, settings, downloaded runtime);
+delete it by hand for a clean slate. Small test model:
 
 ```sh
 curl -L -o models/qwen2.5-0.5b-instruct-q8_0.gguf https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q8_0.gguf

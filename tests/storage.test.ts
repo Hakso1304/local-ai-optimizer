@@ -45,4 +45,17 @@ describe('storage', () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  it('refuses a database written by a newer build instead of corrupting it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lao-db-'))
+    try {
+      const path = join(dir, 'optimizer.db')
+      const db = openDb(path)
+      db.prepare('INSERT INTO schema_version (version) VALUES (999)').run()
+      db.close()
+      expect(() => openDb(path)).toThrow(/newer than this build/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })

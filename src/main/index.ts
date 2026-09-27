@@ -8,7 +8,7 @@ import { detectRuntimes } from '../core/runtimes'
 import { LlamaCppBackend, killStaleServer } from '../core/runtimes/llamacpp'
 import { pickDiscreteDevice } from '../core/runtimes/llamacpp/parse'
 import { openDb } from '../core/storage/db'
-import { getSession, getSessionResume, latestRecommendation, listSessions, makeSessionStorage, markInterrupted, seedDemoSession, type PlanFor } from '../core/storage/sessions'
+import { getSession, getSessionResume, latestRecommendation, listSessions, makeSessionStorage, markInterrupted, seedDemoSession, telemetryForRun, type PlanFor } from '../core/storage/sessions'
 import { isInside, sanitizeRequest } from './validate'
 import { WORKLOADS } from '../core/scoring/workloads'
 import { val } from '../core/scoring/cliff'
@@ -23,13 +23,14 @@ import type { SessionEvent, SessionRequest } from '../shared/bench-events'
 import type { ModelMeta, WorkloadId } from '../shared/bench-types'
 import type { AppSettings, ModelInfo, SmokeResult, StartResult, SystemProfile } from '../shared/types'
 
+// Dev/test runs get their own userData so they never write the installed app's database or settings.
+// Must run before anything calls app.getPath('userData') (the llama pid file below does).
+if (!app.isPackaged) app.setPath('userData', `${app.getPath('userData')}-dev`)
+
 // Dev: runtime + sample models live in the project. Packaged: app dir is read-only (asar), so the runtime is
 // downloaded on first run into userData and models come from userData/models + settings.modelDirs.
 const llamaDir = () => (app.isPackaged ? join(app.getPath('userData'), 'runtime', 'llama.cpp') : join(app.getAppPath(), 'vendor', 'llama.cpp'))
 const bundledModelsDir = () => (app.isPackaged ? join(app.getPath('userData'), 'models') : join(app.getAppPath(), 'models'))
-
-// Large models live on D: (user decision); used when settings.json has no modelDirs key.
-const DEFAULT_MODEL_DIRS = ['D:\\llm-models']
 
 const settingsFile = () => join(app.getPath('userData'), 'settings.json')
 function readSettings(): AppSettings {
@@ -41,10 +42,10 @@ function writeSettings(patch: Partial<AppSettings>): AppSettings {
   return next
 }
 
-/** <project>/models plus settings.modelDirs (default D:\llm-models). Missing dirs are skipped. */
+/** Bundled models dir plus settings.modelDirs (user-added; none by default). Missing dirs are skipped. */
 function modelDirs(): string[] {
   const s = readSettings()
-  const extra = Array.isArray(s.modelDirs) ? s.modelDirs.filter((d): d is string => typeof d === 'string') : DEFAULT_MODEL_DIRS
+  const extra = Array.isArray(s.modelDirs) ? s.modelDirs.filter((d): d is string => typeof d === 'string') : []
   return [bundledModelsDir(), ...extra]
 }
 
@@ -103,6 +104,7 @@ ipcMain.handle('models:fit', async (_e, w: WorkloadId): Promise<Record<string, s
 let installing: Promise<unknown> | null = null
 ipcMain.handle('runtime:install', async () => {
   if (installing) throw new Error('runtime install already running')
+  if (active || smokeBusy) throw new Error('a benchmark is running; install the runtime after it finishes')
   const progress = (msg: string) => { for (const w of BrowserWindow.getAllWindows()) w.webContents.send('runtime:progress', msg) }
   profileCache ??= await scanSystem()
   const gpu = (profileCache.gpus.value ?? []).filter((g) => !g.isIntegrated).sort((a, b) => (b.dedicatedVramBytes.value ?? 0) - (a.dedicatedVramBytes.value ?? 0))[0]
@@ -119,6 +121,7 @@ ipcMain.handle('settings:setWorkload', (_e, w: WorkloadId) => {
 ipcMain.handle('workloads:list', () => Object.values(WORKLOADS))
 ipcMain.handle('sessions:list', () => listSessions(needDb()))
 ipcMain.handle('sessions:get', (_e, id: number) => getSession(needDb(), Number(id)))
+ipcMain.handle('telemetry:run', (_e, runId: number) => telemetryForRun(needDb(), Number(runId)))
 ipcMain.handle('recommendation:latest', (_e, w: WorkloadId) => latestRecommendation(needDb(), w))
 ipcMain.handle('bench:start', (_e, raw: unknown) => {
   const v = sanitizeRequest(raw, modelRoots())
@@ -174,7 +177,9 @@ async function startSession(req: SessionRequest, storedMachine?: SystemProfile):
     // ponytail: static facts cached per app run; RAM is re-read live via freemem(). A resume re-uses the stored scan
     // so generateCandidates yields the same configIds/ctxSteps as the original plan (review item d).
     const profile = storedMachine ?? (profileCache ??= await scanSystem())
-    const [infos, devices, runtime] = await Promise.all([listAllModels(), llama.listDevices(), llama.detect()])
+    const runtime = await llama.detect()
+    if (runtime.status !== 'available') throw new Error('llama.cpp runtime is not installed: install it on the System page first')
+    const [infos, devices] = await Promise.all([listAllModels(), llama.listDevices()])
     const device = pickDiscreteDevice(devices)?.id ?? null
     const models: ModelMeta[] = []
     for (const id of req.modelIds) {

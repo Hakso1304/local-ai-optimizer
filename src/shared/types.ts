@@ -1,6 +1,6 @@
 // Types shared between main, preload and renderer. No runtime code here.
 import type { BenchmarkRunResult, CandidateConfig, CliffReport, ModelMeta, QualityResult, Recommendation, WorkloadId, WorkloadProfile, WorkloadScore } from './bench-types'
-import type { SessionEvent, SessionRequest } from './bench-events'
+import type { SessionEvent, SessionRequest, TelemetrySample } from './bench-events'
 
 export type Status = 'available' | 'unavailable' | 'unsupported'
 
@@ -151,6 +151,8 @@ export interface RendererApi {
   listWorkloads(): Promise<WorkloadProfile[]>
   listSessions(): Promise<SessionSummary[]>
   getSession(id: number): Promise<SessionDetail | null>
+  /** Raw telemetry samples of one benchmark_run row. */
+  telemetryForRun(runId: number): Promise<TelemetrySample[]>
   latestRecommendation(w: WorkloadId): Promise<{ sessionId: number; recommendation: Recommendation } | null>
   startBench(req: SessionRequest): Promise<StartResult>
   cancelBench(): Promise<{ ok: boolean; error?: string }>
@@ -206,6 +208,8 @@ export interface SessionCandidate {
   config: CandidateConfig
   model: ModelMeta
   runs: BenchmarkRunResult[]
+  /** benchmark_run row ids, parallel to runs (for telemetryForRun). */
+  runIds: number[]
   /** Recomputed from the stored runs on read (pure scoring code), not stored. */
   cliff: CliffReport
   score: WorkloadScore | null
