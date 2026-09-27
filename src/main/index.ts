@@ -23,7 +23,7 @@ import { evaluateAsync } from '../core/quality'
 import type { SessionEvent, SessionRequest } from '../shared/bench-events'
 import type { CandidateConfig, ModelMeta, WorkloadId } from '../shared/bench-types'
 import { recommendForWorkload } from '../core/scoring/recommend'
-import type { AppSettings, ComputedRecommendation, ModelInfo, SmokeResult, StartResult, SystemProfile } from '../shared/types'
+import type { AppSettings, ComputedRecommendation, ModelFit, ModelInfo, SmokeResult, StartResult, SystemProfile } from '../shared/types'
 
 // Dev/test runs get their own userData so they never write the installed app's database or settings.
 // Must run before anything calls app.getPath('userData') (the llama pid file below does).
@@ -96,14 +96,15 @@ ipcMain.handle('system:scan', async () => {
 ipcMain.handle('models:list', () => listAllModels())
 /** Per model: null if normal mode yields candidates for this workload, else the planner's reason (e.g. "full GPU
  *  offload does not fit — enable heavy-model mode"). Same generateCandidates call as a real session. */
-ipcMain.handle('models:fit', async (_e, w: WorkloadId): Promise<Record<string, string | null>> => {
+ipcMain.handle('models:fit', async (_e, w: WorkloadId): Promise<ModelFit> => {
   if (!isWorkloadId(w)) throw new Error(`unknown workload ${String(w)}`)
   profileCache ??= await scanSystem()
   const infos = await listAllModels()
   const devices = await llama.listDevices().catch(() => null)
-  if (!devices) return Object.fromEntries(infos.map((m) => [m.id, 'llama.cpp runtime not installed (System page)']))
+  if (!devices) return { reasons: Object.fromEntries(infos.map((m) => [m.id, 'llama.cpp runtime not installed (System page)'])), vramInUseBytes: null, vramTotalBytes: null }
   const device = pickDiscreteDevice(devices)?.id ?? null
   const machine = machineFromProfile(await withVramInUse(profileCache), device)
+  const vramInUseBytes = machine.vramInUseBytes.kind === 'measured' ? machine.vramInUseBytes.value : null
   const out: Record<string, string | null> = {}
   for (const info of infos) {
     const mm = toModelMeta(info)
@@ -111,7 +112,7 @@ ipcMain.handle('models:fit', async (_e, w: WorkloadId): Promise<Record<string, s
     const set = generateCandidates(machine, mm.meta, { backend: device ? 'vulkan' : 'cpu' }, WORKLOADS[w], rulesForRequest({ heavyMode: false }))
     out[info.id] = set.candidates.length ? null : set.rejected.map((r) => r.reason).join('; ') || 'no candidate configuration'
   }
-  return out
+  return { reasons: out, vramInUseBytes, vramTotalBytes: machine.vramBytes.value }
 })
 let installing: Promise<unknown> | null = null
 ipcMain.handle('runtime:install', async () => {

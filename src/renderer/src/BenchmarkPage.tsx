@@ -20,6 +20,7 @@ export function BenchmarkPage({ live, preset, onDownload }: { live: LiveState; p
   const [reqCtx, setReqCtx] = useState(0) // 0 = Auto (workload default)
   const [minDec, setMinDec] = useState('') // blank = workload default
   const [fit, setFit] = useState<Record<string, string | null>>({})
+  const [vram, setVram] = useState<{ inUse: number | null; total: number | null }>({ inUse: null, total: null })
 
   useEffect(() => {
     void Promise.all([window.api.listWorkloads(), window.api.getSettings()]).then(([ws, s]) => { setWorkloads(ws)
@@ -42,7 +43,13 @@ export function BenchmarkPage({ live, preset, onDownload }: { live: LiveState; p
   }
   const cancel = async () => { const r = await window.api.cancelBench(); if (!r.ok) setMsg(r.error ?? 'cancel failed') }
   const pause = async () => { const r = await window.api.pauseBench(); if (!r.ok) setMsg(r.error ?? 'pause failed') }
-  useEffect(() => { if (workload) window.api.modelFit(workload).then(setFit, () => setFit({})) }, [workload, models])
+  useEffect(() => {
+    if (workload) window.api.modelFit(workload).then((f) => { setFit(f.reasons); setVram({ inUse: f.vramInUseBytes, total: f.vramTotalBytes }) }, () => setFit({}))
+  }, [workload, models])
+  const GiB = 1024 ** 3
+  const busyGpu = vram.inUse != null && vram.inUse > 1.5 * GiB
+  const freeTip = vram.inUse != null && vram.total != null ? `${((vram.total - vram.inUse) / GiB).toFixed(1)} GB free of ${(vram.total / GiB).toFixed(1)} GB` : undefined
+  const heavyLabel = busyGpu ? `needs heavy mode while ${(vram.inUse! / GiB).toFixed(1)} GB VRAM is in use by other apps` : 'needs heavy mode'
   // configId = `${modelId}|ngl=<all|n>|…` (documented, deterministic): a numeric ngl > 0 is partial offload.
   const partial = /\|ngl=([1-9]\d*)\|/.test(live.configId ?? '')
   const t = live.telemetry
@@ -81,6 +88,9 @@ export function BenchmarkPage({ live, preset, onDownload }: { live: LiveState; p
         <button onClick={() => void cancel()} disabled={!running}>Cancel</button>
       </header>
       {msg && <p className="err">{msg}</p>}
+      {busyGpu && vram.total != null && (
+        <p className="warnline">GPU currently has {((vram.total - vram.inUse!) / GiB).toFixed(1)} GB free of {(vram.total / GiB).toFixed(1)} GB (other apps in use) — results will be affected.</p>
+      )}
       <div className="bar actions"><button onClick={onDownload}>Download from Hugging Face</button></div>
 
       <table>
@@ -89,7 +99,7 @@ export function BenchmarkPage({ live, preset, onDownload }: { live: LiveState; p
           {models?.map((m) => (
             <tr key={m.id} className="click" onClick={() => !running && !m.meta?.incomplete && toggle(m.id)}>
               <td><input type="checkbox" checked={picked.has(m.id)} readOnly disabled={running} /></td>
-              <td>{m.name}{fit[m.id] && <span className="pill warn-pill" title={fit[m.id]!}>{/incomplete/.test(fit[m.id]!) ? 'incomplete download' : /does not fit/.test(fit[m.id]!) ? 'needs heavy mode' : /runtime not installed/.test(fit[m.id]!) ? 'no runtime' : 'no config'}</span>}</td>
+              <td>{m.name}{fit[m.id] && <span className="pill warn-pill" title={[freeTip, fit[m.id]].filter(Boolean).join(' — ')}>{/incomplete/.test(fit[m.id]!) ? 'incomplete download' : /does not fit/.test(fit[m.id]!) ? heavyLabel : /runtime not installed/.test(fit[m.id]!) ? 'no runtime' : 'no config'}</span>}</td>
               <td className="muted">{m.runtime === 'llamacpp' ? 'folder' : m.runtime === 'lmstudio' ? 'LM Studio' : 'Ollama'}</td>
               <td>{v(m.meta?.parameterCount.value, (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : `${(n / 1e6).toFixed(0)}M`))}</td>
               <td>{m.meta?.quantName ?? '—'}</td>

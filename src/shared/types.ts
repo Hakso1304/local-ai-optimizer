@@ -157,6 +157,14 @@ export interface ComputedRecommendation {
   label: string
 }
 
+/** models:fit — per model null (fits in normal mode) or the planner's reason; plus the VRAM reading it planned with. */
+export interface ModelFit {
+  reasons: Record<string, string | null>
+  /** Dedicated VRAM used by other apps right now (measured); null = reading unavailable. */
+  vramInUseBytes: number | null
+  vramTotalBytes: number | null
+}
+
 /** userData/settings.json */
 export interface AppSettings {
   workload?: WorkloadId
@@ -197,7 +205,7 @@ export interface RendererApi {
   detectRuntimes(): Promise<RuntimeDetection[]>
   listModels(): Promise<ModelInfo[]>
   /** modelId → null (fits in normal mode for this workload) or the reason it has no normal-mode candidate. */
-  modelFit(w: WorkloadId): Promise<Record<string, string | null>>
+  modelFit(w: WorkloadId): Promise<ModelFit>
   benchSmoke(modelPath: string): Promise<SmokeResult>
 }
 

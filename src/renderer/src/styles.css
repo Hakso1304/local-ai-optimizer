@@ -56,3 +56,4 @@ code { color: #d2a8ff; }
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 16px; align-items: start; }
 .linkish { background: none; border: 0; padding: 0; color: #58a6ff; font: inherit; cursor: pointer; text-decoration: underline; }
 tr.flash { background: #1f3350; transition: background .3s; }
+.warnline { color: var(--warn); border: 1px solid var(--warn); border-radius: 3px; padding: 4px 8px; }
