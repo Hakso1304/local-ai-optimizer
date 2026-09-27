@@ -45,6 +45,6 @@ describe('child-process sandbox (jsCodeAsync)', () => {
     expect(await evaluateAsync(cd, good)).toMatchObject({ testId: 'CD-03', pass: true, score: 1 })
     expect(await evaluateAsync(cd, 'function groupBy(a){return a}')).toMatchObject({ pass: false })
     const exact = defaultTestSet.tests.find((t) => t.id === 'RS-04')!
-    expect(await evaluateAsync(exact, 'Friday')).toMatchObject({ pass: true })
+    expect(await evaluateAsync(exact, '100 mod 7 = 2\nAnswer: Friday')).toMatchObject({ pass: true })
   })
 })

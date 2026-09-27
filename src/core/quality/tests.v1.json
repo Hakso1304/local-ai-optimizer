@@ -1,6 +1,7 @@
 {
-  "version": "1.0",
-  "suite": "qb-1.0.0",
+  "version": "1.1",
+  "suite": "qb-1.1.0",
+  "changelog": "1.1: RS-01..04 allow step-by-step reasoning and are checked on the last \"Answer:\" line (1.0 demanded a bare answer, which measured guessing: 8B scored RS 1/4).",
   "categoryWeights": { "instruction": 0.2, "reasoning": 0.25, "coding": 0.25, "structured": 0.1, "extraction": 0.1, "context": 0.1 },
   "tests": [
     {
@@ -11,6 +12,7 @@
     {
       "id": "IF-02", "category": "instruction", "weight": 1, "maxTokens": 16,
       "prompt": "List the three primary colors of light as a comma-separated list in lowercase, no spaces, no other text.",
+      "note": "Deliberately strict: the prompt forbids spaces and other text, so \"Red, Green, Blue.\" or \"rgb\" is a real violation. Surrounding whitespace is trimmed (not a violation).",
       "checker": { "type": "regex", "pattern": "^(red,green,blue|red,blue,green|green,red,blue|green,blue,red|blue,red,green|blue,green,red)$" }
     },
     {
@@ -20,23 +22,23 @@
     },
     {
       "id": "RS-01", "category": "reasoning", "weight": 1, "maxTokens": 512,
-      "prompt": "A shop sells pens at 3 for $4. How many dollars do 27 pens cost? Answer with only the number.",
-      "checker": { "type": "number", "expected": 36 }
+      "prompt": "A shop sells pens at 3 for $4. How many dollars do 27 pens cost? Think it through step by step, then write the final answer on the last line in the form: Answer: <number>",
+      "checker": { "type": "finalAnswer", "inner": { "type": "number", "expected": 36 } }
     },
     {
       "id": "RS-02", "category": "reasoning", "weight": 1, "maxTokens": 512,
-      "prompt": "Alice is older than Bob. Carol is younger than Bob. Dave is older than Alice. Who is the youngest? Answer with one name only.",
-      "checker": { "type": "exact", "expected": "Carol" }
+      "prompt": "Alice is older than Bob. Carol is younger than Bob. Dave is older than Alice. Who is the youngest? Think it through step by step, then write the final answer on the last line in the form: Answer: <name>",
+      "checker": { "type": "finalAnswer", "inner": { "type": "exact", "expected": "Carol" } }
     },
     {
       "id": "RS-03", "category": "reasoning", "weight": 1, "maxTokens": 512,
-      "prompt": "What is the remainder when 2^20 is divided by 7? Answer with only the number.",
-      "checker": { "type": "number", "expected": 4 }
+      "prompt": "What is the remainder when 2^20 is divided by 7? Think it through step by step, then write the final answer on the last line in the form: Answer: <number>",
+      "checker": { "type": "finalAnswer", "inner": { "type": "number", "expected": 4 } }
     },
     {
       "id": "RS-04", "category": "reasoning", "weight": 1, "maxTokens": 512,
-      "prompt": "If today is Wednesday, what day of the week will it be 100 days from today? Answer with one word.",
-      "checker": { "type": "exact", "expected": "Friday" }
+      "prompt": "If today is Wednesday, what day of the week will it be 100 days from today? Think it through step by step, then write the final answer on the last line in the form: Answer: <day>",
+      "checker": { "type": "finalAnswer", "inner": { "type": "exact", "expected": "Friday" } }
     },
     {
       "id": "CD-01", "category": "coding", "weight": 1, "maxTokens": 400,

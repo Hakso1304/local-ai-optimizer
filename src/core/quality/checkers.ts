@@ -20,6 +20,8 @@ export type CheckerSpec =
   | { type: 'jsonSchema'; schema: JsonSchema }
   | { type: 'jsonEqual'; expected: unknown }
   | { type: 'jsCode'; cases: { expr: string; expected: unknown }[]; timeoutMs?: number }
+  /** Reasoning allowed; the LAST "Answer:" line is extracted and checked with `inner`. */
+  | { type: 'finalAnswer'; inner: Extract<CheckerSpec, { type: 'exact' | 'number' | 'regex' }> }
 
 export interface JsonSchema {
   type?: 'string' | 'number' | 'integer' | 'boolean' | 'object' | 'array' | 'null'
@@ -73,6 +75,23 @@ export function numberMatch(output: string, expected: number, tolerance = 0): Ch
   const got = Number(nums[nums.length - 1].replace(/,/g, ''))
   const ok = Math.abs(got - expected) <= tolerance
   return res(ok, ok ? 1 : 0, ok ? `number ${got}` : `expected ${expected}, got ${got}`)
+}
+
+/** Text after the last `Answer:` (case-insensitive; tolerates **bold**, `code`, leading "Final"), or null. */
+export function lastAnswerLine(output: string): string | null {
+  const lines = stripThinking(output).split(/\r?\n/)
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = /^[\s>*_`#-]*(?:final\s+)?answer\s*[*_`]*\s*[:：]\s*[*_`]*\s*(.*?)\s*$/i.exec(lines[i])
+    if (m) return m[1].replace(/[*_`]+$/g, '').trim()
+  }
+  return null
+}
+
+export function finalAnswer(output: string, inner: Extract<CheckerSpec, { type: 'exact' | 'number' | 'regex' }>): CheckResult {
+  const a = lastAnswerLine(output)
+  if (a === null) return res(false, 0, `no final "Answer:" line in ${clip(stripThinking(output).slice(-80))}`)
+  const r = runChecker(inner, a)
+  return { ...r, detail: `Answer: ${clip(a, 40)} — ${r.detail}` }
 }
 
 export function containsAll(output: string, items: string[], caseSensitive = false): CheckResult {
@@ -221,6 +240,7 @@ export function runChecker(spec: CheckerSpec, output: string): CheckResult {
     case 'jsonSchema': return jsonSchema(output, spec.schema)
     case 'jsonEqual': return jsonEqual(output, spec.expected)
     case 'jsCode': return jsCode(output, spec.cases, spec.timeoutMs)
+    case 'finalAnswer': return finalAnswer(output, spec.inner)
     default: throw new Error(`unknown checker type ${(spec as { type: string }).type}`)
   }
 }

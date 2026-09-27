@@ -1,0 +1,434 @@
+{
+ "suite": "qb-1.1.0",
+ "ctx": 16384,
+ "device": {
+  "id": "Vulkan0",
+  "name": "AMD Radeon RX 9070 XT",
+  "totalMiB": 16304,
+  "freeMiB": 15416
+ },
+ "out": {
+  "qwen2.5-1.5b-instruct-q4_k_m.gguf": {
+   "results": [
+    {
+     "testId": "IF-01",
+     "category": "instruction",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "exact match"
+    },
+    {
+     "testId": "IF-02",
+     "category": "instruction",
+     "weight": 1,
+     "pass": false,
+     "score": 0,
+     "detail": "\"rgb\" does not match /^(red,green,blue|red,blue,green|green,red,blue|green,blue,red|blue,red,green|blue,green,red)$/"
+    },
+    {
+     "testId": "IF-03",
+     "category": "instruction",
+     "weight": 1,
+     "pass": false,
+     "score": 0,
+     "detail": "10 words (want 5)"
+    },
+    {
+     "testId": "RS-01",
+     "category": "reasoning",
+     "weight": 1,
+     "pass": false,
+     "score": 0,
+     "detail": "no final \"Answer:\" line in \"{4}{3} = 27 \\\\times 1.3333 = 37\\n\\\\]\\n\\nSo, the cost of 27 pens is:\\n\\n\\\\[\\n\\\\boxed{37}\\n\\\\]\""
+    },
+    {
+     "testId": "RS-02",
+     "category": "reasoning",
+     "weight": 1,
+     "pass": false,
+     "score": 0,
+     "detail": "Answer: \"Dave\" — expected \"Carol\", got \"dave\""
+    },
+    {
+     "testId": "RS-03",
+     "category": "reasoning",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "Answer: \"4\" — number 4"
+    },
+    {
+     "testId": "RS-04",
+     "category": "reasoning",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "Answer: \"Friday\" — exact match"
+    },
+    {
+     "testId": "CD-01",
+     "category": "coding",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "4/4 cases"
+    },
+    {
+     "testId": "CD-02",
+     "category": "coding",
+     "weight": 1,
+     "pass": false,
+     "score": 0.25,
+     "detail": "1/4: String(fib(0)) → \"1\" (want \"0\"); String(fib(10)) → \"89\" (want \"55\")"
+    },
+    {
+     "testId": "CD-03",
+     "category": "coding",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "2/2 cases"
+    },
+    {
+     "testId": "SO-01",
+     "category": "structured",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "valid against schema"
+    },
+    {
+     "testId": "SO-02",
+     "category": "structured",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "JSON equal"
+    },
+    {
+     "testId": "EX-01",
+     "category": "extraction",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "matches /^INV-20931;\\s*(EUR\\s*)?1,?428(\\.00)?(\\s*EUR)?$/"
+    },
+    {
+     "testId": "EX-02",
+     "category": "extraction",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "exact match"
+    },
+    {
+     "testId": "CR-10",
+     "category": "context",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "needle HELIOTROPE-5 retrieved"
+    },
+    {
+     "testId": "CR-50",
+     "category": "context",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "needle HELIOTROPE-5 retrieved"
+    },
+    {
+     "testId": "CR-90",
+     "category": "context",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "needle HELIOTROPE-5 retrieved"
+    }
+   ],
+   "replies": [
+    {
+     "id": "IF-01",
+     "reply": "BANANA"
+    },
+    {
+     "id": "IF-02",
+     "reply": "rgb"
+    },
+    {
+     "id": "IF-03",
+     "reply": "The ocean is a vast and mysterious body of water."
+    },
+    {
+     "id": "RS-01",
+     "reply": "To determine the cost of 27 pens, we first need to find out the cost of one pen. We know that 3 pens cost $4. Therefore, the cost of one pen is:\n\n\\[\n\\text{Cost of one pen} = \\frac{4}{3} \\text{ dollars}\n\\]\n\nNext, we need to find the cost of 27 pens. Since we know the cost of one pen, we can multiply the cost of one pen by 27:\n\n\\[\n\\text{Cost of 27 pens} = 27 \\times \\frac{4}{3} = 27 \\times \\frac{4}{3} = 27 \\times 1.3333 = 37\n\\]\n\nSo, the cost of 27 pens is:\n\n\\[\n\\boxed{37}\n\\]"
+    },
+    {
+     "id": "RS-02",
+     "reply": "Let's break down the information given:\n\n1. Alice is older than Bob.\n   - This means Bob is older than Alice.\n   - So, Bob > Alice\n\n2. Carol is younger than Bob.\n   - This means Bob is older than Carol.\n   - So, Bob > Carol\n\n3. Dave is older than Alice.\n   - This means Alice is older than Dave.\n   - So, Alice > Dave\n\nFrom these points, we can deduce the following order:\n- Bob is older than Alice.\n- Bob is older than Carol.\n- Bob is older than Dave.\n\nTherefore, Bob is the oldest, followed by Alice, then Carol, and finally Dave.\n\nAnswer: Dave"
+    },
+    {
+     "id": "RS-03",
+     "reply": "To find the remainder when \\(2^{20}\\) is divided by 7, we can use modular arithmetic. Let's break it down step by step:\n\n1. **Identify the pattern in powers of 2 modulo 7:**\n   - \\(2^1 \\equiv 2 \\mod 7\\)\n   - \\(2^2 \\equiv 4 \\mod 7\\)\n   - \\(2^3 \\equiv 8 \\equiv 1 \\mod 7\\)\n   - \\(2^4 \\equiv 2 \\cdot 2^3 \\equiv 2 \\cdot 1 \\equiv 2 \\mod 7\\)\n   - \\(2^5 \\equiv 2 \\cdot 2^4 \\equiv 2 \\cdot 2 \\equiv 4 \\mod 7\\)\n   - \\(2^6 \\equiv 2 \\cdot 2^5 \\equiv 2 \\cdot 4 \\equiv 8 \\equiv 1 \\mod 7\\)\n\n   From this, we can see that the powers of 2 modulo 7 repeat every 3 terms: \\(2, 4, 1\\).\n\n2. **Determine the position of \\(2^{20}\\) in the cycle:**\n   - Since the cycle repeats every 3 terms, we can find the position of \\(2^{20}\\) by calculating \\(20 \\mod 3\\).\n   - \\(20 \\mod 3 = 2\\).\n\n   This means \\(2^{20}\\) is the same as \\(2^2\\) in the cycle.\n\n3. **Calculate the remainder:**\n   - From the cycle, we know \\(2^2 \\equiv 4 \\mod 7\\).\n\nTherefore, the remainder when \\(2^{20}\\) is divided by 7 is \\(4\\).\n\nAnswer: 4"
+    },
+    {
+     "id": "RS-04",
+     "reply": "To determine what day of the week it will be 100 days from today, we need to consider the cyclical nature of the days of the week. There are 7 days in a week, so every 7 days, the days of the week repeat.\n\nHere are the steps to solve the problem:\n\n1. **Identify the current day**: Today is Wednesday.\n2. **Calculate the remainder when 100 is divided by 7**: This will tell us how many days beyond a complete cycle of 7 days we need to count.\n   \\[\n   100 \\div 7 = 14 \\text{ R } 2\n   \\]\n   This means 100 days is equivalent to 14 complete weeks plus 2 extra days.\n\n3. **Determine the day of the week 2 days from Wednesday**: Since today is Wednesday, 2 days from Wednesday will be:\n   \\[\n   \\text{Wednesday} + 2 \\text{ days} = \\text{Friday}\n   \\]\n\nTherefore, 100 days from today will be a Friday.\n\nAnswer: Friday"
+    },
+    {
+     "id": "CD-01",
+     "reply": "```javascript\nfunction isPalindrome(s) {\n    // Remove non-alphanumeric characters and convert to lowercase\n    const cleaned = s.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();\n    // Check if the cleaned string is equal to its reverse\n    return cleaned === cleaned.split('').reverse().join('');\n}\n```"
+    },
+    {
+     "id": "CD-02",
+     "reply": "```javascript\nfunction fib(n) {\n    if (n < 0) return \"Error: n must be non-negative\";\n    let a = 0n, b = 1n;\n    for (let i = 0; i < n; i++) {\n        let temp = a;\n        a = b;\n        b = temp + b;\n    }\n    return b;\n}\n```"
+    },
+    {
+     "id": "CD-03",
+     "reply": "```javascript\nfunction groupBy(arr, key) {\n    return arr.reduce((acc, item) => {\n        const value = item[key];\n        if (!acc[value]) {\n            acc[value] = [];\n        }\n        acc[value].push(item);\n        return acc;\n    }, {});\n}\n```"
+    },
+    {
+     "id": "SO-01",
+     "reply": "```json\n{\n  \"title\": \"The Great Gatsby\",\n  \"year\": 1925,\n  \"tags\": [\"Fiction\", \"Classic\"]\n}\n```"
+    },
+    {
+     "id": "SO-02",
+     "reply": "```json\n[\n    {\n        \"name\": \"Tom\",\n        \"age\": 31\n    },\n    {\n        \"name\": \"Ana\",\n        \"age\": 27\n    },\n    {\n        \"name\": \"Lee\",\n        \"age\": 45\n    }\n]\n```"
+    },
+    {
+     "id": "EX-01",
+     "reply": "INV-20931;1428.00"
+    },
+    {
+     "id": "EX-02",
+     "reply": "ops@acme.io\nbill.pay@acme.co.uk\nold_admin@acme.io"
+    },
+    {
+     "id": "CR-10",
+     "reply": "HELIOTROPE-5"
+    },
+    {
+     "id": "CR-50",
+     "reply": "HELIOTROPE-5"
+    },
+    {
+     "id": "CR-90",
+     "reply": "HELIOTROPE-5"
+    }
+   ],
+   "score": 65.83333333333333
+  },
+  "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf": {
+   "results": [
+    {
+     "testId": "IF-01",
+     "category": "instruction",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "exact match"
+    },
+    {
+     "testId": "IF-02",
+     "category": "instruction",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "matches /^(red,green,blue|red,blue,green|green,red,blue|green,blue,red|blue,red,green|blue,green,red)$/"
+    },
+    {
+     "testId": "IF-03",
+     "category": "instruction",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "5 words (want 5)"
+    },
+    {
+     "testId": "RS-01",
+     "category": "reasoning",
+     "weight": 1,
+     "pass": false,
+     "score": 0,
+     "detail": "Answer: \"$40\" — expected 36, got 40"
+    },
+    {
+     "testId": "RS-02",
+     "category": "reasoning",
+     "weight": 1,
+     "pass": false,
+     "score": 0,
+     "detail": "no final \"Answer:\" line in \"b, and Bob is younger than Alice and Dave, Carol is the youngest among the four.\""
+    },
+    {
+     "testId": "RS-03",
+     "category": "reasoning",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "Answer: \"4\" — number 4"
+    },
+    {
+     "testId": "RS-04",
+     "category": "reasoning",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "Answer: \"Friday\" — exact match"
+    },
+    {
+     "testId": "CD-01",
+     "category": "coding",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "4/4 cases"
+    },
+    {
+     "testId": "CD-02",
+     "category": "coding",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "4/4 cases"
+    },
+    {
+     "testId": "CD-03",
+     "category": "coding",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "2/2 cases"
+    },
+    {
+     "testId": "SO-01",
+     "category": "structured",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "valid against schema"
+    },
+    {
+     "testId": "SO-02",
+     "category": "structured",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "JSON equal"
+    },
+    {
+     "testId": "EX-01",
+     "category": "extraction",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "matches /^INV-20931;\\s*(EUR\\s*)?1,?428(\\.00)?(\\s*EUR)?$/"
+    },
+    {
+     "testId": "EX-02",
+     "category": "extraction",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "exact match"
+    },
+    {
+     "testId": "CR-10",
+     "category": "context",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "needle HELIOTROPE-5 retrieved"
+    },
+    {
+     "testId": "CR-50",
+     "category": "context",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "needle HELIOTROPE-5 retrieved"
+    },
+    {
+     "testId": "CR-90",
+     "category": "context",
+     "weight": 1,
+     "pass": true,
+     "score": 1,
+     "detail": "needle HELIOTROPE-5 retrieved"
+    }
+   ],
+   "replies": [
+    {
+     "id": "IF-01",
+     "reply": "BANANA"
+    },
+    {
+     "id": "IF-02",
+     "reply": "red,green,blue"
+    },
+    {
+     "id": "IF-03",
+     "reply": "The ocean is very deep."
+    },
+    {
+     "id": "RS-01",
+     "reply": "To find the cost of 27 pens, we need to break it down into smaller groups of 3 pens since that's the price we know.\n\n1. First, let's find out how many groups of 3 pens we have in 27 pens. \n   We can do this by dividing 27 by 3, which equals 9.\n\n2. Now, we know that 9 groups of 3 pens cost $4 each. \n   So, the total cost for these 9 groups is 9 * $4 = $36.\n\n3. However, we still have 3 pens left that don't fit into any group of 3. \n   Since we know the cost of 3 pens is $4, we can find the cost of 1 pen by dividing $4 by 3, which equals $1.33 (approximately).\n\n4. Now, we can find the cost of the remaining 3 pens by multiplying the cost of 1 pen by 3. \n   So, the cost of the remaining 3 pens is 3 * $1.33 = $4.\n\n5. Finally, we can find the total cost of 27 pens by adding the cost of the 9 groups of 3 pens and the cost of the remaining 3 pens. \n   So, the total cost is $36 + $4 = $40.\n\nAnswer: $40"
+    },
+    {
+     "id": "RS-02",
+     "reply": "To determine the youngest person, let's analyze the given information step by step:\n\n1. Alice is older than Bob.\n2. Carol is younger than Bob.\n   - This implies that Carol is younger than Alice as well, since Alice is older than Bob.\n\n3. Dave is older than Alice.\n   - This implies that Dave is also older than Bob, since Alice is older than Bob.\n\nNow, let's summarize the relationships:\n\n- Dave is older than Bob.\n- Alice is older than Bob.\n- Carol is younger than Bob.\n\nSince Carol is younger than Bob, and Bob is younger than Alice and Dave, Carol is the youngest among the four."
+    },
+    {
+     "id": "RS-03",
+     "reply": "To find the remainder when 2^20 is divided by 7, we can use the concept of modular arithmetic. \n\nStep 1: We start by finding the remainder when 2 is divided by 7. \n2 mod 7 = 2\n\nStep 2: Next, we find the remainder when 2^2 is divided by 7. \n(2^2) mod 7 = 4\n\nStep 3: Now, we find the remainder when 2^3 is divided by 7. \n(2^3) mod 7 = (2^2 * 2) mod 7 = (4 * 2) mod 7 = 8 mod 7 = 1\n\nStep 4: We have found that 2^3 mod 7 = 1. This means that any power of 2 that is a multiple of 3 will also have a remainder of 1 when divided by 7. \n\nStep 5: Since 20 is a multiple of 3 (20 = 3 * 6 + 2), we can write 2^20 as (2^3)^6 * 2^2. \n\nStep 6: Using the result from step 4, we know that (2^3)^6 mod 7 = 1^6 mod 7 = 1.\n\nStep 7: Now, we find the remainder when 2^2 is divided by 7. \n(2^2) mod 7 = 4\n\nStep 8: Finally, we multiply the results from step 6 and step 7 to find the remainder when 2^20 is divided by 7. \n(2^20) mod 7 = (1 * 4) mod 7 = 4\n\nAnswer: 4"
+    },
+    {
+     "id": "RS-04",
+     "reply": "To find the day of the week 100 days from today, we need to consider the number of days in a week (7) and how many complete weeks are contained within 100 days.\n\n100 days / 7 days per week = 14.2857 weeks (approximately)\n\nSince we can't have a fraction of a week, we'll consider the complete weeks first. 14 weeks is 98 days (14 * 7 = 98).\n\nNow, we need to find the remaining days: 100 - 98 = 2 days.\n\nSo, 2 days from Wednesday would be Friday.\n\nAnswer: Friday"
+    },
+    {
+     "id": "CD-01",
+     "reply": "```javascript\nfunction isPalindrome(s) {\n    s = s.toLowerCase().replace(/[^a-z0-9]/g, '');\n    return s === s.split('').reverse().join('');\n}\n```"
+    },
+    {
+     "id": "CD-02",
+     "reply": "```javascript\nfunction fib(n) {\n    if (n < 2) return BigInt(n);\n    let a = BigInt(0);\n    let b = BigInt(1);\n    for (let i = 2; i <= n; i++) {\n        let temp = a + b;\n        a = b;\n        b = temp;\n    }\n    return b;\n}\n```"
+    },
+    {
+     "id": "CD-03",
+     "reply": "```javascript\nfunction groupBy(arr, key) {\n  const result = {};\n  arr.forEach(item => {\n    const keyValue = item[key];\n    if (!result[keyValue]) {\n      result[keyValue] = [];\n    }\n    result[keyValue].push(item);\n  });\n  return result;\n}\n```"
+    },
+    {
+     "id": "SO-01",
+     "reply": "```json\n{\n  \"title\": \"1984\",\n  \"year\": 1949,\n  \"tags\": [\"Dystopian\", \"Science Fiction\", \"Classic\"]\n}\n```\n\nThis JSON object describes a book with the title \"1984\", published in 1949, and categorized under the tags \"Dystopian\", \"Science Fiction\", and \"Classic\"."
+    },
+    {
+     "id": "SO-02",
+     "reply": "[\n  {\"name\": \"Tom\", \"age\": 31},\n  {\"name\": \"Ana\", \"age\": 27},\n  {\"name\": \"Lee\", \"age\": 45}\n]"
+    },
+    {
+     "id": "EX-01",
+     "reply": "INV-20931;1428.00"
+    },
+    {
+     "id": "EX-02",
+     "reply": "ops@acme.io\nbill.pay@acme.co.uk\nold_admin@acme.io"
+    },
+    {
+     "id": "CR-10",
+     "reply": "HELIOTROPE-5"
+    },
+    {
+     "id": "CR-50",
+     "reply": "HELIOTROPE-5"
+    },
+    {
+     "id": "CR-90",
+     "reply": "HELIOTROPE-5"
+    }
+   ],
+   "score": 87.5
+  }
+ }
+}

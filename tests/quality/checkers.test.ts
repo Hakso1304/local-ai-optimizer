@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  containsAll, exactMatch, extractCode, jsCode, jsonEqual, jsonSchema, needle, numberMatch, regex, stripThinking, validateSchema, wordCount
+  containsAll, exactMatch, finalAnswer, lastAnswerLine, extractCode, jsCode, jsonEqual, jsonSchema, needle, numberMatch, regex, stripThinking, validateSchema, wordCount
 } from '../../src/core/quality/checkers'
 
 describe('text checkers', () => {
@@ -40,6 +40,27 @@ describe('text checkers', () => {
     expect(wordCount('The ocean is very deep.', 5, 5).pass).toBe(true)
     expect(wordCount("The ocean's waves crash loudly.", 5, 5).pass).toBe(true)
     expect(wordCount('The ocean is deep.', 5, 5).pass).toBe(false)
+  })
+})
+
+describe('finalAnswer (qb-1.1.0 reasoning)', () => {
+  it('takes the LAST Answer line, tolerating case, bold, backticks, "Final answer"', () => {
+    expect(lastAnswerLine('work...\nAnswer: 36')).toBe('36')
+    expect(lastAnswerLine('**Answer:** Carol')).toBe('Carol')
+    expect(lastAnswerLine('**Answer: Carol**')).toBe('Carol')
+    expect(lastAnswerLine('Final answer: `4`')).toBe('4')
+    expect(lastAnswerLine('answer : Friday.')).toBe('Friday.')
+    expect(lastAnswerLine('Answer: 9\nhmm\nAnswer: 36')).toBe('36')
+    expect(lastAnswerLine('The answer is 36')).toBeNull()
+  })
+  it('checks the extracted answer with the inner checker', () => {
+    expect(finalAnswer('9 groups × 4\nAnswer: $36', { type: 'number', expected: 36 }).pass).toBe(true)
+    expect(finalAnswer('Final answer: `4`', { type: 'number', expected: 4 }).pass).toBe(true)
+    expect(finalAnswer('answer: **Friday.**', { type: 'exact', expected: 'Friday' }).pass).toBe(true)
+    expect(finalAnswer('36', { type: 'number', expected: 36 })).toMatchObject({ pass: false, detail: expect.stringMatching(/no final "Answer:" line/) })
+    expect(finalAnswer('Answer: Carol\nAnswer: Dave', { type: 'exact', expected: 'Carol' }).pass).toBe(false)
+    // numbers inside the reasoning never leak into the answer
+    expect(finalAnswer('2^20 = 1048576, remainder 4\nAnswer: 2', { type: 'number', expected: 4 }).pass).toBe(false)
   })
 })
 
