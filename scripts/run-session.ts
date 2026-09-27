@@ -6,17 +6,19 @@
 //   C  RAM floor 64 GiB (guard path: every step skipped_memory, no load)
 //   H  custom: flags choose workload/models/ladder/heavy mode (quality on unless --no-quality)
 // Dumps everything (events, runs, quality, recommendation, raw quality prompts/replies) to docs/session-run-<scenario>-<ts>.json.
-import { execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { freemem, tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
+import { promisify } from 'node:util'
 import type { SessionEvent, SessionRequest } from '../src/shared/bench-events'
 import type { BenchmarkRunResult, ModelMeta, QualityResult, Recommendation } from '../src/shared/bench-types'
 import type { ModelInfo } from '../src/shared/types'
 import { runSession, type RunDetail, type SessionBackend, type SessionStorage } from '../src/core/benchmark/session'
 import { findGgufModels, toModelMeta } from '../src/core/models/gguf'
-import { LlamaCppBackend } from '../src/core/runtimes/llamacpp'
-import { pickDiscreteDevice } from '../src/core/runtimes/llamacpp/parse'
+import { LlamaCppBackend, serverEnv } from '../src/core/runtimes/llamacpp'
+import { parseDevices, pickDiscreteDevice } from '../src/core/runtimes/llamacpp/parse'
 import { scanSystem } from '../src/core/system/scanner'
 import { readVramInUse, startSampler } from '../src/core/telemetry/sampler'
 import { openDb } from '../src/core/storage/db'
@@ -46,8 +48,11 @@ for (let i = 3; i < process.argv.length; i++) {
 if (scenario === 'H' && (!flag('--request-cap-ms') || !flag('--ram-abort-gib'))) throw new Error('scenario H requires explicit --request-cap-ms and --ram-abort-gib')
 const limits = validateHarnessLimits({ requestCapMs: Number(flag('--request-cap-ms') ?? 300_000), ramAbortGib: Number(flag('--ram-abort-gib') ?? 5) })
 const DB_PATH = existingDbPath(flag('--db'), scenario === 'H')
-const BACKEND = flag('--backend') ?? 'vulkan'
-if (BACKEND !== 'vulkan' && BACKEND !== 'hip') throw new Error('--backend must be vulkan or hip')
+const backendArg = flag('--backend') ?? 'vulkan'
+if (backendArg !== 'vulkan' && backendArg !== 'hip') throw new Error('--backend must be vulkan or hip')
+const BACKEND: 'vulkan' | 'hip' = backendArg
+const unsafeEnvKeys = Object.keys(process.env).filter((k) => k.toUpperCase() === 'GGML_CUDA_ENABLE_UNIFIED_MEMORY')
+if (unsafeEnvKeys.length) throw new Error(`unified-memory environment variable set: ${unsafeEnvKeys.join(', ')}`)
 const WANT = flag('--models')?.split(',') ?? ['qwen2.5-1.5b-instruct-q4_k_m', 'Meta-Llama-3.1-8B-Instruct-Q4_K_M']
 /** --request-cap-ms N: upper bound on every prompt request's timeout (overnight runs: 300000). */
 const REQUEST_CAP_MS = limits.requestCapMs
@@ -71,6 +76,9 @@ function pin(model: ModelMeta, cands: CandidateConfig[]): CandidateConfig[] {
   })
 }
 const GiB = 1024 ** 3
+const execFileAsync = promisify(execFile)
+const osProbe = (file: string, args: string[], timeout: number, signal?: AbortSignal) =>
+  execFileAsync(file, args, { encoding: 'utf8', windowsHide: true, timeout, signal, env: serverEnv(), maxBuffer: 16 * 1024 * 1024 })
 const t0 = Date.now()
 const el = () => `${((Date.now() - t0) / 1000).toFixed(1).padStart(7)}s`
 
@@ -126,20 +134,62 @@ function wrap(b: LlamaCppBackend): SessionBackend {
   return b
 }
 
-const servers = () =>
-  execFileSync('tasklist', ['/FI', 'IMAGENAME eq llama-server.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true }).split('\n').filter((l) => /^"llama-server\.exe"/i.test(l)).length
+const namedProcesses = async (image: string, signal?: AbortSignal) =>
+  (await osProbe('tasklist', ['/FI', `IMAGENAME eq ${image}`, '/FO', 'CSV', '/NH'], 5_000, signal)).stdout.split('\n').filter((l) => l.toLowerCase().startsWith(`"${image.toLowerCase()}"`)).length
+const servers = (signal?: AbortSignal) => namedProcesses('llama-server.exe', signal)
 
 async function run(dump: SessionDump<Record<string, unknown>>): Promise<void> {
-  for (let i = 0; servers() > 0; i++) {
+  const ctl = new AbortController()
+  const ownedBackends = new Set<LlamaCppBackend>()
+  const ownedSamplers = new Set<ReturnType<typeof startSampler>>()
+  const onSignal = (name: string) => ctl.abort(new Error(`runner received ${name}`))
+  const sigint = () => onSignal('SIGINT'), sigterm = () => onSignal('SIGTERM'), sigbreak = () => onSignal('SIGBREAK')
+  process.once('SIGINT', sigint); process.once('SIGTERM', sigterm); process.once('SIGBREAK', sigbreak)
+  let ramAbort: string | null = null
+  const ramAbortBytes = limits.ramAbortGib * GiB
+  const checkRam = () => {
+    const available = freemem()
+    minRamAvail[phase] = Math.min(minRamAvail[phase], available)
+    if (ramAbort === null && available < ramAbortBytes) {
+      ramAbort = `system RAM available ${(available / GiB).toFixed(1)} GiB < ${limits.ramAbortGib} GiB at ${el().trim()}`
+      console.log(`${el()} >>> RAM WATCHDOG ABORT: ${ramAbort}`)
+      if (!ctl.signal.aborted) ctl.abort(new Error(ramAbort))
+      void Promise.allSettled([...ownedBackends].map((backend) => backend.unloadModel()))
+    }
+  }
+  const watchdog = setInterval(checkRam, 500)
+  checkRam()
+  let runFailure: unknown = null
+  try {
+  ctl.signal.throwIfAborted()
+  for (let i = 0; await servers(ctl.signal) > 0; i++) {
     if (i >= 20) throw new Error('llama-server still running after 10 min')
     console.log(`${el()} llama-server already running (another worker) — waiting 30 s`)
-    await new Promise((r) => setTimeout(r, 30_000))
+    await delay(30_000, undefined, { signal: ctl.signal })
   }
   const vendor = join('vendor', BACKEND === 'hip' ? 'llama.cpp-hip' : 'llama.cpp')
   const probe = new LlamaCppBackend(vendor)
-  const [scanned, det, devs, infos] = await Promise.all([scanSystem(), probe.detect(), probe.listDevices(), findGgufModels([MODELS_DIR])])
+  const scannedPromise = scanSystem({
+    powershell: async (script) => {
+      const full = `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n$ProgressPreference = 'SilentlyContinue'\n${script}`
+      return (await osProbe('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(full, 'utf16le').toString('base64')], 30_000, ctl.signal)).stdout
+    },
+    exec: async (file, args) => (await osProbe(file, args, 8_000, ctl.signal)).stdout
+  })
+  const detectPromise = (async () => {
+    if (!existsSync(probe.exePath)) throw new Error(`runtime executable missing: ${probe.exePath}`)
+    const { stdout, stderr } = await osProbe(probe.exePath, ['--version'], 15_000, ctl.signal)
+    const version = /version:\s*(.+)/.exec(`${stdout}\n${stderr}`)?.[1]?.trim()
+    const tagFile = join(vendor, 'release-tag.txt')
+    const tag = existsSync(tagFile) ? readFileSync(tagFile, 'utf8').trim() : undefined
+    return { status: 'available' as const, version: [tag, version].filter(Boolean).join(' / ') || 'unknown' }
+  })()
+  const devicesPromise = osProbe(probe.exePath, ['--list-devices'], 30_000, ctl.signal).then(({ stdout, stderr }) => parseDevices(`${stdout}\n${stderr}`))
+  const [scanned, det, devs, infos] = await Promise.all([scannedPromise, detectPromise, devicesPromise, findGgufModels([MODELS_DIR])])
+  ctl.signal.throwIfAborted()
   // Same as main.ts withVramInUse: other-process VRAM measured at planning time (effective budget).
   const vr = await readVramInUse()
+  ctl.signal.throwIfAborted()
   const machine: SystemProfile = { ...scanned, vramInUse: vr
     ? { value: vr.bytes, status: 'available', source: `typeperf GPU Adapter Memory(luid_${vr.luid}_phys_0)\Dedicated Usage` }
     : { value: null, status: 'unavailable', source: 'typeperf GPU Adapter Memory', error: 'reading failed' } }
@@ -165,7 +215,6 @@ async function run(dump: SessionDump<Record<string, unknown>>): Promise<void> {
   }
   console.log(`${el()} runtime ${det.version}; device ${dev?.id} ${dev?.name}; models ${models.map((m) => `${m.name} (${m.layers}L, ctx ${m.ctxTrain})`).join(', ')}`)
 
-  const ctl = new AbortController()
   const events: SessionEvent[] = []
   let abortAt: number | null = null
   let abortScheduled = false
@@ -186,9 +235,11 @@ async function run(dump: SessionDump<Record<string, unknown>>): Promise<void> {
   const pidFile = join(tmpdir(), `lao-session-${scenario}.pid`)
   // --db <optimizer.db>: persist through the app's own storage (makeSessionStorage + planFor, as main.ts does), so the
   // session shows up in the app (Results / Dashboard) and resume/read-time reinterpretation work on it.
-  const git = (args: string[]) => { try { return execFileSync('git', args, { encoding: 'utf8', windowsHide: true }).trim() } catch { return null } }
+  const git = async (args: string[]) => { try { return (await osProbe('git', args, 5_000, ctl.signal)).stdout.trim() } catch { return null } }
   // Snapshots (git archive) have no .git: HEAD.txt records the commit.
-  const gitState = { head: git(['rev-parse', 'HEAD']) ?? (existsSync('HEAD.txt') ? readFileSync('HEAD.txt', 'utf8').trim() : null), dirty: (git(['status', '--porcelain']) ?? '').split('\n').filter(Boolean) }
+  const [gitHead, gitDirty] = await Promise.all([git(['rev-parse', 'HEAD']), git(['status', '--porcelain'])])
+  ctl.signal.throwIfAborted()
+  const gitState = { head: gitHead ?? (existsSync('HEAD.txt') ? readFileSync('HEAD.txt', 'utf8').trim() : null), dirty: (gitDirty ?? '').split('\n').filter(Boolean) }
   // Same planning as the runner / main.ts: planCandidates over the (Vulkan-only) backend with the learned per-process
   // budget observations, so the stored plan carries the configs the runner actually runs.
   const bk = vramBudgetKey(machine, BACKEND, det.version ?? null)
@@ -208,7 +259,6 @@ async function run(dump: SessionDump<Record<string, unknown>>): Promise<void> {
   if (dbPath) console.log(`${el()} persisting to ${dbPath}; vramInUse ${vr ? (vr.bytes / GiB).toFixed(2) + ' GiB' : 'unavailable'}`)
   const file = dump.path
   let rec: Recommendation | null = null
-  let ramAbort: string | null = null
   // File-backed: rewritten after every step/candidate/session event, so a killed job keeps what it measured.
   const save = () => {
     const unloadMs = abortAt !== null && cancelledAt !== null ? cancelledAt - abortAt : null
@@ -219,20 +269,16 @@ async function run(dump: SessionDump<Record<string, unknown>>): Promise<void> {
       events: events.filter((e) => e.type !== 'telemetry'), telemetryEvents: events.filter((e) => e.type === 'telemetry').length
     })
   }
-  // Self-abort when system RAM runs low (heavy runs on a 31 GB box).
-  const ramAbortBytes = limits.ramAbortGib * GiB
-  const watchdog = setInterval(() => {
-    minRamAvail[phase] = Math.min(minRamAvail[phase], freemem())
-    if (ctl.signal.aborted || freemem() >= ramAbortBytes) return
-    ramAbort = `system RAM available ${(freemem() / GiB).toFixed(1)} GiB < ${(ramAbortBytes / GiB).toFixed(1)} GiB at ${el().trim()}`
-    console.log(`${el()} >>> RAM WATCHDOG ABORT: ${ramAbort}`)
-    ctl.abort()
-  }, 500)
+  const makeBackend = () => {
+    const backend = new LlamaCppBackend(vendor, { pidFile })
+    ownedBackends.add(backend)
+    return wrap(backend)
+  }
   rec = await runSession(req, {
-    backend: () => wrap(new LlamaCppBackend(vendor, { pidFile })),
-    startSampler: (pid) => startSampler({ pid }),
+    backend: makeBackend,
+    startSampler: (pid) => { const sampler = startSampler({ pid }); ownedSamplers.add(sampler); return sampler },
     storage: appStorage ?? storage, machine, gpuDevice, backendKind: 'vulkan', runtimeVersion: det.version ?? null,
-    backends: [{ kind: BACKEND, backend: () => wrap(new LlamaCppBackend(vendor, { pidFile })), device: gpuDevice, runtimeVersion: det.version ?? null, exePath: join(vendor, 'llama-server.exe') }], models,
+    backends: [{ kind: BACKEND, backend: makeBackend, device: gpuDevice, runtimeVersion: det.version ?? null, exePath: join(vendor, 'llama-server.exe') }], models,
     clock: { now: () => Date.now() },
     readRamAvailableBytes: () => freemem(), // Windows: GlobalMemoryStatusEx ullAvailPhys = "Available"
     signal: ctl.signal,
@@ -255,10 +301,26 @@ async function run(dump: SessionDump<Record<string, unknown>>): Promise<void> {
     console.log(`${el()} ${short}`)
     if (e.type === 'step:done' || e.type === 'candidate:done' || e.type.startsWith('session:')) save()
   })
-  clearInterval(watchdog)
   save()
   const unloadMs = abortAt !== null && cancelledAt !== null ? cancelledAt - abortAt : null
-  console.log(`${el()} wall ${((Date.now() - t0) / 1000).toFixed(0)} s; abort→cancelled ${unloadMs ?? 'n/a'} ms; ram abort ${ramAbort ?? 'no'}; leftover llama-server ${servers()}; wrote ${file}`)
+  console.log(`${el()} wall ${((Date.now() - t0) / 1000).toFixed(0)} s; abort→cancelled ${unloadMs ?? 'n/a'} ms; ram abort ${ramAbort ?? 'no'}; wrote ${file}`)
+  } catch (e) { runFailure = e; throw e }
+  finally {
+    ctl.abort()
+    const cleanupErrors: unknown[] = []
+    for (const sampler of ownedSamplers) try { await sampler.stop() } catch (e) { cleanupErrors.push(e) }
+    for (const backend of ownedBackends) try { await backend.unloadModel() } catch (e) { cleanupErrors.push(e) }
+    try {
+      const left = await servers()
+      if (left > 0) cleanupErrors.push(new Error(`${left} llama-server.exe processes remain after session teardown`))
+      const samplers = await namedProcesses('typeperf.exe')
+      if (samplers > 0) cleanupErrors.push(new Error(`${samplers} typeperf.exe processes remain after session teardown`))
+    } catch (e) { cleanupErrors.push(e) }
+    clearInterval(watchdog)
+    process.off('SIGINT', sigint); process.off('SIGTERM', sigterm); process.off('SIGBREAK', sigbreak)
+    if (ramAbort) try { dump.checkpoint({ ...dump.current(), ramAbort }) } catch (e) { cleanupErrors.push(e) }
+    if (cleanupErrors.length) throw new AggregateError(runFailure === null ? cleanupErrors : [runFailure, ...cleanupErrors], 'session process teardown could not be verified')
+  }
 }
 
 async function main(): Promise<void> {
