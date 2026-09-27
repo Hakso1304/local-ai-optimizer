@@ -7,21 +7,21 @@ Status: prepared, not run. GPU owner: Opus #3 until explicit handoff. The stage 
 - Use a fresh `git archive` of a committed HEAD that includes `b868e3a` and the required S1 source fixes. Record the full HEAD hash in each result. Never run from the shared mutable worktree.
 - Confirm zero `llama-server.exe` and zero `run-session` / `ab-spill` harness processes, no other GPU owner, at least 4 GiB RAM available, and idle adapter use near the clean-host baseline (about 1.1–1.2 GiB). Record the observed value, including a higher value if the host is busy.
 - Reject every casing of `GGML_CUDA_ENABLE_UNIFIED_MEMORY` in the parent environment. The child environment must also omit every casing. All child processes use `windowsHide: true`.
-- Use `--request-cap-ms 300000 --ram-abort-gib 4 --quality-mode thorough`. Keep the same explicit `--quality-seed 20260928` in all three sessions so the 13 generated qb-2.0.0 items are identical. Each T=1 config has three samples per item.
+- Use `--request-cap-ms 300000 --ram-abort-gib 4 --quality-mode thorough`. Keep the agreed explicit `--quality-seed 424242` in all three sessions so the 13 generated qb-2.0.0 items are identical. Each T=1 config has three samples per item.
 - Run Gemma first. Run Qwen off/low/medium next, then off/xhigh. `genConfigsFor` caps a session at three configs. The second off is the within-session template comparator required to establish `appliedTemplateKwargs` for xhigh [I-8.0]. Compare Qwen sessions only after checking suite, seed, template hash, model fingerprint, runtime, context, token budget and accepted sampling.
-- `--pin` is not used here. If a later sweep uses it, its cloned planning estimates are experiment metadata, not calibrated planner limits [I-4.0].
+- Pin the known clean 8K placements: Gemma-4 `ngl19` and Qwen3.8 `ngl49`. `--max-per-model 1` without pins could select a degraded full-GPU candidate and leave quality unrun. The pin's cloned planning estimates are experiment metadata, not calibrated planner limits [I-4.0].
 
 ## Commands from the immutable snapshot
 
 ```powershell
 $db = Join-Path $env:APPDATA 'local-ai-optimizer-dev\optimizer.db'
-$cap = @('--request-cap-ms','300000','--ram-abort-gib','4','--quality-mode','thorough','--quality-seed','20260928','--db',$db)
+$cap = @('--request-cap-ms','300000','--ram-abort-gib','4','--quality-mode','thorough','--quality-seed','424242','--db',$db)
 
-npx tsx scripts/run-session.ts H --workload coding --heavy --ladder 8192 --max-per-model 1 --models gemma-4-26B-A4B-it-UD-Q4_K_M @cap --gen-configs '[{"id":"off","thinking":false,"temperature":1,"topP":0.95,"topK":64,"source":"model-card"},{"id":"think","thinking":true,"temperature":1,"topP":0.95,"topK":64,"source":"model-card"}]'
+npx tsx scripts/run-session.ts H --workload coding --heavy --ladder 8192 --models gemma-4-26B-A4B-it-UD-Q4_K_M --pin '[{"model":"gemma","ngl":19}]' @cap --gen-configs '[{"id":"off","thinking":false,"temperature":1,"topP":0.95,"topK":64,"source":"model-card"},{"id":"think","thinking":true,"temperature":1,"topP":0.95,"topK":64,"source":"model-card"}]'
 
-npx tsx scripts/run-session.ts H --workload coding --heavy --ladder 8192 --max-per-model 1 --models Qwen3.8-27B-UD-Q4_K_M @cap --gen-configs '[{"id":"off","thinking":false,"temperature":1,"topP":0.95,"topK":20,"minP":0,"source":"model-card"},{"id":"low","thinking":true,"effort":"low","temperature":1,"topP":0.95,"topK":20,"minP":0,"source":"model-card"},{"id":"medium","thinking":true,"effort":"medium","temperature":1,"topP":0.95,"topK":20,"minP":0,"source":"model-card"}]'
+npx tsx scripts/run-session.ts H --workload coding --heavy --ladder 8192 --models Qwen3.8-27B-UD-Q4_K_M --pin '[{"model":"Qwen3.8","ngl":49}]' @cap --gen-configs '[{"id":"off","thinking":false,"temperature":1,"topP":0.95,"topK":20,"minP":0,"source":"model-card"},{"id":"low","thinking":true,"effort":"low","temperature":1,"topP":0.95,"topK":20,"minP":0,"source":"model-card"},{"id":"medium","thinking":true,"effort":"medium","temperature":1,"topP":0.95,"topK":20,"minP":0,"source":"model-card"}]'
 
-npx tsx scripts/run-session.ts H --workload coding --heavy --ladder 8192 --max-per-model 1 --models Qwen3.8-27B-UD-Q4_K_M @cap --gen-configs '[{"id":"off","thinking":false,"temperature":1,"topP":0.95,"topK":20,"minP":0,"source":"model-card"},{"id":"xhigh","thinking":true,"effort":"xhigh","temperature":1,"topP":0.95,"topK":20,"minP":0,"source":"model-card"}]'
+npx tsx scripts/run-session.ts H --workload coding --heavy --ladder 8192 --models Qwen3.8-27B-UD-Q4_K_M --pin '[{"model":"Qwen3.8","ngl":49}]' @cap --gen-configs '[{"id":"off","thinking":false,"temperature":1,"topP":0.95,"topK":20,"minP":0,"source":"model-card"},{"id":"xhigh","thinking":true,"effort":"xhigh","temperature":1,"topP":0.95,"topK":20,"minP":0,"source":"model-card"}]'
 ```
 
 Leave at least 60 seconds idle between sessions. Record every session ID and dump path. If a RAM or request abort occurs, keep the partial dump and identify the incomplete config; do not turn missing items into failures [I-5.7].
