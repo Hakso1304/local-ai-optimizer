@@ -5,7 +5,7 @@
 |---|---|---|---|
 | 1. Coding heavy resume | app DB session 3; HEAD 3e7183f; vramInUse 1.13 GiB; 876 s | 14B / Gemma-4 / Qwen3.8, thinking off, qb-2.0.0 thorough | DONE — see §2; `--cache-ram 0` confirmed (min RAM 8.0 GiB vs 4–5 GiB before) |
 | 2. VRAM ceiling A/B | scripts/ab-spill (S3 repaired), 5 cases | 8B f16 -c 64K: A1 36.6K prompt, A2 49.2K, B1b after a q8_0 128K load, B2 -ub 256 | DONE (scoped) — per-PID dedicated peak **11.60 GiB in every case** (11.51 with -ub 256) while the adapter still had ≈3 GiB free; raw shared flat 1.32–1.36 GiB from load. The ceiling does not depend on prompt fill, prior placement or ubatch → per-process/allocation-pattern limit of this driver+Vulkan backend, not adapter exhaustion. No capacity/spill claim (pinned-vs-spill undecidable until the baseline definition is settled) |
-| 3a. Gemma-4 gen sweep | session 4; 360 quality rows (off/think × 60 items × 3 samples); seed 424242; ngl19 @8K; T1/top_k 64 | thinking off vs on | DONE — paired difference think − off = **+3 [−3, +11]** (includes 0) → no established benefit; "off" kept. Caveat: min_p unset (runtime ≈0.05); reasoning-token split unusable |
+| 3a. Gemma-4 gen sweep | session 4; 360 quality rows (off/think × 60 items × 3 samples); seed 424242; ngl19 @8K; both at T1/top_p 0.95/top_k 64 | thinking off vs on | DONE — stored Q 92 [82, 100] (off, cluster bootstrap, 3 samples) vs think Q 95 at an effective 2.5 t/s; paired difference think − off = **+3 [−3, +11]** (includes 0) → "the lower effort is kept"; decode @8K 28.4 t/s. Caveat: min_p unset (runtime ≈0.05); reasoning-token split unusable |
 | 3b. Qwen3.8 gen sweep | session 5 (running under S3 lease); off/low/medium; ngl49 @8K; T1/top_k 20/min_p 0; seed 424242; 540 rows expected | 8K ladder passed ≈10 t/s, TTFT 8.6 s | RUNNING |
 | 3c. Qwen3.8 xhigh | — | held | PENDING |
 | 4–5. HIP device check + Vulkan-vs-HIP A/B | vendor/llama.cpp-hip b11208 | held | PENDING (decisive for the 11.6 GiB ceiling question) |
@@ -16,10 +16,10 @@
 ## 2. Recommendations per workload (interp-2, measured quality)
 | Workload | Winner | decode t/s | Q [lo, hi] | why | provisional? |
 |---|---|---|---|---|---|
-| large_coding @128K (session 1, 8B) | **none** | — | 42/60 | [I-2.5] largest clean context 64K < required 128K (spill); q8_0 KV reaches 128K only degraded (26 t/s, TTFT 62 s) | n/a (no eligible) |
-| coding, heavy (session 3) | **Qwen2.5-14B f16 @16K** | 54.4 | 86 [70, 94] | full offload, clean to 16K; 32K guard_abort (3.0 GiB spill stored) | no |
-| — runner-up | Qwen3.8-27B ngl49 | 10.5 @8K | 96 [83, 99] | provisional: unmatched rung (spilled 0.50 GiB at 16K); ngl45 clean to 32K at 8.3 t/s @16K | yes |
-| — runner-up | Gemma-4-26B-A4B ngl19 | 31.0 @4K … 17.9 @32K | 93 [79, 98] | clean, 10.5–11.0 GiB, no spill; 32K rep spread 44 % | no (Q band overlaps 14B/Qwen) |
+| large_coding @128K (session 1, 8B) | **none** | — | 67 [51, 79] (n=40 items; 2 truncations at 256 tokens; raw 42/60 passes) | [I-2.5] largest clean context 64K < required 128K (spill); q8_0 KV reaches 128K only degraded (26.4 t/s, TTFT 61.7 s); recommendedCtx q8_0 64K, f16 32K | n/a (no eligible) |
+| coding, heavy (session 3) | **Qwen2.5-14B f16 @16K** | 54.4 (TTFT 6.35 s) | 86 [70, 94] | full offload, clean to 16K; 32K guard_abort — reason text 3.0 GiB, raw shared 3.05 GiB, but the stored adjusted value is 0.00 (pre-fix row reused by the resume, not re-run) | no |
+| — runner-up | Qwen3.8-27B ngl49 | 10.5 @4K / 10.1 @8K | 96 [83, 99] | provisional: unmatched rung (spilled 0.50 GiB at 16K, raw 4.76); ngl45 clean to 32K (7.5 t/s) but 8.3 t/s @16K fails the Coding gate [I-3.1] | yes |
+| — runner-up | Gemma-4-26B-A4B ngl19 | 31.0 @4K … 17.9 @32K | 93 [79, 98] | clean, 10.5–11.0 GiB, no spill; 32K rep spread 44 % [I-6.1]; gate failure [I-3.3] TTFT 15.9 s at the 16K scoring rung; genSpeed/latency/prefill undecided (unmatched prompt: Gemma tokenizer 12,294 vs 9,152 tokens at 16K); recCtx 8K; ngl23 has no clean rung | **yes** (confirmed:false) |
 
 Quality bands overlap between the three (14B 86, Gemma 93, Qwen 96, all ±≈10) → per I-5.2 quality is not decisive on a 60-item suite; speed and context decided Coding.
 
@@ -30,6 +30,7 @@ Quality bands overlap between the three (14B 86, Gemma 93, Qwen 96, all ±≈10)
 - **Thinking / effort / temperature?** Gemma-4 (session 4): no measurable benefit from thinking (+3 [−3, +11]; both sides' kwargs applied, same template hash). Qwen3.8 (session 5, off/low/medium): rows were generated before per-row render proof existed (RECHECK5 P1), and a proof cannot be reconstructed for a row whose original prompt hash was never stored — so session 5's effort comparison is **not evaluable** (disclosed as 'reconstructed'). The citable Qwen data comes from a re-run on the fixed producer (off/low/medium/xhigh, same seed) scheduled next on the lane.
 
 ## 4. Engine conformance
+- Every stored run/recommendation in sessions 1–5 records rules interp-2, bench-1.0.0, ladder-2, qb-2.0.0, runtime b11208 85ca3b52c (no git commit in the DB; harness HEADs from the calibration log: session 3 3e7183f, session 4 6bac783). Rec 6 carries [I-6.2] mixed runtime labels (bare vs 'vulkan:' prefix, same build). Session 2 is a stale 'running' row with 0 runs.
 - Rules `interp-2` through the overnight fixes (O1–O9 closed: b02096f, e1ea388; comparator/token-provenance/per-key template proof: 7166792, 70c5c9e, 842d396) with S2 negative tests; Astra's last verdict (docs/review-w4o) preceded these — a fresh re-check is due once the lane is idle.
 - One regression found at 03:40 (interp2-rereview G08: fixture lacked the new per-key template proof) → fixed in 3dd8a48 (fixture proof added, rule unchanged); Astra RECHECK5 (docs/review-w4p): O1–O9 closed; new P1 HIGH — the per-key template proof was broadcast from the first item to all rows, so effort/thinking attributions are unproved until rows are re-proven per prompt (S1 tool; S3 runs it on session 5 before xhigh); P2 seed acceptance; P3 malformed proof.
 - Release gate: docs/RELEASE-GATE.md (9252667) — every item must cite a commit/output; release notes: CHANGELOG.md (0209597).
