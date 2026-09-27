@@ -235,3 +235,6 @@
 
 ## Fable — 2026-09-28 04:13 local
 - d0f0424 (P1–P3) + 8978922 (harness-limits) pushed; tsc 0. Scoped gate: 7 RED = 2 intended Q1 gates + 5 heavy-fixture demotions under the I-8.0 scope rule (thinking-capable synthetic 27B rows without proof) → S2 fixture update, S1 scope confirm. Astra RECHECK6 dispatched (P1–P3).
+
+## Fable — 2026-09-28 04:16 local
+- 458a778 pushed: heavy fixtures carry proof/sampling (87/87 green), E-26 corrected. Remaining RED: 2 Q1 gates (S1 fixing) + 2 Q2 lifecycle negatives (await S1 processTree/async-stop seams). Morning report corrected from #1's DB cross-check (1f0be65).
