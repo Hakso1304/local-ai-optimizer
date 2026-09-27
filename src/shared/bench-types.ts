@@ -312,6 +312,8 @@ export interface BenchmarkRunResult {
   peakSharedGpuRawBytes?: Metric
   /** Host-side model/KV/compute buffers from the load log (Vulkan_Host, CPU, CPU_Mapped without mmap). */
   hostPinnedBytes?: Metric
+  /** First-rung shared residual subtracted from adjusted spill on this config; its cause is unverified. */
+  baselineAbsorbedBytes?: Metric
   /** Per-PID private working set peak (excludes mmap file cache). */
   peakRamBytes: Metric
   /** Decode-window averages (load phase excluded). */

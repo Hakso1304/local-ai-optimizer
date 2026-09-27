@@ -221,6 +221,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   }))
   let cur = states[0]
   const stateOf = (c: CandidateConfig) => states.find((s) => s.kind === (c.backend ?? 'vulkan'))
+    ?? (deps.backends === undefined && deps.backendKind === 'cpu' && c.backend === undefined && c.gpuLayers === 0 ? states.find((s) => s.kind === 'cpu') : undefined)
   const machine = states[0].machine // adapter/RAM facts are backend-independent; budget + device come from `cur`
   const vramTotal = val(machine.vramBytes, true)
   /** Per-PID shared − host-pinned − the config's unsaturated baseline (not the saturation-gated spill metric). */
@@ -478,7 +479,9 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       const explicit = !!req.ladder && (!required || Math.max(...req.ladder) >= required)
       const steps = cand.ctxSteps.filter((c) => (!required || c <= required) && (!explicit || req.ladder!.includes(c)))
       const runs: BenchmarkRunResult[] = []
-      let spillBase = 0 // shared level of the config's first step when VRAM was not saturated (not spill)
+      let spillBase = 0 // first-rung residual subtracted from later shared readings; its cause is unverified
+      let spillBaseKnown = false
+      const absorbed = (): Metric => ({ value: spillBase, kind: 'measured', source: 'first-rung per-PID shared minus host-pinned, subtracted as baseline; cause unverified' })
       let degradedRun = 0
       let stopReason: string | null = null
 
@@ -492,16 +495,20 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         } else {
           let out = await runStep(cand, model, ctx, spillBase)
           checkStuck()
-          // Establish a benign first-rung baseline before retry, verdict, or budget learning.
+          // Record the first-rung residual subtracted by the heuristic before retry, verdict, or budget learning.
           // The first step is the only place a config can define this baseline (I-4.0).
           if (runs.length === 0) {
             const raw = val(out.run.peakSharedGpuRawBytes)
             const pin = val(out.run.hostPinnedBytes) ?? 0
-            if (raw !== null && raw - pin < DEFAULT_SCORING_CONFIG.cliff.rawSharedGrowthBytes) {
-              spillBase = Math.max(0, raw - pin)
-              out.run.peakSharedGpuBytes = { value: 0, kind: 'measured', source: `per-PID shared − host-pinned − benign first-rung baseline ${(spillBase / GiB).toFixed(2)} GiB (I-4.0)` }
+            if (raw !== null) {
+              spillBaseKnown = true
+              if (raw - pin < DEFAULT_SCORING_CONFIG.cliff.rawSharedGrowthBytes) {
+                spillBase = Math.max(0, raw - pin)
+                out.run.peakSharedGpuBytes = { value: 0, kind: 'measured', source: `per-PID shared minus host-pinned minus first-rung baseline ${(spillBase / GiB).toFixed(2)} GiB (I-4.0; cause unverified)` }
+              }
             }
           }
+          if (spillBaseKnown) out.run.baselineAbsorbedBytes = absorbed()
           // I-2.8 evidence step: shared residency (per-PID shared − pinned − baseline, not the saturation-gated metric)
           // after a successful measured request → restart the server once and re-measure BEFORE any spill verdict or
           // learning. No budget decides this: the retry is how placement and capacity are told apart.
@@ -522,6 +529,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
             checkStuck()
             out = await runStep(cand, model, ctx, spillBase)
             checkStuck()
+            if (spillBaseKnown) out.run.baselineAbsorbedBytes = absorbed()
             out.run.placementRetry = true
             out.run.placementFirst = { peakVramBytes: first.peakVramBytes, peakSharedGpuBytes: first.peakSharedGpuBytes, ...(first.peakSharedGpuRawBytes ? { peakSharedGpuRawBytes: first.peakSharedGpuRawBytes } : {}), ...(first.adapterFreeAtSharedPeakBytes ? { adapterFreeAtSharedPeakBytes: first.adapterFreeAtSharedPeakBytes } : {}), decodeTps: first.decodeTps }
           }
@@ -569,11 +577,19 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
           if (out.detail.reason) log(run.status === 'pass' ? 'warn' : 'error', `${cand.id} @${ctx}: ${out.detail.reason}`)
         }
         runs.push(run)
-        if (runs.length === 1 && spillBase === 0) {
-          const raw = val(run.peakSharedGpuRawBytes) ?? val(run.peakSharedGpuBytes), pin = val(run.hostPinnedBytes) ?? 0, ded = val(run.peakVramBytes)
-          // Benign baseline: the config's first-rung residual when it is below the raw-growth threshold (budget-independent).
-          void ded
-          if (raw !== null && raw - pin < DEFAULT_SCORING_CONFIG.cliff.rawSharedGrowthBytes) spillBase = Math.max(0, raw - pin)
+        if (runs.length === 1) {
+          const recorded = val(run.baselineAbsorbedBytes)
+          if (recorded !== null) {
+            spillBase = recorded
+            spillBaseKnown = true
+          } else {
+            const raw = val(run.peakSharedGpuRawBytes) ?? val(run.peakSharedGpuBytes), pin = val(run.hostPinnedBytes) ?? 0
+            // Infer a legacy row's baseline only for future steps; leave stored rows untouched.
+            if (raw !== null) {
+              spillBaseKnown = true
+              if (raw - pin < DEFAULT_SCORING_CONFIG.cliff.rawSharedGrowthBytes) spillBase = Math.max(0, raw - pin)
+            }
+          }
         }
         const verdict = detectCliffs(runs, vramTotal).steps.find((s) => s.ctx === ctx)!.verdict
         send({ type: 'step:done', configId: cand.id, ctx, result: run, verdict })

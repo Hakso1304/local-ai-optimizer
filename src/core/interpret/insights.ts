@@ -126,12 +126,17 @@ export function interpret(v: Verdicts): Insight[] {
       const clean = c.cs.cliff.spillFreeUpTo
       const single = ' — one peak per rung, sample count not recorded: provisional'
       const act = clean ? action('use-context', fmtCtx(clean)) : c.input.config.kvType === 'f16' ? action('enable-kv-q8') : action('inspect-diagnostics')
+      const baselineMetric = runs.find((r) => r.baselineAbsorbedBytes)?.baselineAbsorbedBytes
+      const baseline = baselineMetric && val(baselineMetric) !== null
+        ? `; ${gib(val(baselineMetric)!)} first-rung shared residual was subtracted as baseline (cause unverified)`
+        : '; first-rung baseline absorption was not recorded'
+      const baselineEvidence = baselineMetric ? [ev('baselineAbsorbedBytes', baselineMetric, runs[0]?.ctx, id(c))] : []
       if (spill.metric === 'peakSharedGpuRawBytes') {
-        push('ctx.spill', tag('ctx.spill', `${id(c)}: raw shared-GPU usage (host-pinned excluded) grew +${gib(spill.to!)} at ${fmtCtx(spill.toCtx)} vs ${spill.fromCtx ? fmtCtx(spill.fromCtx) : 'the previous rung'} — above the ${gib(v.cfg.cliff.rawSharedGrowthBytes)} growth rule (raw-growth-1); ${adjustedText(runs[i]?.peakSharedGpuBytes)}${delta}${single}.`),
-          [num('peakSharedGpuRawBytes', spill.to, 'measured', spill.toCtx, id(c), { algorithm: 'raw-growth-1' })], { configId: id(c), action: act })
+        push('ctx.spill', tag('ctx.spill', `${id(c)}: raw shared-GPU usage (host-pinned excluded) grew +${gib(spill.to!)} at ${fmtCtx(spill.toCtx)} vs ${spill.fromCtx ? fmtCtx(spill.fromCtx) : 'the previous rung'} — above the ${gib(v.cfg.cliff.rawSharedGrowthBytes)} growth rule (raw-growth-1); ${adjustedText(runs[i]?.peakSharedGpuBytes)}${delta}${single}${baseline}.`),
+          [num('peakSharedGpuRawBytes', spill.to, 'measured', spill.toCtx, id(c), { algorithm: 'raw-growth-1' }), ...baselineEvidence], { configId: id(c), action: act })
       } else {
-        add('ctx.spill', { config: id(c), threshold: gib(v.cfg.cliff.sharedSpillBytes), ctx: fmtCtx(spill.toCtx), spill: gib(spill.to!), delta, single },
-          [num('peakSharedGpuBytes', spill.to, 'measured', spill.toCtx, id(c), { algorithm: 'adjusted-spill' })], { configId: id(c), action: act })
+        add('ctx.spill', { config: id(c), threshold: gib(v.cfg.cliff.sharedSpillBytes), ctx: fmtCtx(spill.toCtx), spill: gib(spill.to!), delta, single, baseline },
+          [num('peakSharedGpuBytes', spill.to, 'measured', spill.toCtx, id(c), { algorithm: 'adjusted-spill' }), ...baselineEvidence], { configId: id(c), action: act })
       }
     }
     // I-2.8 placement spill (heuristic): shared residency while ≥ 1 GiB dedicated was free in the SAME window
@@ -142,7 +147,8 @@ export function interpret(v: Verdicts): Insight[] {
     const firstRung = c.input.runs[0]
     const firstRaw = firstRung?.peakSharedGpuRawBytes ? val(firstRung.peakSharedGpuRawBytes) : null
     const firstPin = firstRung?.hostPinnedBytes ? val(firstRung.hostPinnedBytes) ?? 0 : 0
-    const baseline = firstRaw !== null && firstRaw - firstPin < v.cfg.cliff.rawSharedGrowthBytes ? Math.max(0, firstRaw - firstPin) : 0
+    const baseline = val(firstRung?.baselineAbsorbedBytes)
+      ?? (firstRaw !== null && firstRaw - firstPin < v.cfg.cliff.rawSharedGrowthBytes ? Math.max(0, firstRaw - firstPin) : 0)
     const resident = (x: { peakSharedGpuRawBytes?: Metric; peakSharedGpuBytes: Metric }, pin: number) => { const raw = x.peakSharedGpuRawBytes ? val(x.peakSharedGpuRawBytes) : null; return raw === null ? val(x.peakSharedGpuBytes) : Math.max(0, raw - pin - baseline) }
     const over = (x: number | null) => x !== null && x > v.cfg.cliff.sharedSpillBytes
     for (const r of c.input.runs) {
@@ -158,7 +164,7 @@ export function interpret(v: Verdicts): Insight[] {
       const outcome = unknown
         ? ' — re-measured after a fresh restart, but that attempt had no shared-memory reading: cause unknown (placement or capacity); re-measure this rung'
         : first
-          ? `; it cleared after a fresh restart (${gib(shN!)} shared, decode ${dec(r.decodeTps)} vs ${dec(first.decodeTps)} t/s before) — driver placement after a previous large load, not a capacity limit`
+          ? `; it cleared after a fresh restart (${gib(shN!)} shared, decode ${dec(r.decodeTps)} vs ${dec(first.decodeTps)} t/s before) — cause unknown (likely a host-visible buffer)`
           : ' — not re-measured: cause unconfirmed (driver placement or capacity); restart the runtime and re-measure this rung'
       add('ctx.placement-spill', { config: id(c), ctx: fmtCtx(r.ctx), shared: gib(sh0!), free: gib(fr), outcome },
         [ev('peakSharedGpuRawBytes', ev0.peakSharedGpuRawBytes ?? ev0.peakSharedGpuBytes, r.ctx, id(c)), ev('adapterFreeAtSharedPeakBytes', ev0.adapterFreeAtSharedPeakBytes!, r.ctx, id(c))],
