@@ -139,3 +139,8 @@
 ## Astra - 2026-09-28T02:59:52 local - Qwen effort-proof gate
 - S1 executed CPU fake runner: off rendersA, low/medium bothB (effort ignored), yet all51quick rows acquired appliedTemplateKwargs and trace called both thinking options comparable. Off remained chosen only due tied fake quality. I-8.0 gap reproduced; Qwen remains HOLD.
 - Assigned S1 controlled per-key applyTemplate counterfactuals on same first prompt, preserving other kwargs and using known alternate effort values; absent/identical/error proof stays not-evaluable. S2 owns negatives/positive controls incl off/xhigh and probe failure. No new generation run for template-only proof. Active Gemma has only on/off toggle and stays untouched.
+
+## Astra - 2026-09-28T03:10:20 local - effort-proof acceptance
+- Pushed842d396 plus1c9d62c/06cdfcf. Independent183/183 scoped tests pass; S1 tsc/diff clean. Same-item one-key counterfactual hashes/status saved, absent/unchanged/error effort proof not evaluable, first-item-error retry compares current item, cancellation/guard checked before probes. No extra generation requests.
+- Read-time multi-key effort requires valid per-key proof; legacy sole enable_thinking marker may still stand with full other contract. Historical rows untouched. Proof establishes one successful item per config, not all template branches.
+- S3 may prepare CPU-only fresh Qwen off/low/medium archive including fixes; hardware remains held until Gemma teardown/export review and60s idle/fresh safety preflight. xhigh/HIP separate holds. Gemma think continues PID15112, no reported abort; latest observed RAM dipped8.90GiB, above4GiB floor.
