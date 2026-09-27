@@ -27,7 +27,7 @@ const machine: SystemProfile = {
 }
 
 /** Per-ctx script: load failure, prompt failure, or rates. hook runs inside the measured prompt. */
-interface Step { hostMiB?: number; load?: 'oom' | 'drift' | 'slow'; prompt?: 'device_lost' | 'timeout'; warmupBlocks?: boolean; decode?: number; prefill?: number; hook?: () => void }
+interface Step { noTimings?: boolean; hostMiB?: number; load?: 'oom' | 'drift' | 'slow'; prompt?: 'device_lost' | 'timeout'; warmupBlocks?: boolean; decode?: number; prefill?: number; hook?: () => void }
 
 function fakeBackend(script: (ctx: number, cfg: LoadConfig) => Step) {
   let ctx = 0
@@ -70,6 +70,7 @@ function fakeBackend(script: (ctx: number, cfg: LoadConfig) => Step) {
         return { ...base, ttftMs: null, prefillTps: null, decodeTps: null, totalMs: 5, timedOut: false, error: 'server exited (device_lost)' }
       }
       if (isMeasured && s.prompt === 'timeout') return { ...base, ttftMs: null, prefillTps: null, decodeTps: null, totalMs: 5, timedOut: true, error: 'timed out' }
+      if (s.noTimings) return { ...base, promptTokens: null, prefillMs: null, decodeTokens: null, decodeMs: null, streamedTokens: 100, ttftMs: 1000, prefillTps: null, decodeTps: null, totalMs: 3000, timedOut: false, error: null } as PromptResult
       return { ...base, ttftMs: 100 + ctx / 10, prefillTps: s.prefill ?? 3000, decodeTps: s.decode ?? 90, totalMs: 2000, timedOut: false, error: null }
     },
     async applyTemplate(m, opts) { calls.templates++; calls.templateOpts.push(opts); return m.map((x) => x.content).join('\n') },
@@ -83,12 +84,12 @@ const sample = (ctx: number): TelemetrySample => ({
   procRamPrivateBytes: GiB, procVramDedicatedBytes: 5 * GiB + ctx * 131072, procVramSharedBytes: 10 * 1024 ** 2
 })
 
-function memStorage(seed: BenchmarkRunResult[] = []) {
+function memStorage(seed: BenchmarkRunResult[] = [], seedQuality: { modelId: string; configId: string; ctx: number; results: QualityResult[] }[] = []) {
   const s = {
     status: [] as string[],
     runs: [...seed] as BenchmarkRunResult[],
     details: [] as RunDetail[],
-    quality: [] as { modelId: string; configId: string; ctx: number; results: QualityResult[] }[],
+    quality: [...seedQuality] as { modelId: string; configId: string; ctx: number; results: QualityResult[] }[],
     recs: [] as Recommendation[]
   }
   const storage: SessionStorage = {
@@ -105,9 +106,9 @@ function memStorage(seed: BenchmarkRunResult[] = []) {
 
 const passAll: SessionDeps['evaluate'] = async (t) => ({ testId: t.id, category: t.category, weight: t.weight, pass: true, score: 1, detail: '' })
 
-async function run(script: (ctx: number, cfg: LoadConfig) => Step, req: Partial<SessionRequest> = {}, extra: Partial<SessionDeps> = {}, seed: BenchmarkRunResult[] = []) {
+async function run(script: (ctx: number, cfg: LoadConfig) => Step, req: Partial<SessionRequest> = {}, extra: Partial<SessionDeps> = {}, seed: BenchmarkRunResult[] = [], seedQuality: Parameters<typeof memStorage>[1] = []) {
   const backend = fakeBackend(script)
-  const { s, storage } = memStorage(seed)
+  const { s, storage } = memStorage(seed, seedQuality)
   const events: SessionEvent[] = []
   let t = 0
   const rec = await runSession(
@@ -405,6 +406,90 @@ describe('runSession', () => {
     const r = await run((ctx) => (ctx === 131072 ? { load: 'oom' } : {}), { workload: 'long_context_coding', requiredContext: 131072, runQuality: true }, { models: [m] })
     expect(r.s.quality[0].results.some((x) => x.testId === 'CR-04-long')).toBe(false)
     expect(r.rec?.reasons.some((x) => /^Long-context needle CR-04-long at 128K skipped for .*: practical context 64K < 128K$/.test(x))).toBe(true)
+  })
+
+  it('F2: every loadModel gets the session signal (cancel during load is immediate)', async () => {
+    const ac = new AbortController()
+    const { backend } = await run(() => ({}), { ladder: [2048], runQuality: true }, { signal: ac.signal })
+    expect(backend.calls.loads.length).toBeGreaterThan(1) // ladder + quality
+    expect(backend.calls.loads.every((l) => l.signal === ac.signal)).toBe(true)
+  })
+
+  it('F3: the RAM guard reads OS free RAM on its own — no typeperf rows needed — and fails safe when blind', async () => {
+    const tiny = { ...model, fileBytes: 100 * 1024 ** 2 }
+    const noRows = { startSampler: () => ({ samples: [], unavailable: {}, stop: () => [] }), config: { guardPollMs: 5 }, models: [tiny] }
+    let ref: ReturnType<typeof fakeBackend> | null = null
+    const low = await run(() => ({ load: 'slow' }), { ladder: [2048] }, {
+      ...noRows, backend: () => (ref = fakeBackend(() => ({ load: 'slow' }))), readRamAvailableBytes: () => (ref!.pid !== undefined ? 1 * GiB : 20 * GiB)
+    })
+    expect(low.s.runs[0]).toMatchObject({ status: 'fail', failureKind: 'guard_abort' })
+    expect(low.s.details[0].reason).toBe('RAM available 1.0 GiB (OS) fell below the floor')
+    const blind = await run(() => ({ load: 'slow' }), { ladder: [2048] }, { ...noRows, readRamAvailableBytes: () => { throw new Error('no counter') } })
+    expect(blind.s.runs[0]).toMatchObject({ status: 'fail', failureKind: 'guard_abort' })
+    expect(blind.s.details[0].reason).toMatch(/^RAM guard inputs unreadable/)
+  })
+
+  it('F1: the quality phase is guarded — RAM falling below the floor during the suite discards it', async () => {
+    const tiny = { ...model, fileBytes: 100 * 1024 ** 2 }
+    let ref: ReturnType<typeof fakeBackend> | null = null
+    const r = await run(() => ({}), { ladder: [2048], runQuality: true }, {
+      models: [tiny], config: { guardPollMs: 5 }, backend: () => (ref = fakeBackend(() => ({}))),
+      readRamAvailableBytes: () => (ref!.calls.loads.length >= 2 && ref!.pid !== undefined ? 1 * GiB : 20 * GiB) // low only once the quality load is up
+    })
+    expect(r.s.runs[0].status).toBe('pass')
+    expect(r.s.quality).toEqual([]) // incomplete suite is never stored
+    expect(r.events.some((e) => e.type === 'log' && /fell below the floor during quality suite/.test(e.msg))).toBe(true)
+  })
+
+  it('F5: resume reuses stored quality only when it is the complete current suite', async () => {
+    const first = await run(() => ({}), { ladder: [2048], runQuality: true })
+    const stored = first.s.quality[0]
+    expect(stored.results).toHaveLength(17)
+    const resume = (q: typeof first.s.quality) => run(() => ({}), { ladder: [2048], runQuality: true, resumeSessionId: 's1' }, {}, first.s.runs, q)
+    const full = await resume([stored])
+    expect(full.backend.calls.templates).toBe(0) // complete + same suite → reused
+    const partial = await resume([{ ...stored, results: stored.results.slice(0, 1) }])
+    expect(partial.backend.calls.templates).toBe(17) // incomplete → re-run
+    const legacy = await resume([{ ...stored, results: stored.results.map(({ ...r }) => { delete (r as { suite?: string }).suite; return r }) }])
+    expect(legacy.backend.calls.templates).toBe(17) // no suite version → re-run
+  })
+
+  it('F12: without llama timings, TPS are estimated from the streamed-token count and the prompt size', async () => {
+    const { s } = await run(() => ({ noTimings: true }), { ladder: [2048] })
+    expect(s.runs[0].decodeTps).toMatchObject({ value: 50, kind: 'estimated' }) // 100 tokens / (3000 − 1000) ms
+    expect(s.runs[0].prefillTps).toMatchObject({ value: 1536, kind: 'estimated' }) // 0.75 × 2048 tokens / 1 s
+    expect(s.runs[0].status).toBe('pass')
+  })
+
+  it('a fatal unload error (ServerStuckError) is a hard session stop: session:failed, no further loads, no cleanup unload', async () => {
+    let ref: ReturnType<typeof fakeBackend> | null = null
+    let unloadsAfterStuck = 0
+    let stuck = false
+    const r = await run(() => ({}), {}, {
+      backend: () => {
+        const b = (ref = fakeBackend(() => ({})))
+        const orig = b.unloadModel.bind(b)
+        b.unloadModel = async () => {
+          if (stuck) { unloadsAfterStuck++; return }
+          if (b.pid === 1000 + 4096) { stuck = true; throw Object.assign(new Error('llama-server pid 5096 still alive after taskkill /F'), { fatal: true }) }
+          return orig()
+        }
+        return b
+      }
+    })
+    expect(r.rec).toBeNull()
+    expect(r.events.at(-1)).toMatchObject({ type: 'session:failed', error: 'llama-server pid 5096 still alive after taskkill /F' })
+    expect(r.s.status.at(-1)).toBe('failed')
+    expect(ctxOf(ref!)).toEqual([2048, 4096]) // stopped before loading 8K
+    expect(unloadsAfterStuck).toBe(0)
+  })
+
+  it('F12 (#2 shape): no timings but stream token counts → estimated TPS from those counts', async () => {
+    const b = fakeBackend(() => ({}))
+    b.runPrompt = async () => ({ ttftMs: 500, promptTokens: 1500, prefillMs: null, prefillTps: null, decodeTokens: 64, decodeMs: null, decodeTps: null, totalMs: 1500, text: 'x', stopType: 'limit', timedOut: false, error: null })
+    const { s } = await run(() => ({}), { ladder: [2048] }, { backend: () => b })
+    expect(s.runs[0].decodeTps).toMatchObject({ value: 64, kind: 'estimated' }) // 64 tokens / 1 s
+    expect(s.runs[0].prefillTps).toMatchObject({ value: 3000, kind: 'estimated' }) // 1500 tokens / 0.5 s
   })
 
   it('emits events in order', async () => {

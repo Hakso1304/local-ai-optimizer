@@ -37,6 +37,8 @@ export const DEFAULT_CANDIDATE_RULES = {
   /** q8_0 KV variant only when both the workload target and the declared ctx reach this. */
   longContextMin: 32768,
   maxPerModel: 4,
+  /** VRAM used by other apps when the pre-launch reading is unavailable (measured idle here: 1.2–1.4 GiB). Never 0. */
+  vramInUseUnknownBytes: 1.5 * GiB,
   /** Heavy mode adds the -nkvo rung only when putting the target ctx's KV on the GPU costs ≥ this many layers vs the
    *  smallest ctx. Measured at 2K: -nkvo lost to simply dropping ~5 layers (Qwen3.8 57-nkvo 7.4 vs 50 layers 10.7
    *  t/s; Gemma-4 26-nkvo 27.0 vs 21 layers 38.5 t/s) — useful only when the KV itself is what doesn't fit. */
@@ -66,25 +68,26 @@ export const isLowConfidence = (m: ModelMeta) =>
 
 /** KV bytes per sequence at ctx (f16 = 2 B/elem, q8_0 = 34/32), layer by layer when the layout is declared.
  *  source says which formula ran. unknown = the heads/head dim needed for any formula are missing. */
-export function kvLayout(m: ModelMeta, ctx: number, kv: KvType, ubatch = DEFAULT_CANDIDATE_RULES.ubatch): { bytes: number; source: string; unknown: boolean } {
+export function kvLayout(m: ModelMeta, ctx: number, kv: KvType, ubatch = DEFAULT_CANDIDATE_RULES.ubatch): { bytes: number; perLayer: number[]; source: string; unknown: boolean } {
   const dk = m.keyLength ?? m.nEmbd / m.heads
   const dv = m.valueLength ?? dk
   const heads = (i: number) => m.headsKvPerLayer?.[i] ?? m.headsKv
-  if (!(m.headsKv > 0) || !(dk > 0) || !Number.isFinite(dk)) return { bytes: 0, source: 'KV size unknown (no head count / head dim in GGUF)', unknown: true }
+  if (!(m.headsKv > 0) || !(dk > 0) || !Number.isFinite(dk)) return { bytes: 0, perLayer: [], source: 'KV size unknown (no head count / head dim in GGUF)', unknown: true }
   const layout = !!(m.fullAttentionInterval || m.slidingWindowPattern || m.headsKvPerLayer)
-  let bytes = 0
+  const perLayer: number[] = []
   let attnLayers = 0
   for (let i = 0; i < m.layers; i++) {
-    if (m.fullAttentionInterval && (i + 1) % m.fullAttentionInterval !== 0) continue // recurrent layer: no KV
+    if (m.fullAttentionInterval && (i + 1) % m.fullAttentionInterval !== 0) { perLayer.push(0); continue } // recurrent layer: no KV
     attnLayers++
     const swa = !!m.slidingWindowPattern?.[i] && m.slidingWindow !== null
     const tokens = swa ? Math.min(ctx, m.slidingWindow! + ubatch) : ctx
     const k = swa ? (m.keyLengthSwa ?? dk) : dk
     const v = swa ? (m.valueLengthSwa ?? dv) : dv
-    bytes += tokens * heads(i) * (k + v) * KV_BYTES[kv]
+    perLayer.push(tokens * heads(i) * (k + v) * KV_BYTES[kv])
   }
   return {
-    bytes,
+    bytes: perLayer.reduce((a, b) => a + b, 0),
+    perLayer,
     unknown: false,
     source: layout ? `declared layout: ${attnLayers}/${m.layers} attention layers${m.slidingWindowPattern ? `, sliding window ${m.slidingWindow}` : ''}`
       : isLowConfidence(m) ? `fallback upper bound: no per-arch KV layout (${m.arch} may use hybrid/linear-attention or sliding-window layers)`
@@ -97,7 +100,7 @@ export function kvLayout(m: ModelMeta, ctx: number, kv: KvType, ubatch = DEFAULT
  *  ramBytes = ramResidentBytes = what must stay in RAM (non-GPU weights + CPU KV + 0.5 GiB). Checked against live
  *  available RAM after the previous server is unloaded (session.ts); the live floor guard is the safety net. */
 export function estimateMemory(m: ModelMeta, gpuLayers: number, ctx: number, kv: KvType, ubatch = DEFAULT_CANDIDATE_RULES.ubatch, kvOnGpu = true) {
-  const { bytes: kvBytes, source: kvSource, unknown: kvUnknown } = kvLayout(m, ctx, kv, ubatch)
+  const { bytes: kvBytes, perLayer, source: kvSource, unknown: kvUnknown } = kvLayout(m, ctx, kv, ubatch)
   const onGpu = Math.min(gpuLayers, m.layers)
   const wGpu = (m.fileBytes * onGpu) / m.layers
   // Calibration (b11208 Vulkan, fa on): compute buffers 61→91 MiB (1.5B, 2K→32K), 102→164 MiB (8B, 2K→64K) ≈
@@ -112,7 +115,8 @@ export function estimateMemory(m: ModelMeta, gpuLayers: number, ctx: number, kv:
   const bpw = m.paramCount ? (m.fileBytes * 8) / m.paramCount : 4.5
   const outputBytes = partial ? (m.nVocab * m.nEmbd * bpw) / 8 : 0
   const logits = partial ? ubatch * m.nVocab * 4 : 0
-  const kvGpu = kvOnGpu ? (kvBytes * onGpu) / m.layers : 0
+  // llama.cpp offloads the LAST onGpu layers: sum their own KV (per-layer heads / hybrid layers differ), not a share.
+  const kvGpu = kvOnGpu ? perLayer.slice(m.layers - onGpu).reduce((a, b) => a + b, 0) : 0
   const kvCpu = kvBytes - kvGpu
   return {
     vramBytes: onGpu > 0 ? wGpu + kvGpu + compute + outputBytes + logits : 0,
@@ -160,7 +164,7 @@ export function generateCandidates(
   const threads = machine.physicalCores
   const hasGpu = machine.gpuDevice !== null && runtime.backend !== 'cpu'
   const vram = num(machine.vramBytes)
-  const gpuBudget = vram === null ? null : vram - (num(machine.vramInUseBytes) ?? 0) - rules.vramMarginBytes
+  const gpuBudget = vram === null ? null : vram - (num(machine.vramInUseBytes) ?? rules.vramInUseUnknownBytes) - rules.vramMarginBytes
   const ramBase = num(machine.ramAvailableBytes) ?? num(machine.ramTotalBytes)
   const ramBudget = ramBase === null ? null : ramBase - rules.ramReserveBytes
   const heavyRamBudget = ramBase === null ? null : ramBase - Math.max(4 * GiB, rules.heavyRamReserveBytes)
@@ -204,7 +208,7 @@ export function generateCandidates(
     if (e0.kvUnknown) notes.push('KV size unknown: pruned on weights only — runtime guards apply')
     else if (lowConf || e0.kvSource.startsWith('declared')) notes.push(`KV estimate: ${e0.kvSource}`)
     if (ngl > 0 && gpuBudget === null) notes.push('VRAM size unknown; not pruned by VRAM, runtime guards apply')
-    if (ngl > 0 && gpuBudget !== null && machine.vramInUseBytes.value === null) notes.push(`VRAM in use by other apps unknown (${machine.vramInUseBytes.reason ?? 'unavailable'}); budget assumes 0`)
+    if (ngl > 0 && gpuBudget !== null && machine.vramInUseBytes.value === null) notes.push(`VRAM in use by other apps unknown (${machine.vramInUseBytes.reason ?? 'unavailable'}); budget assumes ${gib(rules.vramInUseUnknownBytes)}`)
     if (ramBudget === null) notes.push('RAM size unknown; not pruned by RAM, runtime guards apply')
     const src = `DESIGN §2.7 at ${ctxK(steps[0])}`
     return {

@@ -88,22 +88,24 @@ describe('machineFromProfile: measured VRAM in use from the profile', () => {
     runtimes: [],
     ...(vramInUse ? { vramInUse } : {})
   }) as SystemProfile
-  const budgetOf = (p: SystemProfile) => {
-    const [c] = generateCandidates(machineFromProfile(p, 'Vulkan0'), q14b, vulkan, WORKLOADS.coding).candidates
+  const budgetOf = (p: SystemProfile, inUse?: number) => {
+    const [c] = generateCandidates(machineFromProfile(p, 'Vulkan0', inUse), q14b, vulkan, WORKLOADS.coding).candidates
     return { reason: c.skippedSteps.find((s) => /budget/.test(s.reason))!.reason, notes: c.notes }
   }
   it('a measured 1.2 GiB in use lowers the VRAM budget by 1.2 GiB', () => {
     const m = machineFromProfile(profile({ value: 1.2 * GiB, status: 'available', source: 'GPU Adapter Memory\Dedicated Usage' }), 'Vulkan0')
     expect(m.vramInUseBytes).toMatchObject({ value: 1.2 * GiB, kind: 'measured' })
     const with12 = budgetOf(profile({ value: 1.2 * GiB, status: 'available', source: 'pdh' })).reason
-    const none = budgetOf(profile()).reason
+    const none = budgetOf(profile(), 0).reason // explicit 0 in use
     const b = (r: string) => Number(/budget ([\d.]+) GiB/.exec(r)![1])
     expect(b(none) - b(with12)).toBeCloseTo(1.2, 1)
   })
-  it('an unavailable reading keeps the budget and says why in the notes; the explicit arg still wins', () => {
+  it('an unavailable reading budgets a conservative 1.5 GiB (never 0), says why in the notes; the explicit arg still wins', () => {
     const p = profile({ value: null, status: 'unavailable', source: 'pdh', error: 'counter read failed' })
     expect(machineFromProfile(p, 'Vulkan0').vramInUseBytes).toMatchObject({ value: null, kind: 'unavailable', reason: 'counter read failed' })
-    expect(budgetOf(p).notes).toContain('VRAM in use by other apps unknown (counter read failed); budget assumes 0')
+    expect(budgetOf(p).notes).toContain('VRAM in use by other apps unknown (counter read failed); budget assumes 1.5 GiB')
+    const b = (r: string) => Number(/budget ([\d.]+) GiB/.exec(r)![1])
+    expect(b(budgetOf(profile(), 0).reason) - b(budgetOf(p).reason)).toBeCloseTo(1.5, 1)
     expect(machineFromProfile(p, 'Vulkan0', 2 * GiB).vramInUseBytes.value).toBe(2 * GiB)
   })
 })

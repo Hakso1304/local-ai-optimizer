@@ -98,7 +98,7 @@ Steps are sorted by ctx. A step is **usable** iff its status is `pass|degraded` 
 
 - Verdicts:
   - **FAIL** = not usable (`run_failed` / `invalid_metrics`).
-  - **DEGRADED** = any rule fired, or `beyond_limit` (sticky: every step after the first cliff or failure is at least degraded).
+  - **DEGRADED** = any rule fired, or `beyond_limit` (sticky: every step after the first cliff or failure is at least degraded). A `decode_drop` the **next rung recovers from** (back above 0.60 × the pre-drop rate) is treated as a transient dip, not a cliff; the last rung has nothing to confirm with, so its drop counts.
   - **PASS** = otherwise.
 - Outputs:
   - `practicalContextCeiling`: the last step of the all-PASS prefix, measured.
@@ -195,7 +195,7 @@ Estimates are `kind:'estimated'`, prune only, and never rank.
   - RAM = **resident part**: weights not on the GPU + CPU-side KV + 512 MiB. It is checked after the previous step's server is unloaded (D1: its mmap had made a 14B look out of RAM). Offloaded weights' mmap pages are reclaimable and are credited by the in-step floor guard. Spill detection never uses RAM available: it uses the private working set and per-PID shared memory.
   - Estimated vs measured on 8B: −2 % … +3 % per rung.
 - **Budgets:**
-  - VRAM = total − in-use − **1 GiB**. The margin absorbs the measured residual of 0.2–0.9 GiB, largest at 64K.
+  - VRAM = total − in-use − **1 GiB**. The margin absorbs the measured residual of 0.2–0.9 GiB, largest at 64K. When the in-use reading is unavailable, 1.5 GiB is assumed (`vramInUseUnknownBytes`, measured idle here 1.2–1.4 GiB), never 0.
   - RAM = available (else total) − 4 GiB.
   - RAM over budget → the step is skipped (never kept).
   - VRAM over budget → the first such step is kept once, to observe the cliff, but only if est ≤ 1.15 × budget (`keepOverVramMaxRatio`). Every later step is skipped.

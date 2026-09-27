@@ -59,6 +59,17 @@ describe('detectCliffs', () => {
     expect(r.steps.every((s) => s.verdict === 'pass')).toBe(true)
   })
 
+  it('F13: a single transient dip that the next rung recovers from is not a sticky cliff; a real collapse still is', () => {
+    const at = (ctx: number, d: number) => toRun({ configId: 'x', model: 'm', ctx, gpuLayers: 32, threads: 8, status: 'ok', promptTokens: 1000, loadMs: 1, ttftMs: 100, prefillTps: 2000, decodeTps: d, totalMs: 1, peakRamBytes: 1, peakVramBytes: 1, peakSharedGpuBytes: 0, cpuAvgPct: 1, gpuAvgPct: 1 })
+    const dip = detectCliffs([at(2048, 100), at(4096, 60), at(8192, 100)], null)
+    expect(dip.steps.map((x) => x.verdict)).toEqual(['pass', 'pass', 'pass'])
+    expect(dip.practicalContextCeiling.value).toBe(8192)
+    const real = sweep('sweep-cliff-16k-32k.json') // 82 → 31 → 18: no recovery
+    expect(real.practicalContextCeiling.value).toBe(16384)
+    const lastRung = detectCliffs([at(2048, 100), at(4096, 55)], null) // nothing to confirm with → counts
+    expect(lastRung.steps[1].verdict).toBe('degraded')
+  })
+
   it('empty input is untested, not NaN', () => {
     const r = detectCliffs([], null)
     expect(r).toMatchObject({ steps: [], limitedBy: 'untested', practicalContextCeiling: { value: null, kind: 'unavailable' } })

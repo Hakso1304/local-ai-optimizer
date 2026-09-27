@@ -56,7 +56,12 @@ export function detectCliffs(
     if (prev && isUsable(prev)) {
       const d0 = val(prev.decodeTps, true)!, d1 = val(s.decodeTps, true)!
       const ratio = d1 / d0
-      if (ratio <= cfg.decodeDropRatio && d0 - d1 >= cfg.minDecodeDropTps) {
+      // Recovery-aware: a drop the NEXT rung recovers from (back above the drop threshold vs the pre-drop rate) is a
+      // transient dip (e.g. a competing app for a moment), not a sticky cliff. The last rung can't be confirmed → counts.
+      const next = sorted[i + 1]
+      const dn = next && isUsable(next) ? val(next.decodeTps, true) : null
+      const transient = dn !== null && dn / d0 > cfg.decodeDropRatio
+      if (ratio <= cfg.decodeDropRatio && d0 - d1 >= cfg.minDecodeDropTps && !transient) {
         reasons.push(reason({
           code: 'decode_drop', metric: 'decodeTps', fromCtx, toCtx: to, from: d0, to: d1, ratio, threshold: cfg.decodeDropRatio,
           message: `decode TPS fell ${Math.round((1 - ratio) * 100)}% ${span} (${d0.toFixed(1)} → ${d1.toFixed(1)} t/s)`

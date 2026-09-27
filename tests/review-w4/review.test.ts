@@ -36,12 +36,12 @@ describe('W4 adversarial review', () => {
     expect(got.ok).toBe(false)
   })
 
-  it.fails('does not budget unobserved VRAM use as zero', () => {
+  it('does not budget unobserved VRAM use as zero', () => {
     const got = generateCandidates(machine(null), model(), { backend: 'vulkan' }, WORKLOADS.general_chat)
     expect(got.candidates).toHaveLength(0)
   })
 
-  it.fails('allocates partial GPU KV by the offloaded layers actual per-layer head counts', () => {
+  it('allocates partial GPU KV by the offloaded layers actual per-layer head counts', () => {
     const m = model()
     const withKv = estimateMemory(m, 2, 8192, 'f16', 512, true)
     const withoutKv = estimateMemory(m, 2, 8192, 'f16', 512, false)

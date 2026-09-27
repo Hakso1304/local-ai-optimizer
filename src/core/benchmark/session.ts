@@ -14,7 +14,7 @@ import { detectCliffs, fmtCtx, isUsable, val } from '../scoring/cliff'
 import { recommend } from '../scoring/recommend'
 import { DEFAULT_SCORING_CONFIG, effectiveProfile, withProfile } from '../scoring/workloads'
 import { estimateMemory, generateCandidates, machineFromProfile, rulesForRequest } from './candidates'
-import { LADDER_PREDICT, PROMPT_VERSION, ladderPrompt } from './prompts'
+import { LADDER_FILL, LADDER_PREDICT, PROMPT_VERSION, ladderPrompt } from './prompts'
 
 /** Bump when the runner's measurement procedure changes (warmup, reps, reduction, timeouts). */
 export const BENCHMARK_VERSION = 'bench-1.0.0'
@@ -83,6 +83,8 @@ export const DEFAULT_SESSION_CONFIG = {
   sharedSpillAbortBytes: 2 * GiB, // per-PID shared GPU memory: kill the run (DESIGN §3.3)
   maxConsecutiveDegraded: 2,
   guardPollMs: 1000,
+  /** Consecutive guard polls with no RAM reading at all (OS nor typeperf) before the step is aborted as unsafe. */
+  guardBlindPollsMax: 3,
   /** Heavy (expectDegraded) configs: poll the guard every 250 ms from the start of load — mmap RAM ramps fast. */
   heavyGuardPollMs: 250,
   /** typeperf needs ~2 s for its first row; a 0.5B step can finish in ~1.5 s. After the reps, wait (real time) up to
@@ -159,11 +161,23 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   // Heavy mode runs close to the RAM limit on purpose: floor = the 2 GiB minimum, never lower.
   const ramFloor = Math.max(cfg.ramFloorMinBytes, (ramTotal ?? 0) * cfg.ramFloorFraction)
   const evaluate = deps.evaluate ?? evaluateAsync
+  /** Live OS free RAM; null when not provided or unreadable. */
+  const osRam = (): number | null => {
+    try { const v = deps.readRamAvailableBytes?.(); return typeof v === 'number' && Number.isFinite(v) ? v : null } catch { return null }
+  }
 
   let sessionId = req.resumeSessionId ?? ''
   const send = (e: SessionEventBody) => emit({ sessionId, ...e })
   const log = (level: 'info' | 'warn' | 'error', msg: string) => send({ type: 'log', level, msg })
   const backend = deps.backend()
+  // ServerStuckError (runtimes/llamacpp, `.fatal`): unload couldn't confirm the server exited. That is a hard stop —
+  // no more candidates, and no later cleanup that would clear its pid file.
+  let stuck: Error | null = null
+  const unload = (onErr?: (e: Error) => void) => backend.unloadModel().catch((e: Error & { fatal?: boolean }) => {
+    if (e?.fatal) stuck ??= e
+    else onErr?.(e)
+  })
+  const checkStuck = () => { if (stuck) throw stuck }
   const onAbort = () => { void backend.cancel() }
   signal?.addEventListener('abort', onAbort)
 
@@ -212,6 +226,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     const paused = () => !signal?.aborted && !!deps.pauseSignal?.aborted
 
     for (const { cand, model } of plan) {
+      checkStuck()
       if (signal?.aborted || paused()) break
       send({ type: 'candidate:started', configId: cand.id, model: model.id, gpuLayers: cand.gpuLayers, ctxSteps: cand.ctxSteps })
       if (gpuLost && cand.gpuLayers > 0) {
@@ -228,12 +243,14 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
 
       send({ type: 'phase', configId: cand.id, ctx: steps[0] ?? 0, phase: 'ladder' })
       for (const ctx of steps) {
+        checkStuck()
         if (signal?.aborted || paused()) break
         let run = done.get(`${cand.id}@${ctx}`)
         if (run) {
           log('info', `${cand.id} @${ctx}: already measured in this session; reused`)
         } else {
           const out = await runStep(cand, model, ctx, spillBase)
+          checkStuck()
           run = out.run
           await storage.saveRun(sessionId, run, out.detail)
           if (run.failureKind === 'device_lost') gpuLost = true
@@ -257,7 +274,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       }
 
       const anyUsable = runs.some(isUsable)
-      await backend.unloadModel().catch((e) => log('error', `unload failed: ${(e as Error).message}`))
+      await unload((e) => log('error', `unload failed: ${(e as Error).message}`))
       inputs.push({ config: cand, model, runs, quality: [] })
       const status = signal?.aborted ? 'cancelled' : paused() ? 'paused' : anyUsable ? 'done' : 'failed'
       send({ type: 'candidate:done', configId: cand.id, status, reason: stopReason })
@@ -267,25 +284,30 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     // decode) — never on a CPU baseline or -nkvo probe just because the plan sorted it first.
     if (req.runQuality !== false) {
       for (const modelId of [...new Set(inputs.map((i) => i.model.id))]) {
+        checkStuck()
         if (signal?.aborted || paused()) break
         const decode = (i: CandidateInput) => Math.max(0, ...i.runs.filter(isUsable).map((r) => val(r.decodeTps, true) ?? 0))
         const best = inputs.filter((i) => i.model.id === modelId && i.runs.some(isUsable))
           .sort((a, b) => b.config.gpuLayers - a.config.gpuLayers || decode(b) - decode(a) || (a.config.id < b.config.id ? -1 : 1))[0]
         if (!best) continue
+        // Reuse stored quality only when it is the COMPLETE current suite (every test id, same suite version).
         const stored = req.resumeSessionId ? await storage.listQuality(sessionId, modelId) : []
-        if (stored.length) { quality.set(modelId, stored); continue }
+        const complete = stored.length > 0 && stored.every((r) => (r as { suite?: string }).suite === defaultTestSet.suite) &&
+          defaultTestSet.tests.every((t) => stored.some((r) => r.testId === t.id))
+        if (complete) { quality.set(modelId, stored); continue }
+        if (stored.length) log('warn', `${modelId}: stored quality results are incomplete or from another suite version; re-running the suite`)
         const cliff = detectCliffs(best.runs, vramTotal)
         const usable = best.runs.filter(isUsable).map((r) => r.ctx)
         const qctx = Math.min(profile.targetContext, val(cliff.practicalContextCeiling) ?? Math.max(...usable))
         const results = await runQuality(best.config, best.model, qctx)
-        await backend.unloadModel().catch((e) => log('error', `unload failed: ${(e as Error).message}`))
+        await unload((e) => log('error', `unload failed: ${(e as Error).message}`))
         // One long-context retrieval test at the required ctx (a full prefill of it), on a config that reached it.
         if (required && required >= 32768 && results.length && !signal?.aborted && !paused()) {
           const reach = inputs.filter((i) => i.model.id === modelId && (val(detectCliffs(i.runs, vramTotal).practicalContextCeiling) ?? 0) >= required)
             .sort((a, b) => b.config.gpuLayers - a.config.gpuLayers || decode(b) - decode(a) || (a.config.id < b.config.id ? -1 : 1))[0]
           if (reach) {
             const r = await runLongNeedle(reach.config, reach.model, required)
-            await backend.unloadModel().catch(() => {})
+            await unload()
             if (r) results.push(r)
           } else {
             longNotes.push(`Long-context needle CR-04-long at ${fmtCtx(required)} skipped for ${best.model.name}: practical context ${fmtCtx(val(cliff.practicalContextCeiling) ?? 0)} < ${fmtCtx(required)}`)
@@ -293,11 +315,12 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         }
         if (results.length) {
           quality.set(modelId, results)
-          await storage.saveQuality(sessionId, modelId, best.config.id, qctx, results)
+          await storage.saveQuality(sessionId, modelId, best.config.id, qctx, results.map((r) => ({ ...r, suite: defaultTestSet.suite })))
         }
       }
     }
 
+    checkStuck()
     if (signal?.aborted) {
       await storage.setSessionStatus(sessionId, 'cancelled')
       send({ type: 'session:cancelled' })
@@ -322,7 +345,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     return null
   } finally {
     signal?.removeEventListener('abort', onAbort)
-    await backend.unloadModel().catch(() => {})
+    if (!stuck) await unload()
   }
 
   // --- helpers (closures over deps/cfg) ---
@@ -331,6 +354,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     return {
       modelPath: model.id, contextSize: ctx, gpuLayers: cand.gpuLayersAll ? 999 : cand.gpuLayers, device: cand.device ?? 'none',
       threads: cand.threads, batchSize: 2048,
+      signal, // cancel during load kills the server immediately (not after the 120 s /health deadline)
       extraArgs: ['-ub', String(rules.ubatch), '-fa', cand.flashAttn ? 'on' : 'off', ...(cand.kvType === 'f16' ? [] : ['-ctk', cand.kvType, '-ctv', cand.kvType]),
         ...(cand.kvOffload === false ? ['-nkvo'] : []), // -nkvo / --no-kv-offload: KV cache in RAM (b11208 --help)
         ...(cand.mmap === false ? ['-lm', 'none'] : [])] // --load-mode none: no mmap (b11208 --help)
@@ -360,8 +384,9 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     // A25 pre-check against live RAM (other apps come and go, F10). Unload the previous step's server FIRST: its
     // mmap'd weights still count against available RAM (14B 4K was skipped with 5.3 GiB "available" otherwise).
     // unloadModel waits for the process to exit (kill → taskkill /T /F) before returning.
-    await backend.unloadModel().catch((e: Error) => log('warn', `unload before ${ctx}: ${e.message}`))
-    const avail = deps.readRamAvailableBytes?.() ?? val(machine.ramAvailableBytes)
+    await unload((e: Error) => log('warn', `unload before ${ctx}: ${e.message}`))
+    checkStuck() // the previous server could not be confirmed dead: never start another one
+    const avail = osRam() ?? val(machine.ramAvailableBytes)
     const e = estimateMemory(model, cand.gpuLayersAll ? model.layers : cand.gpuLayers, ctx, cand.kvType, rules.ubatch, cand.kvOffload !== false)
     const need = req.heavyMode ? e.ramResidentBytes : e.ramBytes
     // mmap'd weights already uploaded to the GPU are clean file pages the OS can drop: they lower 'available RAM'
@@ -395,8 +420,22 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     let emitted = 0
     let guard: string | null = null
     let loading = true
+    let blindPolls = 0
     const flush = () => {
       restartIfBlind()
+      // Independent of typeperf: OS free RAM every poll (typeperf may be slow, localized, or not running at all).
+      const os = osRam()
+      if (!guard && os !== null && os + mmapCredit < ramFloor) {
+        guard = `RAM available ${(os / GiB).toFixed(1)} GiB (OS) fell below the floor`
+        void (loading ? unload() : backend.cancel())
+      }
+      // Fail safe: if neither the OS reading nor any typeperf RAM row is available, don't continue blind.
+      const ramRows = ((sampler as SessionSampler | null)?.samples ?? []).some((x) => x.ramAvailBytes != null)
+      blindPolls = deps.readRamAvailableBytes && os === null && !ramRows ? blindPolls + 1 : 0
+      if (!guard && blindPolls >= cfg.guardBlindPollsMax) {
+        guard = 'RAM guard inputs unreadable (no OS reading and no telemetry rows); stopped rather than continue blind'
+        void (loading ? unload() : backend.cancel())
+      }
       const xs = (sampler as SessionSampler | null)?.samples ?? []
       for (; emitted < xs.length; emitted++) {
         const s = xs[emitted]
@@ -409,7 +448,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         guard = s.ramAvailBytes != null && s.ramAvailBytes + mmapCredit < ramFloor
           ? `RAM available ${(s.ramAvailBytes / GiB).toFixed(1)} GiB fell below the floor`
           : `shared GPU memory spill ${((s.procVramSharedBytes! - pinned - spillBase) / GiB).toFixed(1)} GiB exceeded the abort limit`
-        void (loading ? backend.unloadModel().catch(() => {}) : backend.cancel())
+        void (loading ? unload() : backend.cancel())
       }
     }
     const timer = setInterval(flush, cand.expectDegraded ? cfg.heavyGuardPollMs : cfg.guardPollMs)
@@ -439,7 +478,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     loading = false
     restartIfBlind()
     flush()
-    if (guard) { await backend.unloadModel().catch(() => {}); return guardAbort() }
+    if (guard) { await unload(); return guardAbort() }
     const loadDoneAt = Date.now()
     const smp = sampler as SessionSampler | null
     // A guard's cancel() makes the in-flight request fail with "cancelled": the guard reason must win over that.
@@ -504,8 +543,11 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     const decode = median(reps.map((r) => r.decodeTps))
     const ttft = median(reps.map((r) => r.ttftMs))
     // A12: without runtime timings, derive from wall clock and token counts, labelled estimated.
-    const estDecode = median(reps.map((r) => (r.decodeTokens && r.ttftMs != null && r.totalMs > r.ttftMs ? (r.decodeTokens * 1000) / (r.totalMs - r.ttftMs) : null)))
-    const estPrefill = median(reps.map((r) => (r.promptTokens && r.ttftMs ? (r.promptTokens * 1000) / r.ttftMs : null)))
+    // Token counts: the server's timings when present, else the client's streamed-token count (#2's stream counter,
+    // `streamedTokens`); prompt tokens fall back to the ladder prompt's size (≈ LADDER_FILL × ctx), labelled estimated.
+    const decTok = (r: PromptResult) => r.decodeTokens ?? (r as PromptResult & { streamedTokens?: number | null }).streamedTokens ?? null
+    const estDecode = median(reps.map((r) => { const n = decTok(r); return n && r.ttftMs != null && r.totalMs > r.ttftMs ? (n * 1000) / (r.totalMs - r.ttftMs) : null }))
+    const estPrefill = median(reps.map((r) => { const n = r.promptTokens ?? Math.floor(ctx * LADDER_FILL); return n && r.ttftMs ? (n * 1000) / r.ttftMs : null }))
     const tps = (v: number | null, e: number | null, what: string): Metric =>
       v != null ? { value: v, kind: 'measured', source: 'llama-server timings' }
         : e != null ? { value: e, kind: 'estimated', source: `${what} tokens / wall clock` } : { value: null, kind: 'unavailable', reason: 'no timings' }
@@ -536,6 +578,53 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     return { status: 'fail', kind: 'request_error', reason: error }
   }
 
+  /** Quality-phase loads get the same safety as ladder steps: previous server unloaded, live RAM pre-check,
+   *  cancellable load, and a RAM-floor guard (OS reading + typeperf rows, fail-safe when both are missing) that
+   *  kills the load or cancels the request. No spill guard here: quality runs at ≤ the practical ceiling, which had
+   *  no spill by definition. Returns tripped() for the caller to stop between requests. */
+  async function guardedLoad(cand: CandidateConfig, model: ModelMeta, ctx: number, what: string):
+    Promise<{ ok: true; tripped: () => string | null; stop: () => void } | { ok: false; reason: string }> {
+    await unload((e: Error) => log('warn', `unload before ${what}: ${e.message}`))
+    checkStuck()
+    const ngl = cand.gpuLayersAll ? model.layers : cand.gpuLayers
+    const e = estimateMemory(model, ngl, ctx, cand.kvType, rules.ubatch, cand.kvOffload !== false)
+    const need = req.heavyMode ? e.ramResidentBytes : e.ramBytes
+    const avail = osRam() ?? val(machine.ramAvailableBytes)
+    if (avail !== null && need > avail - ramFloor) {
+      return { ok: false, reason: `${what} skipped: est. RAM ${(need / GiB).toFixed(1)} GiB > available ${(avail / GiB).toFixed(1)} GiB − floor ${(ramFloor / GiB).toFixed(1)} GiB` }
+    }
+    const mmapCredit = cand.mmap === false ? 0 : (model.fileBytes * Math.min(ngl, model.layers)) / model.layers
+    const oldPid = backend.pid
+    let sampler: SessionSampler | null = null
+    let tripped: string | null = null
+    let loading = true
+    let blind = 0
+    const poll = () => {
+      if (!sampler && backend.pid !== undefined && backend.pid !== oldPid) sampler = deps.startSampler(backend.pid)
+      const rows = (sampler as SessionSampler | null)?.samples ?? []
+      const row = [...rows].reverse().find((x) => x.ramAvailBytes != null)?.ramAvailBytes ?? null
+      const ram = osRam() ?? row
+      blind = deps.readRamAvailableBytes && ram === null ? blind + 1 : 0
+      if (tripped) return
+      if (ram !== null && ram + mmapCredit < ramFloor) tripped = `RAM available ${(ram / GiB).toFixed(1)} GiB fell below the floor during ${what}`
+      else if (blind >= cfg.guardBlindPollsMax) tripped = `RAM guard inputs unreadable during ${what}; stopped rather than continue blind`
+      if (tripped) void (loading ? unload() : backend.cancel())
+    }
+    const timer = setInterval(poll, cand.expectDegraded ? cfg.heavyGuardPollMs : cfg.guardPollMs)
+    const stop = () => { clearInterval(timer); (sampler as SessionSampler | null)?.stop() }
+    try {
+      await backend.loadModel(loadCfg(cand, model, ctx))
+    } catch (err) {
+      poll()
+      stop()
+      return { ok: false, reason: tripped ?? `${what} load at ${ctx} failed: ${(err as Error).message}` }
+    }
+    loading = false
+    poll()
+    if (tripped) { stop(); await unload(); return { ok: false, reason: tripped } }
+    return { ok: true, tripped: () => { poll(); return tripped }, stop }
+  }
+
   /** CR-04-long: needle at 50 % depth of a prompt filling ~0.75 × ctx. null when the load itself failed. */
   async function runLongNeedle(cand: CandidateConfig, model: ModelMeta, ctx: number): Promise<QualityResult | null> {
     send({ type: 'phase', configId: cand.id, ctx, phase: 'quality' })
@@ -544,30 +633,26 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       id: 'CR-04-long', category: 'context', weight: 1, maxTokens: 24, template: 'needle',
       params: { depth: 0.5, seed: 4242, needle }, checker: { type: 'needle', needle }
     } as QualityTest
-    try {
-      await backend.loadModel(loadCfg(cand, model, ctx))
-    } catch (e) {
-      log('error', `${cand.id}: long-context needle load at ${ctx} failed: ${(e as Error).message}`)
-      return null
-    }
+    const g = await guardedLoad(cand, model, ctx, 'long-context needle')
+    if (!g.ok) { log('error', `${cand.id}: ${g.reason}`); return null }
     const templateKwargs = model.supportsThinking ? { enable_thinking: false } : undefined
     try {
       const prompt = await backend.applyTemplate([{ role: 'user', content: needlePrompt(test.params!, Math.floor(ctx * 0.75)) }], templateKwargs ? { templateKwargs } : undefined)
       const r = await backend.runPrompt({ prompt, maxTokens: test.maxTokens, temperature: 0, seed: 1, timeoutMs: cfg.promptTimeoutBaseMs + ctx * cfg.promptTimeoutPerCtxMs })
+      const why = g.tripped()
+      if (why) { log('error', `${cand.id}: ${why}`); return null }
       return r.error ? { testId: test.id, category: 'context', weight: 1, pass: false, score: 0, detail: `request failed: ${r.error}` } : await evaluate(test, r.text)
     } catch (e) {
       return { testId: test.id, category: 'context', weight: 1, pass: false, score: 0, detail: `request failed: ${(e as Error).message}` }
+    } finally {
+      g.stop()
     }
   }
 
   async function runQuality(cand: CandidateConfig, model: ModelMeta, ctx: number): Promise<QualityResult[]> {
     send({ type: 'phase', configId: cand.id, ctx, phase: 'quality' })
-    try {
-      await backend.loadModel(loadCfg(cand, model, ctx))
-    } catch (e) {
-      log('error', `${cand.id}: quality load at ${ctx} failed: ${(e as Error).message}`)
-      return []
-    }
+    const g = await guardedLoad(cand, model, ctx, 'quality suite')
+    if (!g.ok) { log('error', `${cand.id}: ${g.reason}`); return [] }
     // Thinking models (chat template has enable_thinking): quality runs with thinking OFF — deterministic, fast, and the
     // suite's max_tokens fit. The ×4 token boost (buildQualityPrompts thinking:true) is kept for a future "thinking on".
     const templateKwargs = model.supportsThinking ? { enable_thinking: false } : undefined
@@ -575,6 +660,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     const prompts = buildQualityPrompts(defaultTestSet, { fillerTokens: Math.min(cfg.qualityFillerMax, Math.floor(ctx * 0.6)), thinking: false })
     const out: QualityResult[] = []
     for (const p of prompts) {
+      const why = g.tripped()
+      if (why) { log('error', `${cand.id}: ${why}`); break }
       if (signal?.aborted || backend.lastExit) break
       const test = defaultTestSet.tests.find((t) => t.id === p.testId)!
       try {
@@ -587,7 +674,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         out.push({ testId: test.id, category: test.category, weight: test.weight, pass: false, score: 0, detail: `request failed: ${(e as Error).message}` })
       }
     }
-    // Partial suites (cancel/crash) are not persisted: a missing category must not look like a measured 0.
+    g.stop()
+    // Partial suites (cancel/crash/guard) are not persisted: a missing category must not look like a measured 0.
     if (out.length < prompts.length) { log('warn', `${cand.id}: quality suite incomplete (${out.length}/${prompts.length}); discarded`); return [] }
     return out
   }

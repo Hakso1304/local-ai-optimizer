@@ -29,7 +29,7 @@ This is the single consolidated list, and every item is checked against the code
   - Thresholds: 0.60 decode drop, 256 MiB shared spill, 0.80 VRAM saturation.
   - Profile latency tolerances and speed targets are still heuristics elsewhere (`docs/BENCHMARK.md` §6–7).
 - **DONE-WITH-CAVEAT: one real cliff has been observed and detected** (14B at 32K spill). No other failure shapes have been seen on real data: gradual thermal throttling, driver resets, or NVIDIA spill behaviour.
-- **DONE-WITH-CAVEAT: sticky degraded verdict.** A real ≥ 40 % dip that recovers at the next step still ends the practical ceiling. The defence is only the median of 2 reps.
+- **DONE-WITH-CAVEAT: recovery-aware cliffs.** A ≥ 40 % dip that the next rung recovers from is no longer a cliff. A drop on the last rung can't be confirmed, so it still counts.
 - **DONE-WITH-CAVEAT: reps = 2 with a median.** There are no CV-based extra reps (DESIGN §3.4 not implemented).
 - **DONE-WITH-CAVEAT: no `ignore_eos`.** Short generations make decode TPS noisier.
 - **DONE-WITH-CAVEAT: warm/cold is only a flag (`warm`).** One size-matched warmup precedes the measured reps. Cold-start performance is not measured or scored.
