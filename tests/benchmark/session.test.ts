@@ -7,6 +7,8 @@ import type { ExitInfo } from '../../src/core/runtimes/llamacpp'
 import type { TelemetrySample } from '../../src/core/telemetry/sampler'
 import { runSession, type RunDetail, type SessionBackend, type SessionDeps, type SessionStorage } from '../../src/core/benchmark/session'
 import { ladderPrompt } from '../../src/core/benchmark/prompts'
+import { generateCandidates, machineFromProfile } from '../../src/core/benchmark/candidates'
+import { WORKLOADS } from '../../src/core/scoring/workloads'
 import { ConfigDriftError } from '../../src/core/runtimes/llamacpp'
 import { load } from '../scoring/helpers'
 
@@ -285,6 +287,21 @@ describe('runSession', () => {
     expect(thinking.rec?.reasons).toContain('Quality measured with thinking disabled (chat template enable_thinking=false)')
     const plain = await run(() => ({}), { runQuality: true, ladder: [2048] })
     expect(plain.backend.calls.templateOpts.every((o) => o === undefined)).toBe(true)
+  })
+
+  it('resume with a stored plan uses its configIds verbatim, even if planning would now produce different ones', async () => {
+    const first = await run(() => ({}), { ladder: [2048, 4096] })
+    const planned = [...new Set(first.s.runs.map((r) => r.configId))]
+    expect(planned).toEqual([`${model.id}|ngl=all|kv=f16|t=8`])
+    // The stored plan came from an older build: same model, a different config id (e.g. another heavy-mode ngl).
+    const stored = { ...generateCandidates(machineFromProfile(machine, 'Vulkan0'), model, { backend: 'vulkan' }, WORKLOADS.coding).candidates[0] }
+    const old = { ...stored, id: `${model.id}|ngl=all|kv=f16|t=8|old`, ctxSteps: [2048, 4096] }
+    const seeded = first.s.runs.map((r) => ({ ...r, configId: old.id }))
+    const re = await run(() => ({}), { resumeSessionId: 's1', ladder: [2048, 4096] }, { plan: [old] }, seeded)
+    expect(re.backend.calls.loads).toEqual([]) // both stored steps reused under the stored id
+    expect(re.rec?.ranked.map((x) => x.configId)).toEqual([old.id])
+    const fresh = await run(() => ({}), { resumeSessionId: 's1', ladder: [2048, 4096] }, {}, seeded) // no plan → regenerated
+    expect(ctxOf(fresh.backend)).toEqual([2048, 4096])
   })
 
   it('emits events in order', async () => {

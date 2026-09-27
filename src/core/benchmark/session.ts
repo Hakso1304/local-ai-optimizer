@@ -97,6 +97,10 @@ export interface SessionDeps {
   readRamAvailableBytes?: () => number | null
   evaluate?: typeof evaluateAsync
   signal?: AbortSignal
+  /** Resume: the stored candidate plan, used verbatim instead of generateCandidates, so configIds (and heavy-mode
+   *  ngl values, which depend on the KV estimate) can't drift across code or GGUF-parser changes. Per-step live RAM
+   *  pre-checks still apply. */
+  plan?: CandidateConfig[]
   /** Pause: checked between steps only — the current step finishes (never mid-request), then the session unloads,
    *  persists and ends with status 'paused'. Resume it like any other session (resumeSessionId). */
   pauseSignal?: AbortSignal
@@ -152,6 +156,10 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     for (const id of req.modelIds) {
       const model = deps.models.find((m) => m.id === id)
       if (!model) { log('warn', `model ${id} not found; skipped`); continue }
+      if (deps.plan) {
+        for (const cand of deps.plan.filter((c) => c.modelId === model.id)) plan.push({ cand, model })
+        continue
+      }
       const set = generateCandidates(machine, model, { backend: deps.backendKind ?? 'vulkan' }, profile, rules)
       for (const r of set.rejected) log('info', `rejected ${r.id}: ${r.reason}`)
       for (const cand of set.candidates) plan.push({ cand, model })
