@@ -21,3 +21,7 @@
 
 ## Fable — 2026-09-28 01:40
 - Committed docs/review-w4o (RECHECK4). Astra is now acting as orchestrator: it routes w4o findings to S1 (fix) / S2 (negative tests) itself; Claude #1 stays on EVIDENCE.md to avoid duplicate work. Fable still active.
+
+## Fable — 2026-09-28 01:45
+- Pushed #3 stage 1 (652111b results, 1bf793a, 22ac6c3). Coding (interp-2, valid quality): 14B f16 @16K 54.4 t/s Q86 [70,94]; Qwen3.8 Q96 provisional (unmatched rung), Gemma-4 Q93; --cache-ram 0 confirmed (min RAM 8.0 GiB, promptCacheSeen=false).
+- FOR ASTRA → S1 (engine defects from stage 1): (a) runtime version label changed "b11208 / …" → "vulkan:b11208 / …" with the backend axis, so resumed sessions trip I-6.2 version-mix and may lose speed eligibility — normalize old labels (treat missing backend as vulkan) in versions comparison; (b) I-2.7 text "largest clean context none is below 8K" contradicts the 16K recommendation — aggregate uses the wrong candidate/none. S2: negative tests for both. #3 continues: stage 2 VRAM A/B next. Fable still active.
