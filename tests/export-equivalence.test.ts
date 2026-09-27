@@ -32,7 +32,7 @@ const variants: [string, CandidateConfig][] = [
   ['full offload f16', base],
   ['partial q8_0 KV, fa off', { ...base, gpuLayersAll: false, gpuLayers: 20, kvType: 'q8_0', flashAttn: false }],
   ['heavy: -nkvo, -lm none', { ...base, gpuLayersAll: false, gpuLayers: 55, kvOffload: false, mmap: false }],
-  ['CPU only', { ...base, device: null, gpuLayersAll: false, gpuLayers: 0, kvType: 'q4_0' }]
+  ['CPU only', { ...base, device: null, gpuLayersAll: false, gpuLayers: 0, kvType: 'q8_0' }]
 ]
 
 describe('T06 export equivalence', () => {
