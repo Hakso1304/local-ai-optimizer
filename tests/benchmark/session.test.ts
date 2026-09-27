@@ -1031,6 +1031,29 @@ describe('runSession', () => {
     expect(signals.every((s) => s?.aborted)).toBe(true)
   })
 
+  it('resume reuses only original quality origin; incoherent and replayed suites are remeasured', async () => {
+    const first = await run(() => ({}), { ladder: [2048], runQuality: true, qualityMode: 'quick' })
+    const stored = first.s.quality[0]
+    expect(stored.results).toHaveLength(17)
+    const resume = (results: QualityResult[]) => run(() => ({}),
+      { resumeSessionId: 's1', ladder: [2048], runQuality: true, qualityMode: 'quick' },
+      {}, first.s.runs, [{ ...stored, results }])
+    const original = await resume(stored.results)
+    expect(original.backend.calls.templates).toBe(0)
+    const malformed = stored.results.map((row, i) => i === 0 ? { ...row,
+      proofProvenance: { mode: 'runtime', status: 'original', originalPromptHashPresent: true,
+        origin: { generationPromptHashPresent: true, firstReplayAt: 'not-an-iso-time', lineage: ['not-a-hash'] } }
+    } as QualityResult : row)
+    const rejected = await resume(malformed)
+    expect(rejected.backend.calls.templates).toBeGreaterThan(0)
+    const replayed = stored.results.map((row, i) => i === 0 ? { ...row,
+      proofProvenance: { mode: 'live-template-replay', status: 'original', originalPromptHashPresent: true,
+        origin: { generationPromptHashPresent: true, firstReplayAt: '2026-09-28T00:00:00.000Z', lineage: ['a'.repeat(64)] } }
+    } as QualityResult : row)
+    const reconstructed = await resume(replayed)
+    expect(reconstructed.backend.calls.templates).toBeGreaterThan(0)
+  })
+
   it('F3: the RAM guard reads OS free RAM on its own — no typeperf rows needed — and fails safe when blind', async () => {
     const tiny = { ...model, fileBytes: 100 * 1024 ** 2 }
     const noRows = { startSampler: () => ({ samples: [], unavailable: {}, stop: () => [] }), config: { guardPollMs: 5 }, models: [tiny] }

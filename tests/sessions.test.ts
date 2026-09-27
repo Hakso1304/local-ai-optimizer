@@ -7,15 +7,53 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { openDb, relabelV2Quality } from '../src/core/storage/db'
 import { sessionInputs, getSession, getSessionResume, latestRecommendation, listSessions, makeSessionStorage, markInterrupted, saveRecommendation, saveSession, seedDemoSession, telemetryForRun } from '../src/core/storage/sessions'
 import { insertTelemetrySamples } from '../src/core/storage/db'
-import type { BenchmarkRunResult, CandidateConfig, ModelMeta, Recommendation } from '../src/shared/bench-types'
+import type { BenchmarkRunResult, CandidateConfig, ModelMeta, QualityResult, Recommendation } from '../src/shared/bench-types'
 import type { SystemProfile } from '../src/shared/types'
 import { suiteFor } from '../src/core/quality'
+import { proofRowId } from '../src/core/benchmark/gen'
 
 const dir = mkdtempSync(join(tmpdir(), 'lao-sess-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 const fixtures = join(__dirname, 'fixtures', 'scoring')
 
 describe('session storage', () => {
+  it('annotates malformed, runtime-original and replay quality origins without rewriting stored payloads', async () => {
+    const db = openDb(join(dir, 'quality-origin-read.db'))
+    const model = { id: 'E:/m/origin.gguf', name: 'origin' } as ModelMeta
+    const config = { id: `${model.id}|ngl=all|kv=f16|t=8`, modelId: model.id, backend: 'vulkan' } as CandidateConfig
+    const st = makeSessionStorage(db, () => ({ vramBytes: null, candidates: [{ config, model }] }))
+    const hash = 'a'.repeat(64), alternate = 'b'.repeat(64)
+    const mark = (row: unknown) => (row as { originValidation?: { ok: boolean; classification: string; reason: string | null } }).originValidation
+    for (const [name, provenance, expected] of [
+      ['runtime', { mode: 'runtime', status: 'original', originalPromptHashPresent: true,
+        origin: { generationPromptHashPresent: true, firstReplayAt: null, lineage: [] } }, 'original'],
+      ['replay', { mode: 'live-template-replay', status: 'original', originalPromptHashPresent: true,
+        origin: { generationPromptHashPresent: true, firstReplayAt: '2026-09-28T00:00:00.000Z', lineage: [hash] } }, 'reconstructed'],
+      ['malformed', { mode: 'runtime', status: 'original', originalPromptHashPresent: true,
+        origin: { generationPromptHashPresent: true, firstReplayAt: 'not-an-iso-time', lineage: ['not-a-hash'] } }, 'incoherent']
+    ] as const) {
+      const id = await st.createSession({ workload: 'coding', request: { workload: 'coding', modelIds: [model.id], qualityMode: 'quick' }, startedAt: 0 })
+      await st.saveRun(id, { configId: config.id, ctx: 2048, status: 'pass', versions: { runtime: 'vulkan:b1' } } as unknown as BenchmarkRunResult,
+        { samples: [], reason: null, stderrTail: [], load: null, startedAt: 0, endedAt: 1 })
+      const tagged = { configId: config.id, genId: 'off', testId: name, sample: 1 }
+      const row = { ...tagged, suiteSeed: null, category: 'coding', weight: 1, pass: true, score: 1, detail: '', suite: suiteFor('quick', 0).suite,
+        backend: 'vulkan', runtimeVersion: 'vulkan:b1', promptSha256: hash, proofProvenance: provenance,
+        renderProof: { rowId: proofRowId(tagged), promptSha256: hash, renderedSha256: hash,
+          counterfactualSha256: alternate, keys: ['enable_thinking'], status: 'proved' } } as unknown as QualityResult
+      await st.saveQuality(id, model.id, config.id, 2048, [row])
+      const stored = (db.prepare('SELECT payload FROM quality_result WHERE session_id = ?').get(Number(id)) as { payload: string }).payload
+      const listed = await st.listQuality(id, model.id)
+      expect(listed).toHaveLength(1)
+      expect(mark(listed[0])).toMatchObject({ ok: expected !== 'incoherent', classification: expected })
+      const displayed = getSession(db, Number(id))!.candidates[0].quality
+      expect(displayed).toHaveLength(1)
+      expect(mark(displayed[0])).toMatchObject({ classification: expected })
+      expect(mark(sessionInputs(db, Number(id))!.inputs[0].quality[0])).toMatchObject({ classification: expected })
+      expect((db.prepare('SELECT payload FROM quality_result WHERE session_id = ?').get(Number(id)) as { payload: string }).payload).toBe(stored)
+    }
+    db.close()
+  })
+
   it('seeds one DEMO session (idempotent) with a 16K→32K cliff and a recommendation', () => {
     const db = openDb(join(dir, 'a.db'))
     const id = seedDemoSession(db, fixtures)

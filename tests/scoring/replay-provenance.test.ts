@@ -71,16 +71,21 @@ describe('RECHECK6 R1: replay lineage', () => {
       await runFile(process.execPath, [executable, '--in', input, '--out', output, '--port', String(port), '--session', '5'], { cwd: resolve('.'), timeout: 20_000 })
       return JSON.parse(readFileSync(output, 'utf8')) as typeof artifact & {
         qualityResults: { id: number; payload: typeof artifact.qualityResults[0]['payload'] & {
-          promptSha256?: string; renderProof?: { status: string }; proofProvenance?: { status: string; originalPromptHashPresent: boolean }
+          promptSha256?: string; renderProof?: { status: string }; replayProof?: { renderedSha256: string }
+          proofProvenance?: { status: string; originalPromptHashPresent: boolean }
         } }[]
       }
     }
     const once = await replay(first, second)
     expect(once.qualityResults[0].payload.proofProvenance).toMatchObject({ status: 'reconstructed', originalPromptHashPresent: false })
-    expect(once.qualityResults[0].payload.renderProof?.status).toBe('reconstructed')
+    expect(once.qualityResults[0].payload.promptSha256).toBeUndefined()
+    expect(once.qualityResults[0].payload.renderProof).toBeUndefined()
+    expect(once.qualityResults[0].payload.replayProof?.renderedSha256).toMatch(/^[0-9a-f]{64}$/)
     const twice = await replay(second, third)
     expect(twice.qualityResults[0].payload.proofProvenance).toMatchObject({ status: 'reconstructed', originalPromptHashPresent: false })
-    expect(twice.qualityResults[0].payload.renderProof?.status).toBe('reconstructed')
+    expect(twice.qualityResults[0].payload.promptSha256).toBeUndefined()
+    expect(twice.qualityResults[0].payload.renderProof).toBeUndefined()
+    expect(twice.qualityResults[0].payload.replayProof?.renderedSha256).toMatch(/^[0-9a-f]{64}$/)
   })
 
   it('rejects or quarantines an incoherent partial origin without promoting it to proved', async () => {
@@ -106,7 +111,8 @@ describe('RECHECK6 R1: replay lineage', () => {
       try {
         await runFile(process.execPath, [executable, '--in', input, '--out', output, '--port', String(port), '--session', '5'], { cwd: resolve('.'), timeout: 20_000 })
         return JSON.parse(readFileSync(output, 'utf8')) as typeof base & { qualityResults: { payload: typeof base.qualityResults[0]['payload'] & {
-          renderProof?: { status: string }; proofProvenance?: { status: string; originalPromptHashPresent: boolean }
+          renderProof?: { status: string }; replayProof?: { renderedSha256: string }
+          proofProvenance?: { status: string; originalPromptHashPresent: boolean }
         } }[] }
       } catch (error) {
         expect(String(error)).toMatch(/incoherent|origin|provenance/i)
@@ -123,7 +129,7 @@ describe('RECHECK6 R1: replay lineage', () => {
     const result = await run(partialIn, partialOut)
     if (result) {
       expect(result.qualityResults[0].payload.proofProvenance?.status).toBe('reconstructed')
-      expect(result.qualityResults[0].payload.renderProof?.status).not.toBe('proved')
+      expect(result.qualityResults[0].payload.renderProof).toBeUndefined()
     }
     const valid = structuredClone(base) as typeof partial
     valid.qualityResults[0].payload.proofProvenance = {
@@ -134,12 +140,14 @@ describe('RECHECK6 R1: replay lineage', () => {
     writeFileSync(validIn, JSON.stringify(valid))
     const proved = await run(validIn, validOut)
     expect(proved?.qualityResults[0].payload.proofProvenance).toMatchObject({ status: 'original', originalPromptHashPresent: true })
-    expect(proved?.qualityResults[0].payload.renderProof?.status).toBe('proved')
+    expect(proved?.qualityResults[0].payload.renderProof).toBeUndefined()
+    expect(proved?.qualityResults[0].payload.replayProof?.renderedSha256).toBe(promptSha256)
     if (!proved) throw new Error('valid runtime-origin replay did not produce an artifact')
     const coherentReplayOut = join(dir, 'valid-replay-out.json')
     const coherentReplay = await run(validOut, coherentReplayOut)
     expect(coherentReplay?.qualityResults[0].payload.proofProvenance?.status).toBe('original')
-    expect(coherentReplay?.qualityResults[0].payload.renderProof?.status).toBe('proved')
+    expect(coherentReplay?.qualityResults[0].payload.renderProof).toBeUndefined()
+    expect(coherentReplay?.qualityResults[0].payload.replayProof?.renderedSha256).toBe(promptSha256)
     const malformedReplay = structuredClone(proved) as typeof proved & { qualityResults: { payload: typeof proved.qualityResults[0]['payload'] & {
       proofProvenance?: { origin?: { firstReplayAt?: string; lineage?: string[] } }
     } }[] }
