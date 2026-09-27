@@ -1,0 +1,108 @@
+{
+  "version": "1.0",
+  "suite": "qb-1.0.0",
+  "categoryWeights": { "instruction": 0.2, "reasoning": 0.25, "coding": 0.25, "structured": 0.1, "extraction": 0.1, "context": 0.1 },
+  "tests": [
+    {
+      "id": "IF-01", "category": "instruction", "weight": 1, "maxTokens": 8,
+      "prompt": "Reply with exactly the word BANANA in uppercase and nothing else.",
+      "checker": { "type": "exact", "expected": "BANANA", "caseSensitive": true }
+    },
+    {
+      "id": "IF-02", "category": "instruction", "weight": 1, "maxTokens": 16,
+      "prompt": "List the three primary colors of light as a comma-separated list in lowercase, no spaces, no other text.",
+      "checker": { "type": "regex", "pattern": "^(red,green,blue|red,blue,green|green,red,blue|green,blue,red|blue,red,green|blue,green,red)$" }
+    },
+    {
+      "id": "IF-03", "category": "instruction", "weight": 1, "maxTokens": 24,
+      "prompt": "Write one sentence about the ocean that contains exactly 5 words. Output only the sentence.",
+      "checker": { "type": "wordCount", "min": 5, "max": 5 }
+    },
+    {
+      "id": "RS-01", "category": "reasoning", "weight": 1, "maxTokens": 512,
+      "prompt": "A shop sells pens at 3 for $4. How many dollars do 27 pens cost? Answer with only the number.",
+      "checker": { "type": "number", "expected": 36 }
+    },
+    {
+      "id": "RS-02", "category": "reasoning", "weight": 1, "maxTokens": 512,
+      "prompt": "Alice is older than Bob. Carol is younger than Bob. Dave is older than Alice. Who is the youngest? Answer with one name only.",
+      "checker": { "type": "exact", "expected": "Carol" }
+    },
+    {
+      "id": "RS-03", "category": "reasoning", "weight": 1, "maxTokens": 512,
+      "prompt": "What is the remainder when 2^20 is divided by 7? Answer with only the number.",
+      "checker": { "type": "number", "expected": 4 }
+    },
+    {
+      "id": "RS-04", "category": "reasoning", "weight": 1, "maxTokens": 512,
+      "prompt": "If today is Wednesday, what day of the week will it be 100 days from today? Answer with one word.",
+      "checker": { "type": "exact", "expected": "Friday" }
+    },
+    {
+      "id": "CD-01", "category": "coding", "weight": 1, "maxTokens": 400,
+      "prompt": "Write a JavaScript function named isPalindrome(s) that returns true if s is a palindrome ignoring case and non-alphanumeric characters. Output only code.",
+      "checker": { "type": "jsCode", "cases": [
+        { "expr": "isPalindrome(\"A man, a plan, a canal: Panama\")", "expected": true },
+        { "expr": "isPalindrome(\"race a car\")", "expected": false },
+        { "expr": "isPalindrome(\"\")", "expected": true },
+        { "expr": "isPalindrome(\"No 'x' in Nixon\")", "expected": true }
+      ] }
+    },
+    {
+      "id": "CD-02", "category": "coding", "weight": 1, "maxTokens": 400,
+      "prompt": "Write a JavaScript function named fib(n) that returns the n-th Fibonacci number as a BigInt, with fib(0)=0n and fib(1)=1n, so that large n works. Output only code.",
+      "checker": { "type": "jsCode", "cases": [
+        { "expr": "String(fib(0))", "expected": "0" },
+        { "expr": "String(fib(1))", "expected": "1" },
+        { "expr": "String(fib(10))", "expected": "55" },
+        { "expr": "String(fib(90))", "expected": "2880067194370816120" }
+      ] }
+    },
+    {
+      "id": "CD-03", "category": "coding", "weight": 1, "maxTokens": 400,
+      "prompt": "Write a JavaScript function named groupBy(arr, key) that returns an object mapping each distinct value of item[key] to an array of the items with that value, preserving input order. Output only code.",
+      "checker": { "type": "jsCode", "cases": [
+        { "expr": "groupBy([{t:\"a\",v:1},{t:\"b\",v:2},{t:\"a\",v:3}],\"t\")", "expected": { "a": [{ "t": "a", "v": 1 }, { "t": "a", "v": 3 }], "b": [{ "t": "b", "v": 2 }] } },
+        { "expr": "groupBy([],\"t\")", "expected": {} }
+      ] }
+    },
+    {
+      "id": "SO-01", "category": "structured", "weight": 1, "maxTokens": 200,
+      "prompt": "Return a JSON object describing a book with keys \"title\" (string), \"year\" (integer) and \"tags\" (array of at least 2 strings). Output only JSON.",
+      "checker": { "type": "jsonSchema", "schema": {
+        "type": "object", "required": ["title", "year", "tags"],
+        "properties": { "title": { "type": "string" }, "year": { "type": "integer" }, "tags": { "type": "array", "minItems": 2, "items": { "type": "string" } } }
+      } }
+    },
+    {
+      "id": "SO-02", "category": "structured", "weight": 1, "maxTokens": 200,
+      "prompt": "Convert to a JSON array of objects with keys \"name\" (string) and \"age\" (integer), in the original order: \"Tom is 31, Ana is 27, Lee is 45\". Output only JSON.",
+      "checker": { "type": "jsonEqual", "expected": [{ "name": "Tom", "age": 31 }, { "name": "Ana", "age": 27 }, { "name": "Lee", "age": 45 }] }
+    },
+    {
+      "id": "EX-01", "category": "extraction", "weight": 1, "maxTokens": 40,
+      "prompt": "From the text, extract the invoice number and the total amount due. Text: \"Invoice INV-20931 issued 2024-03-02 to Kaon Ltd. Subtotal 1,200.00 EUR, VAT 228.00 EUR, total due 1,428.00 EUR.\" Answer exactly in the form <invoice>;<total> with nothing else.",
+      "checker": { "type": "regex", "pattern": "^INV-20931;\\s*(EUR\\s*)?1,?428(\\.00)?(\\s*EUR)?$" }
+    },
+    {
+      "id": "EX-02", "category": "extraction", "weight": 1, "maxTokens": 60,
+      "prompt": "List every email address in this text, one per line, in order of appearance, nothing else: \"Contact ops@acme.io or, for billing, bill.pay@acme.co.uk. Old: old_admin@acme.io (retired).\"",
+      "checker": { "type": "exact", "expected": "ops@acme.io\nbill.pay@acme.co.uk\nold_admin@acme.io" }
+    },
+    {
+      "id": "CR-10", "category": "context", "weight": 1, "maxTokens": 24,
+      "template": "needle", "params": { "depth": 0.1, "seed": 42, "needle": "HELIOTROPE-5" },
+      "checker": { "type": "needle", "needle": "HELIOTROPE-5" }
+    },
+    {
+      "id": "CR-50", "category": "context", "weight": 1, "maxTokens": 24,
+      "template": "needle", "params": { "depth": 0.5, "seed": 42, "needle": "HELIOTROPE-5" },
+      "checker": { "type": "needle", "needle": "HELIOTROPE-5" }
+    },
+    {
+      "id": "CR-90", "category": "context", "weight": 1, "maxTokens": 24,
+      "template": "needle", "params": { "depth": 0.9, "seed": 42, "needle": "HELIOTROPE-5" },
+      "checker": { "type": "needle", "needle": "HELIOTROPE-5" }
+    }
+  ]
+}
