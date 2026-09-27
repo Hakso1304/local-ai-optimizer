@@ -61,7 +61,8 @@ function Detail({ d, onRerun }: { d: SessionDetail; onRerun: (configId: string) 
                 <td><span className="swatch" style={{ background: COLORS[i % COLORS.length] }} /></td>
                 <td>{c.model.name}{rec?.best?.configId === c.config.id && <span className="pill">best</span>}</td>
                 <td>{c.model.quant ?? '—'} <Prov kind="declared" /></td>
-                <td className="muted">ngl {c.config.gpuLayersAll ? 'all' : c.config.gpuLayers}, kv {c.config.kvType}, t {c.config.threads}</td>
+                <td className="muted">ngl {c.config.gpuLayersAll ? 'all' : c.config.gpuLayers}, kv {c.config.kvType}, t {c.config.threads}
+                  {c.config.expectDegraded && <span className="pill warn-pill" title={c.config.degradedReason ?? ''}>partial offload — degraded</span>}</td>
                 <td><CtxPick recommended={c.score?.recommendedCtx} scored={c.score?.referenceCtx} /></td>
                 <td><M m={c.cliff.practicalContextCeiling} fmt={fmtCtx} /></td>
                 <td>{q ? <M m={{ ...q.input, value: q.score }} fmt={(v) => v.toFixed(0)} /> : '—'}</td>

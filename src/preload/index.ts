@@ -6,6 +6,7 @@ const api: RendererApi = {
   scanSystem: () => ipcRenderer.invoke('system:scan'),
   detectRuntimes: () => ipcRenderer.invoke('runtimes:detect'),
   listModels: () => ipcRenderer.invoke('models:list'),
+  modelFit: (w) => ipcRenderer.invoke('models:fit', w),
   benchSmoke: (modelPath) => ipcRenderer.invoke('bench:smoke', modelPath),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setWorkload: (w) => ipcRenderer.invoke('settings:setWorkload', w),

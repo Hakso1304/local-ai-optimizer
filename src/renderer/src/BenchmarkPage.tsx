@@ -15,6 +15,8 @@ export function BenchmarkPage({ live }: { live: LiveState }) {
   const [msg, setMsg] = useState<string | null>(null)
   const [maxCtx, setMaxCtx] = useState<number>(0) // 0 = no cap (candidate rules decide)
   const [quality, setQuality] = useState(true)
+  const [heavy, setHeavy] = useState(false)
+  const [fit, setFit] = useState<Record<string, string | null>>({})
 
   useEffect(() => {
     void Promise.all([window.api.listWorkloads(), window.api.getSettings()]).then(([ws, s]) => { setWorkloads(ws); setWorkload(s.workload ?? ws[0]?.id ?? null) })
@@ -26,12 +28,15 @@ export function BenchmarkPage({ live }: { live: LiveState }) {
     if (!workload) return
     setMsg(null)
     const r = await window.api.startBench({
-      workload, modelIds: [...picked], runQuality: quality, ...(maxCtx ? { ladder: LADDER.filter((c) => c <= maxCtx) } : {})
+      workload, modelIds: [...picked], runQuality: quality, heavyMode: heavy, ...(maxCtx ? { ladder: LADDER.filter((c) => c <= maxCtx) } : {})
     })
     if (!r.ok) setMsg(r.error)
   }
   const cancel = async () => { const r = await window.api.cancelBench(); if (!r.ok) setMsg(r.error ?? 'cancel failed') }
   const pause = async () => { const r = await window.api.pauseBench(); if (!r.ok) setMsg(r.error ?? 'pause failed') }
+  useEffect(() => { if (workload) window.api.modelFit(workload).then(setFit, () => setFit({})) }, [workload, models])
+  // configId = `${modelId}|ngl=<all|n>|…` (documented, deterministic): a numeric ngl > 0 is partial offload.
+  const partial = /\|ngl=([1-9]\d*)\|/.test(live.configId ?? '')
   const t = live.telemetry
   const running = live.status === 'running'
 
@@ -51,6 +56,9 @@ export function BenchmarkPage({ live }: { live: LiveState }) {
           </select>
         </label>
         <label><input type="checkbox" checked={quality} onChange={(e) => setQuality(e.target.checked)} disabled={running} /> quality suite</label>
+        <label title="Models whose full GPU offload does not fit get a partial-offload ladder (slow, flagged degraded)">
+          <input type="checkbox" checked={heavy} onChange={(e) => setHeavy(e.target.checked)} disabled={running} /> Include heavy models (partial GPU offload, degraded speed)
+        </label>
         <button onClick={() => void start()} disabled={running || !picked.size}>Start</button>
         <button onClick={() => void pause()} disabled={!running} title="Stops after the current step; resume from Results">Pause</button>
         <button onClick={() => void cancel()} disabled={!running}>Cancel</button>
@@ -63,7 +71,7 @@ export function BenchmarkPage({ live }: { live: LiveState }) {
           {models?.map((m) => (
             <tr key={m.id} className="click" onClick={() => !running && toggle(m.id)}>
               <td><input type="checkbox" checked={picked.has(m.id)} readOnly disabled={running} /></td>
-              <td>{m.name}</td>
+              <td>{m.name}{fit[m.id] && <span className="pill warn-pill" title={fit[m.id]!}>{/does not fit/.test(fit[m.id]!) ? 'needs heavy mode' : 'no config'}</span>}</td>
               <td>{v(m.meta?.parameterCount.value, (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : `${(n / 1e6).toFixed(0)}M`))}</td>
               <td>{m.meta?.quantName ?? '—'}</td>
               <td>{v(m.meta?.contextLength, fmtCtx)}</td>
@@ -77,7 +85,7 @@ export function BenchmarkPage({ live }: { live: LiveState }) {
       <h2>Live {live.sessionId && <span className="muted">session {live.sessionId} — {live.status}</span>}</h2>
       {live.error && <p className="err">{live.error}</p>}
       <div className="tiles">
-        <div className="tile"><span className="muted">Model / config</span>{live.model ?? '—'}<span className="muted">{live.configId ?? ''}</span></div>
+        <div className="tile"><span className="muted">Model / config</span>{live.model ?? '—'}<span className="muted">{live.configId ?? ''}</span>{partial && <span className="pill warn-pill">partial offload — degraded</span>}</div>
         <div className="tile"><span className="muted">Phase / ctx</span>{live.phase ?? '—'} {live.ctx != null && `@ ${fmtCtx(live.ctx)}`}</div>
         <div className="tile"><span className="muted">Progress</span>step {live.stepsDone}/{live.ctxSteps.length || '—'}, config {live.candidatesDone}/{live.candidatesTotal ?? '—'}</div>
       </div>

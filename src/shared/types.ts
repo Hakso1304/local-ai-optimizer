@@ -153,6 +153,8 @@ export interface RendererApi {
   scanSystem(): Promise<SystemProfile>
   detectRuntimes(): Promise<RuntimeDetection[]>
   listModels(): Promise<ModelInfo[]>
+  /** modelId → null (fits in normal mode for this workload) or the reason it has no normal-mode candidate. */
+  modelFit(w: WorkloadId): Promise<Record<string, string | null>>
   benchSmoke(modelPath: string): Promise<SmokeResult>
 }
 

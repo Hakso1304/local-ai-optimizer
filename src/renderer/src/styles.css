@@ -47,3 +47,4 @@ tr.click { cursor: pointer; } tr.click:hover, tr.selected { background: var(--pa
 .log { background: var(--panel); border: 1px solid var(--line); padding: 8px; max-height: 260px; overflow: auto; font-size: 12px; white-space: pre-wrap; }
 code { color: #d2a8ff; }
 .mini { margin-left: 8px; font: inherit; font-size: 11px; background: var(--line); color: var(--fg); border: 1px solid #333b47; border-radius: 3px; cursor: pointer; }
+.warn-pill { border-color: var(--warn); color: var(--warn); }

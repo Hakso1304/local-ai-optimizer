@@ -63,6 +63,23 @@ ipcMain.handle('system:scan', async () => {
   return { ...profile, runtimes }
 })
 ipcMain.handle('models:list', () => llama.enumerateModels(modelDirs()))
+/** Per model: null if normal mode yields candidates for this workload, else the planner's reason (e.g. "full GPU
+ *  offload does not fit — enable heavy-model mode"). Same generateCandidates call as a real session. */
+ipcMain.handle('models:fit', async (_e, w: WorkloadId): Promise<Record<string, string | null>> => {
+  if (!(w in WORKLOADS)) throw new Error(`unknown workload ${String(w)}`)
+  profileCache ??= await scanSystem()
+  const [infos, devices] = await Promise.all([findGgufModels(modelDirs()), llama.listDevices().catch(() => [])])
+  const device = pickDiscreteDevice(devices)?.id ?? null
+  const machine = machineFromProfile(profileCache, device)
+  const out: Record<string, string | null> = {}
+  for (const info of infos) {
+    const mm = toModelMeta(info)
+    if (!mm.meta) { out[info.id] = mm.reason; continue }
+    const set = generateCandidates(machine, mm.meta, { backend: device ? 'vulkan' : 'cpu' }, WORKLOADS[w], rulesForRequest({ heavyMode: false }))
+    out[info.id] = set.candidates.length ? null : set.rejected.map((r) => r.reason).join('; ') || 'no candidate configuration'
+  }
+  return out
+})
 let installing: Promise<unknown> | null = null
 ipcMain.handle('runtime:install', async () => {
   if (installing) throw new Error('runtime install already running')
