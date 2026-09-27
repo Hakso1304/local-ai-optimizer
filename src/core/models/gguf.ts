@@ -175,6 +175,8 @@ export async function readGgufMetadata(path: string): Promise<GgufMetadata> {
       slidingWindowPattern: swaPattern,
       keyLengthSwa: keyLenSwa,
       valueLengthSwa: valLenSwa,
+      // Qwen3-style templates switch reasoning with an enable_thinking kwarg; the template text itself isn't kept.
+      supportsThinking: /enable_thinking/.test(str(kv.get('tokenizer.chat_template')) ?? ''),
       headDim: { value: headDim, kind: keyLen != null ? 'declared' : 'estimated' },
       estimated: {
         kvCacheBytesPerToken: blockCount && headCountKv && headDim && dv
@@ -243,7 +245,7 @@ export function toModelMeta(info: ModelInfo): { meta: ModelMeta } | { meta: null
       arch: g.arch!, ctxTrain: g.contextLength, layers: g.blockCount!, nEmbd: g.embeddingLength!, heads: g.headCount!,
       headsKv: g.headCountKv ?? g.headCount!, keyLength: g.keyLength, valueLength: g.valueLength, nVocab: g.nVocab!, slidingWindow: g.slidingWindow,
       headsKvPerLayer: g.headCountKvPerLayer, fullAttentionInterval: g.fullAttentionInterval, slidingWindowPattern: g.slidingWindowPattern,
-      keyLengthSwa: g.keyLengthSwa, valueLengthSwa: g.valueLengthSwa
+      keyLengthSwa: g.keyLengthSwa, valueLengthSwa: g.valueLengthSwa, supportsThinking: g.supportsThinking
     }
   }
 }

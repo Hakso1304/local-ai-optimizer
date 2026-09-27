@@ -89,6 +89,14 @@ describe('readGgufMetadata', () => {
     expect(mm).toMatchObject({ headsKv: 8, headsKvPerLayer: [8, 8, 8, 8, 8, 2], slidingWindowPattern: [true, true, true, true, true, false], keyLengthSwa: 256 })
   })
 
+  it('supportsThinking from a Qwen3-style chat template (template text not kept)', async () => {
+    const p = join(dir, 'think.gguf')
+    writeFileSync(p, gguf(3, [['general.architecture', 'str', 'qwen35'], ['tokenizer.chat_template', 'str', '{%- if enable_thinking is defined and enable_thinking is false %}<think>\n\n</think>{%- endif %}']], []))
+    const m = await readGgufMetadata(p)
+    expect(m.supportsThinking).toBe(true)
+    expect(JSON.stringify(m)).not.toContain('<think>')
+  })
+
   it('hybrid layout (qwen35-like full_attention_interval): only every Nth layer holds KV', async () => {
     const p = join(dir, 'hybrid.gguf')
     writeFileSync(p, gguf(3, [

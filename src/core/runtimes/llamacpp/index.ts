@@ -36,6 +36,9 @@ export function pickVulkanAsset(releases: GhRelease[]): { tag: string; name: str
 }
 
 /** Server came up with different settings than requested (maps to FailureKind 'config_drift'). */
+/** Fixed date for chat templates (determinism across days). */
+export const TEMPLATE_DATE = '01 Jan 2025'
+
 export class ConfigDriftError extends Error {
   readonly failureKind = 'config_drift' as const
 }
@@ -206,6 +209,7 @@ export class LlamaCppBackend implements InferenceBackend {
   /** Start llama-server for one model on a free port; resolves once /health is OK and /props shows our model. */
   async loadModel(cfg: LoadConfig): Promise<LoadResult> {
     if (this.proc) await this.unloadModel()
+    if (cfg.signal?.aborted) throw new Error('cancelled')
     this.port = cfg.port ?? (await freePort())
     this.log.length = 0
     this.lastExit = null
@@ -245,6 +249,10 @@ export class LlamaCppBackend implements InferenceBackend {
     const deadline = Date.now() + 120_000
     let healthy = false
     while (!healthy && Date.now() < deadline) {
+      if (cfg.signal?.aborted) {
+        await this.unloadModel()
+        throw new Error('cancelled')
+      }
       if (exited) throw new Error(`${exited}; last log: ${this.log.slice(-10).join(' | ')}`)
       healthy = (await this.healthCheck()).ok
       if (!healthy) await new Promise((r) => setTimeout(r, 100))
@@ -379,9 +387,12 @@ export class LlamaCppBackend implements InferenceBackend {
   }
 
   /** Apply the model's chat template (POST /apply-template) so chat-format prompts can go through runPrompt. */
-  async applyTemplate(messages: { role: string; content: string }[]): Promise<string> {
+  /** Chat template → raw prompt. date_string is always pinned: templates like Llama 3.1's inject today's date via
+   *  strftime_now, which would make quality prompts differ by day. templateKwargs (e.g. enable_thinking: false) win. */
+  async applyTemplate(messages: { role: string; content: string }[], opts: { templateKwargs?: Record<string, unknown> } = {}): Promise<string> {
+    const chat_template_kwargs = { date_string: TEMPLATE_DATE, ...opts.templateKwargs }
     const res = await fetch(`http://127.0.0.1:${this.port}/apply-template`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages }), signal: AbortSignal.timeout(10_000)
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages, chat_template_kwargs }), signal: AbortSignal.timeout(10_000)
     })
     if (!res.ok) throw new Error(`POST /apply-template -> HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`)
     return ((await res.json()) as { prompt: string }).prompt

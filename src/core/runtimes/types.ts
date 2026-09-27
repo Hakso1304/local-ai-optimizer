@@ -11,6 +11,8 @@ export interface LoadConfig {
   port?: number
   device: string // llama-server --device id, e.g. Vulkan0 (from listDevices; never let it default to all devices)
   extraArgs?: string[]
+  /** Aborting kills the starting server and rejects with 'cancelled' (the /health wait can take up to 120 s). */
+  signal?: AbortSignal
 }
 
 export interface PromptRequest {

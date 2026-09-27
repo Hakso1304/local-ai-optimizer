@@ -15,7 +15,7 @@ console.error('load_tensors:      Vulkan0 model buffer size =   500.79 MiB')
 const modelPath = mode === 'wrong' ? 'C:\\somewhere\\other.gguf' : arg('-m')
 http
   .createServer((req, res) => {
-    if (req.url === '/health') return res.end(JSON.stringify({ status: 'ok' }))
+    if (req.url === '/health') return mode === 'slow' ? res.writeHead(503).end('{"error":"loading model"}') : res.end(JSON.stringify({ status: 'ok' }))
     if (req.url === '/props') {
       const nCtx = mode === 'drift' ? Number(arg('-c')) / 2 : Number(arg('-c'))
       return res.end(JSON.stringify({ model_path: modelPath, default_generation_settings: { n_ctx: nCtx } }))
@@ -27,6 +27,12 @@ http
       res.writeHead(200, { 'content-type': 'text/event-stream' })
       res.write('data: {"content":"Hi","stop":false}\n\n')
       res.end('data: {"content":"","stop":true,"stop_type":"limit","timings":{"prompt_n":3,"prompt_ms":1.5,"prompt_per_second":2000,"predicted_n":1,"predicted_ms":2,"predicted_per_second":500}}\n\n')
+      return
+    }
+    if (req.url === '/apply-template') {
+      let body = ''
+      req.on('data', (d) => (body += d))
+      req.on('end', () => { const b = JSON.parse(body); res.end(JSON.stringify({ prompt: `[${JSON.stringify(b.chat_template_kwargs)}] ${b.messages.map((m) => m.content).join('|')}` })) })
       return
     }
     if (req.url === '/tokenize') {

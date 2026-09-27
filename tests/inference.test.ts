@@ -74,7 +74,7 @@ describe('startup log + exit classification', () => {
   })
 })
 
-describe('LlamaCppBackend process handling (fake server, no GPU)', () => {
+describe('LlamaCppBackend process handling (fake server, no GPU)', { timeout: 20_000 }, () => {
   const fake = join(__dirname, 'fixtures', 'fake-llama-server.cjs')
   const pidFile = join(tmpdir(), `lao-test-${process.pid}.pid`)
   const backend = (mode: string) =>
@@ -95,6 +95,18 @@ describe('LlamaCppBackend process handling (fake server, no GPU)', () => {
     expect(existsSync(pidFile)).toBe(false)
   })
 
+  it('loadModel is abortable during the /health wait and kills the child', async () => {
+    b = backend('slow')
+    const ctl = new AbortController()
+    setTimeout(() => ctl.abort(), 500)
+    const t0 = Date.now()
+    await expect(b.loadModel({ ...cfg, signal: ctl.signal })).rejects.toThrow(/^cancelled$/)
+    expect(Date.now() - t0).toBeLessThan(5_000)
+    expect(b.pid).toBeUndefined()
+    expect(existsSync(pidFile)).toBe(false)
+    await expect(b.loadModel({ ...cfg, signal: ctl.signal })).rejects.toThrow(/^cancelled$/) // already aborted: no spawn
+  })
+
   it('rejects a server whose /props reports a different model', async () => {
     b = backend('wrong')
     await expect(b.loadModel(cfg)).rejects.toThrow(/wrong server answered/)
@@ -110,6 +122,9 @@ describe('LlamaCppBackend process handling (fake server, no GPU)', () => {
     expect(r).toMatchObject({ text: 'Hi', decodeTokens: 1, stopType: 'limit', error: null })
     expect(r.ttftMs).toBeGreaterThan(0)
     expect(await b.tokenize('one two three')).toBe(3)
+    // date_string is always pinned; caller kwargs are added (and can override)
+    expect(await b.applyTemplate([{ role: 'user', content: 'hi' }], { templateKwargs: { enable_thinking: false } }))
+      .toBe('[{"date_string":"01 Jan 2025","enable_thinking":false}] hi')
     await b.unloadModel()
     expect(existsSync(pidFile)).toBe(false)
     expect((await b.runPrompt({ prompt: 'x', maxTokens: 1 })).error).toBe('no model loaded')

@@ -84,6 +84,8 @@ export interface GgufMetadata {
   slidingWindowPattern: boolean[] | null
   keyLengthSwa: number | null
   valueLengthSwa: number | null
+  /** tokenizer.chat_template mentions enable_thinking (Qwen3-style reasoning toggle). */
+  supportsThinking: boolean
   headDim: { value: number | null; kind: 'declared' | 'estimated' }
   estimated: { kvCacheBytesPerToken: number | null }
 }
