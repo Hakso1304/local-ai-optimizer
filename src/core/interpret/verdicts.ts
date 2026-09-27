@@ -33,7 +33,7 @@ export type LimitKind = 'failure' | 'spill' | 'cliff' | 'planned-skip:memory' | 
 export interface Coverage {
   largestCleanTested: number | null
   firstObservedFailure: { ctx: number; reason: string } | null
-  firstPlannedSkip: { ctx: number; reason: string; resource?: string; estimateBytes?: number; budgetBytes?: number } | null
+  firstPlannedSkip: { ctx: number; reason: string; resource?: string; estimateBytes?: number; budgetBytes?: number; weightsBytes?: number; kvBytes?: number; overheadBytes?: number } | null
   limitKind: LimitKind
 }
 export interface CandidateVerdict {
@@ -89,6 +89,8 @@ export interface DecisionTrace {
   cycle?: string[]
   excluded: { configId: string; reasons: string[] }[]
   qualityVsSpeed: { winner: string; fastest: string; difference: Difference | null; reason?: string; decodeWinner: number; decodeFastest: number } | null
+  /** F3: provisional candidates evaluated without their undecided terms against the confirmed winner. */
+  counterfactuals: { configId: string; without: string[]; total: number; vs: string | null; vsTotal: number | null; result: string }[]
 }
 export interface Verdicts {
   workload: WorkloadId
@@ -109,6 +111,8 @@ export interface Verdicts {
   quality: { decisive: boolean; a: CandidateVerdict; b: CandidateVerdict; difference: Difference | null; reason?: string } | null
   scoringRung: number | null
   sessionVersion: string | null
+  /** Coverage of EVERY prepared candidate, excluded ones included (F10). */
+  coverageAll: { input: CandidateInput; dropped: { ctx: number; reason: string }[]; coverage: Coverage; excluded: boolean }[]
 }
 
 const byId = (a: CandidateVerdict, b: CandidateVerdict) => (a.input.config.id < b.input.config.id ? -1 : a.input.config.id > b.input.config.id ? 1 : 0)
@@ -126,7 +130,7 @@ export function speedIneligible(r: BenchmarkRunResult, sessionVersion: string | 
   if (r.decodeTps.kind !== 'measured') return `decode is ${r.decodeTps.kind}${r.decodeTps.source ? ` (${r.decodeTps.source})` : ''}`
   if (val(r.decodeTps, true) === null) return 'no valid decode TPS (zero or missing)'
   const v = r.versions ? `${r.versions.benchmark}/${r.versions.prompts}` : null
-  if (sessionVersion && !v) return `benchmark/prompt versions not recorded (session ${sessionVersion})`
+  if (!v) return `benchmark/prompt versions not recorded${sessionVersion ? ` (session ${sessionVersion})` : ''} — no version proof`
   if (sessionVersion && v !== sessionVersion) return `benchmark/prompt version ${v} differs from the session's ${sessionVersion}`
   return null
 }
@@ -137,13 +141,35 @@ function sessionVersionOf(runs: BenchmarkRunResult[]): string | null {
   return [...count].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0]?.[0] ?? null
 }
 
+type ContractRow = UncertaintyRow & { appliedTemplateKwargs?: Record<string, unknown>; templateHash?: string | null; runtimeVersion?: string | null; modelFingerprint?: string | null; acceptedSampling?: Record<string, unknown> | null }
+/** F5: what is missing for a generation config to be comparable with its baseline (empty = contract met). */
+function contractGaps(rows: ContractRow[], base: ContractRow[]): string[] {
+  const gaps: string[] = []
+  if (!rows.length) return ['no rows']
+  if (!rows.every((r) => r.appliedTemplateKwargs && Object.keys(r.appliedTemplateKwargs).length > 0)) gaps.push('applied template kwargs not verified on every row')
+  for (const k of ['templateHash', 'runtimeVersion', 'modelFingerprint'] as const) {
+    if (!rows.every((r) => !!r[k])) gaps.push(`${k} not recorded`)
+    else if (base.length && !base.every((b) => b[k] === rows[0][k])) gaps.push(`${k} differs from the baseline's`)
+  }
+  if (!rows.every((r) => r.acceptedSampling && Object.keys(r.acceptedSampling).length > 0)) gaps.push('runtime-accepted sampling not recorded')
+  return gaps
+}
+
+/** F3: the rung each component was actually observed at. */
+function basisRung(v: CandidateVerdict, k: ComponentId): number | null {
+  if (k === 'quality') { const c = (v.qualityRows as (UncertaintyRow & { ctx?: number })[]).map((r) => r.ctx).find((x) => typeof x === 'number'); return c ?? null }
+  if (k === 'context') return v.coverage.largestCleanTested
+  if (k === 'stability') return null
+  return v.cs.referenceCtx
+}
+
 /** I-2.1: coverage, not proof. */
 export function coverageOf(input: CandidateInput, cs: ComponentScores, stopReason?: InterpretData['stopReason']): Coverage {
   const clean = val(cs.cliff.practicalContextCeiling)
   const bad = cs.cliff.steps.find((s) => s.verdict !== 'pass')
   const firstObservedFailure = bad ? { ctx: bad.ctx, reason: bad.reasons.find((r) => r.code !== 'beyond_limit')?.message ?? `${bad.verdict}` } : null
   const skip = input.config.skippedSteps.filter((s) => s.ctx > (clean ?? 0)).sort((a, b) => a.ctx - b.ctx)[0]
-  const firstPlannedSkip = skip ? { ctx: skip.ctx, reason: skip.reason, ...(skip.skip ? { resource: skip.skip.resource, estimateBytes: skip.skip.estimateBytes, budgetBytes: skip.skip.budgetBytes } : {}) } : null
+  const firstPlannedSkip = skip ? { ctx: skip.ctx, reason: skip.reason, ...(skip.skip ? { resource: skip.skip.resource, estimateBytes: skip.skip.estimateBytes, budgetBytes: skip.skip.budgetBytes, weightsBytes: skip.skip.weightsBytes, kvBytes: skip.skip.kvBytes, overheadBytes: skip.skip.overheadBytes } : {}) } : null
   let limitKind: LimitKind = 'unknown'
   const codes = bad?.reasons.map((r) => r.code) ?? []
   if (bad && input.runs.some((r) => r.ctx === bad.ctx && r.status === 'cancelled')) limitKind = 'cancelled'
@@ -184,6 +210,10 @@ function scopeMismatch(A: ScopedRow[], B: ScopedRow[], scope: 'candidates' | 'ge
     if (!o) continue
     if (r.checkerVersion && o.checkerVersion && r.checkerVersion !== o.checkerVersion) return `checker/suite versions differ (${r.checkerVersion} vs ${o.checkerVersion})`
     if (scope === 'candidates' && r.maxTokens && o.maxTokens && r.maxTokens !== o.maxTokens) return `token budgets differ on ${r.testId} (${r.maxTokens} vs ${o.maxTokens})`
+    const x = r as ScopedRow & { ctx?: number; templateHash?: string | null; kvType?: string }, y = o as typeof x
+    if (x.ctx && y.ctx && x.ctx !== y.ctx) return `quality contexts differ (${x.ctx} vs ${y.ctx})`
+    if (x.templateHash && y.templateHash && x.templateHash !== y.templateHash) return 'chat templates differ (template hash)'
+    if (x.kvType && y.kvType && x.kvType !== y.kvType) return `KV types differ (${x.kvType} vs ${y.kvType})`
   }
   return null
 }
@@ -254,13 +284,15 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
     const genOptions: GenOption[] = sortedGens.map((gq) => {
       const s = scoreOf(scored, machine, profile, cfg, gq, scoringRung)
       const lat = val(s.cs.components.latency.input, true)
-      const applied = (gq.results as { appliedTemplateKwargs?: Record<string, unknown> }[]).some((r) => !!r.appliedTemplateKwargs && Object.keys(r.appliedTemplateKwargs).length > 0)
-      const comparable = !gq.gen.thinking || applied
+      // F5 (I-8.0): the full application contract on every row — applied kwargs, template/runtime/model identity and
+      // the sampling the runtime accepted — and the same identities as the baseline it is compared with.
+      const missing = contractGaps(gq.results as ContractRow[], (sortedGens.find((x) => !x.gen.thinking)?.results ?? input.quality) as ContractRow[])
+      const comparable = !gq.gen.thinking || missing.length === 0
       const quarantined = !!s.cs.components.quality.quarantined
       return {
         gq, cs: s.cs, total: s.total, comparable: comparable && !quarantined,
         withinTolerance: !gq.gen.thinking || !!profile.latencyAdvisory || (lat !== null && lat <= tol),
-        ...(quarantined ? { why: 'quality quarantined (infrastructure error)' } : !comparable ? { why: 'template kwargs not verified as applied (identical renders or not recorded)' } : {})
+        ...(quarantined ? { why: 'quality quarantined (infrastructure error)' } : !comparable ? { why: `application contract not met: ${missing.join('; ')}` } : {})
       }
     })
     let gen: GenOption | null = null
@@ -281,8 +313,9 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
       .filter((k) => profile.weights[k] > 0 && chosen.cs.components[k].input.kind !== 'measured')
       .map((k) => ({ component: k, kind: chosen.cs.components[k].quarantined ? 'quarantined' : chosen.cs.components[k].input.kind, reason: chosen.cs.components[k].input.reason ?? chosen.cs.components[k].input.source }))
     // G03: read at another rung than the common one (its ladder skipped it) → the speed comparison is not matched.
-    if (scoringRung !== null && chosen.cs.referenceCtx !== scoringRung && chosen.cs.reachesScoringRung !== false && profile.weights.genSpeed > 0) {
-      undecided.push({ component: 'genSpeed', kind: 'unmatched-rung', reason: `measured at ${fmtCtx(chosen.cs.referenceCtx!)}, not at the common rung ${fmtCtx(scoringRung)}` })
+    // F2: any substitution (ladder skipped the rung, or a shorter ladder) leaves the speed/latency basis unmatched.
+    if (scoringRung !== null && chosen.cs.referenceCtx !== scoringRung) {
+      for (const k of ['genSpeed', 'latency', 'prefillSpeed'] as ComponentId[]) if (profile.weights[k] > 0) undecided.push({ component: k, kind: 'unmatched-rung', reason: `measured at ${chosen.cs.referenceCtx === null ? 'no rung' : fmtCtx(chosen.cs.referenceCtx)}, not at the common rung ${fmtCtx(scoringRung)}` })
     }
     return {
       input, scored, dropped, cs: chosen.cs, gen, genOptions, breakdown: chosen.breakdown, total: chosen.total, eligible: true, failures: [],
@@ -292,6 +325,22 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
       coverage: coverageOf(scored, chosen.cs, data.stopReason)
     }
   })
+
+  // F2: at the common rung the prompts must be comparable in size (±5 % of the median); unknown size = unmatched.
+  if (scoringRung !== null) {
+    const at = all.filter((v) => v.cs.referenceCtx === scoringRung)
+    const sizes = at.map((v) => v.scored.runs.find((r) => r.ctx === scoringRung)?.promptTokens ?? null)
+    const known = sizes.filter((x): x is number => typeof x === 'number')
+    // Reference size: the largest cluster of mutually comparable prompts (ties → the larger, i.e. the intended fill).
+    const near = (x: number, y: number) => Math.abs(x - y) / Math.max(x, y) <= 0.05
+    const med = known.length ? [...known].sort((x, y) => known.filter((k) => near(k, y)).length - known.filter((k) => near(k, x)).length || y - x)[0] : null
+    at.forEach((v, i) => {
+      const n = sizes[i]
+      const bad = n === null ? 'prompt size not recorded' : med !== null && !near(n, med) ? `prompt ${n} tokens vs ${med} for the others` : null
+      if (bad) for (const k of ['genSpeed', 'latency', 'prefillSpeed'] as ComponentId[]) if (profile.weights[k] > 0 && !v.undecided.some((u) => u.component === k)) v.undecided.push({ component: k, kind: 'unmatched-prompt', reason: bad })
+      v.confirmed = v.undecided.length === 0
+    })
+  }
 
   // Hard constraints first (I-1.1), then soft gates.
   const fail = (v: CandidateVerdict, f: GateFailure) => { v.eligible = false; v.failures.push(f) }
@@ -311,6 +360,8 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
         break
       }
     }
+    // F1: unknown RAM safety is not met (I-1.1) — independent of score weights; it also cannot veto (hard).
+    if (ram === 'not verified') fail(v, { ruleId: rule('mem.ram-floor').id, hard: true, notVerified: 'RAM safety floor', text: tag('mem.ram-floor', `RAM safety not verified up to ${fmtCtx(upTo)} (no recorded floor or measured minimum) — counts as not met`) })
     const recRun = v.scored.runs.find((r) => r.ctx === (v.cs.recommendedCtx ?? v.cs.referenceCtx))
     safety.set(v, { ramFloor: ram, spill: recRun?.peakSharedGpuBytes.kind === 'measured' ? 'measured' : 'not verified' })
   }
@@ -460,6 +511,14 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
   }
 
   const ranked = [...confirmed, ...provisional, ...ineligible]
+  // F3: for each provisional candidate, the evaluated counterfactual without its undecided terms (both sides).
+  const counterfactuals: DecisionTrace['counterfactuals'] = provisional.map((p) => {
+    const terms = p.undecided.map((u) => u.component)
+    const without = (x: CandidateVerdict) => x.breakdown.filter((r) => !terms.includes(r.component)).reduce((s, r) => s + r.contribution, 0)
+    const w = top && top !== p ? top : null
+    return { configId: p.input.config.id, without: [...new Set(terms)], total: Number(without(p).toFixed(3)), vs: w?.input.config.id ?? null, vsTotal: w ? Number(without(w).toFixed(3)) : null,
+      result: !w ? 'no confirmed winner to compare with' : without(p) > without(w) ? `ahead of ${w.input.config.id} without those terms` : `behind ${w.input.config.id} without those terms` }
+  })
   // I-7.4 basis: the winner against the fastest confirmed candidate (stored, so reasons never recompute it).
   const fast = ranked.find((v) => v.input.config.id === alternatives.fastest.configId)
   let qvs: DecisionTrace['qualityVsSpeed'] = null
@@ -493,17 +552,25 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
       qualityContribution: Number(qContribution(v).toFixed(3)), gen: v.gen?.gq.gen.id ?? null,
       referenceCtx: v.cs.referenceCtx, referenceWhy: v.cs.referenceWhy ?? null, recommendedCtx: v.cs.recommendedCtx, recommendedWhy: v.cs.recommendedWhy ?? null,
       failures: v.failures.map((f) => f.text),
-      basis: (Object.keys(profile.weights) as ComponentId[]).filter((k) => profile.weights[k] > 0).map((k) => ({ component: k, rung: v.cs.referenceCtx, kind: v.cs.components[k].input.kind })),
+      basis: (Object.keys(profile.weights) as ComponentId[]).filter((k) => profile.weights[k] > 0).map((k) => ({ component: k, rung: basisRung(v, k), kind: v.cs.components[k].input.kind })),
       safety: safety.get(v)!,
       qualityVsWinner: top && v !== top && v.qualityMeasured && top.qualityMeasured ? (({ d, reason }) => ({ difference: d, ...(reason ? { reason } : {}) }))(difference(v, top, profile, cfg)) : null
     })),
-    steps, neutralizations, tieBreakChain, alternatives, comparisons, ...(cycle ? { cycle } : {}), excluded,
+    steps, neutralizations, tieBreakChain, alternatives, comparisons, ...(cycle ? { cycle } : {}), excluded, counterfactuals,
     qualityVsSpeed: qvs,
     winner: top?.input.config.id ?? null, provisionalWinner: provisional[0]?.input.config.id ?? null,
     unmetAlternatives: unmet.map((v) => ({ configId: v.input.config.id, unmet: v.failures.filter((f) => f.user).map((f) => f.text) })),
     genChoices, thresholdsUsed
   }
+  const coverageAll = prepared.map((p) => {
+    const inRanked = ranked.find((v) => v.input === p.input)
+    return { input: p.input, dropped: p.dropped, coverage: inRanked ? inRanked.coverage : coverageOf(p.scored, p.base.cs, data.stopReason), excluded: !inRanked }
+  }).sort((a, b) => {
+    const ra = ranked.findIndex((x) => x.input === a.input), rb = ranked.findIndex((x) => x.input === b.input)
+    return (ra < 0 ? Infinity : ra) - (rb < 0 ? Infinity : rb) || (a.input.config.id < b.input.config.id ? -1 : a.input.config.id > b.input.config.id ? 1 : 0)
+  })
   return {
+    coverageAll,
     workload, profile, cfg, data, request, ranked, provisional, excluded, winner: top, provisionalWinner: provisional[0] ?? null, fallback, unmet, trace, quality, scoringRung, sessionVersion
   }
 }

@@ -153,6 +153,7 @@ export function sessionInputs(db: DatabaseSync, id: number): {
   allRuns: StoredRun[]
   planningSnapshot: { ramFloorBytes?: number; mmapCreditBytes?: number }
   stopReason?: 'done' | 'cancelled' | 'paused' | 'interrupted' | 'user-cap'
+  sessionVersions?: { benchmark: string; prompts: string }
 } | null {
   const d = getSession(db, id)
   const row = db.prepare('SELECT payload FROM benchmark_session WHERE id = ?').get(id) as { payload: string } | undefined
@@ -180,7 +181,9 @@ export function sessionInputs(db: DatabaseSync, id: number): {
     })),
     machine: p.machine,
     request: p.request ?? null,
-    allRuns, planningSnapshot, ...(stopReason ? { stopReason } : {})
+    allRuns, planningSnapshot, ...(stopReason ? { stopReason } : {}),
+    // F6: the persisted session identity (sessions created before it existed: derived from their latest rows)
+    ...(p.versions ? { sessionVersions: p.versions } : {})
   }
 }
 
@@ -214,7 +217,7 @@ export function makeSessionStorage(db: DatabaseSync, planFor: PlanFor): SessionS
     return c?.model.id ?? configId.split('|')[0] // configId = `${modelId}|ngl=..|kv=..|t=..`
   }
   return {
-    createSession: ({ workload, request }) => String(saveSession(db, { workload, request, ...planFor(request) }, 'running')),
+    createSession: ({ workload, request, versions }) => String(saveSession(db, { workload, request, ...(versions ? { versions } : {}), ...planFor(request) }, 'running')),
     setSessionStatus: (id, status, error) => setSessionStatus(db, sid(id), status, error),
     listRunHistory: (id) => sessionInputs(db, sid(id))?.allRuns ?? [],
     listRuns: (id) =>
@@ -268,7 +271,9 @@ function demoCandidate(f: Fixture, configId: string, kv: 'f16' | 'q8_0'): Candid
     configId, ctx: r.ctx, promptTokens: r.promptTokens, status: STATUS[r.status][0], failureKind: STATUS[r.status][1],
     loadTimeMs: m(r.loadMs), ttftMs: m(r.ttftMs), prefillTps: m(r.prefillTps), decodeTps: m(r.decodeTps), totalMs: m(r.totalMs),
     peakVramBytes: m(r.peakVramBytes), peakSharedGpuBytes: m(r.peakSharedGpuBytes), peakRamBytes: m(r.peakRamBytes),
-    avgGpuUtil: m(r.gpuAvgPct), avgCpuUtil: m(r.cpuAvgPct), warm: true // DEMO rows stand for warmed measurements (I-6.0)
+    avgGpuUtil: m(r.gpuAvgPct), avgCpuUtil: m(r.cpuAvgPct), warm: true, // DEMO rows stand for warmed measurements (I-6.0)
+    // DEMO provenance for I-6.0 version proof and the I-1.1 RAM-safety record (labelled; never real measurements)
+    versions: { benchmark: 'demo', prompts: 'demo', quality: 'demo', runtime: 'DEMO' }, ramFloorBytes: 4 * 1024 ** 3, minRamAvailBytes: m(16 * 1024 ** 3)
   }))
   return { config, model: { ...model, name: `DEMO ${model.name}` }, runs, quality: [] }
 }

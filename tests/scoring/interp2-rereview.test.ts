@@ -18,7 +18,7 @@ const VER = { benchmark: 'bench-1.0.0', prompts: 'ladder-2', quality: 'qb-1.1.0'
 function run(configId: string, ctx: number, decode = 40, over: Partial<BenchmarkRunResult> = {}): BenchmarkRunResult {
   return { configId, ctx, promptTokens: ctx * 0.75, status: 'pass', failureKind: null, warm: true,
     loadTimeMs: m(500), ttftMs: m(1000), prefillTps: m(2000), decodeTps: m(decode), totalMs: m(2000),
-    peakVramBytes: m(8 * GiB), peakSharedGpuBytes: m(0), peakRamBytes: m(GiB), minRamAvailBytes: m(20 * GiB), avgGpuUtil: m(80), avgCpuUtil: m(10),
+    peakVramBytes: m(8 * GiB), peakSharedGpuBytes: m(0), peakRamBytes: m(GiB), minRamAvailBytes: m(20 * GiB), ramFloorBytes: 4 * GiB, avgGpuUtil: m(80), avgCpuUtil: m(10),
     versions: VER, ...over }
 }
 function candidate(id: string, contexts = [8192], decode = 40, over: Partial<BenchmarkRunResult> = {}): CandidateInput {
@@ -120,14 +120,15 @@ describe('G07 memory and spill wording keep scope', () => {
     const c = candidate('a', [2048, 4096], 40)
     c.runs[0].peakSharedGpuRawBytes = m(0.05 * GiB); c.runs[1].peakSharedGpuRawBytes = m(1.15 * GiB)
     const t = text(panel([c]), 'I-2.2')
-    expect(t).toMatch(/raw shared-GPU usage \(host-pinned excluded\) grew \+1\.10 GiB at 4K vs 2K — above the 1\.00 GiB growth rule; the adjusted spill stayed below 0\.25 GiB/)
+    expect(t).toMatch(/raw shared-GPU usage \(host-pinned excluded\) grew \+1\.10 GiB at 4K vs 2K — above the 1\.00 GiB growth rule \(raw-growth-1\); the adjusted spill was 0\.00 GiB \(synthetic\)/)
     expect(t).toMatch(/provisional/)
   })
 })
 
 describe('G08 generation choice is deterministic and needs application proof', () => {
   const genRows = (id: string, reasoning: number, applied: Record<string, unknown> | undefined) =>
-    quality().map((r) => ({ ...r, genId: id, sample: 1, answerTokens: 100, reasoningTokens: reasoning, totalMs: 2000, tokenSource: 'runtime', ...(applied ? { appliedTemplateKwargs: applied } : {}) }))
+    quality().map((r) => ({ ...r, genId: id, sample: 1, answerTokens: 100, reasoningTokens: reasoning, totalMs: 2000, tokenSource: 'runtime', ...(applied ? { appliedTemplateKwargs: applied } : {}),
+      templateHash: 't1', runtimeVersion: 'b1', modelFingerprint: 'm1', acceptedSampling: { temperature: 0 } }))
   const gq = (id: string, effort: string, reasoning: number, applied?: Record<string, unknown>): GenQuality => ({
     gen: { id, thinking: true, effort, temperature: 0, source: 'default' }, results: genRows(id, reasoning, applied), samples: 1, stochastic: false,
     answerTokens: m(100), reasoningTokens: m(reasoning), effectiveAnswerLatencyMs: m(2000), effectiveTps: m(50), reasoningMs: m(1000), rawTps: m(100)
@@ -136,6 +137,7 @@ describe('G08 generation choice is deterministic and needs application proof', (
   it('equal quality: the lower effort is kept whatever the input order', () => {
     for (const order of [['high', 'low'], ['low', 'high']]) {
       const c = model(candidate('a'))
+      c.quality = c.quality.map((r) => ({ ...r, templateHash: 't1', runtimeVersion: 'b1', modelFingerprint: 'm1' } as QualityResult)) // baseline with the same identities
       c.genQuality = order.map((e) => gq(`think-${e}`, e, e === 'high' ? 100 : 20, { enable_thinking: true, reasoning_effort: e }))
       expect(verdicts({ candidates: [c], machine: machine() }, 'max_quality').winner?.gen?.gq.gen.id, order.join()).toBe('think-low')
     }
@@ -167,7 +169,7 @@ describe('G10 quality coverage and quarantine scope', () => {
       ...[1, 2, 3].map((s) => ({ testId: 'coding-0', category: 'coding' as const, weight: 1, pass: true, score: 1, detail: '', sample: s } as QualityResult))]
     const ins = panel([c])
     expect(text(ins, 'I-5.6')).toMatch(/< 3 items in coding/)
-    expect(text(ins, 'I-5.1')).toMatch(/coding 1\/1/)
+    expect(text(ins, 'I-5.1')).toMatch(/coding 100 % \(1 item, 3 completions\)/)
   })
   it('an infra error in a category the workload does not weight still quarantines the result', () => {
     const c = candidate('a')

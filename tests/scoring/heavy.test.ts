@@ -112,15 +112,13 @@ describe('heavy-model calibration: Qwen3.8-27B 55/65 layers vs Llama-3.1-8B full
     expect(rec.reasons.join('\n')).toMatch(/\[I-5\.4\] Qwen3\.8-27B-UD-Q4_K_M: quality measured with thinking off \(T=0\)/)
   })
 
-  it('Coding: equal quality → the 8B wins on speed; quality 100 vs 60 (bands apart) → quality decides (I-5.2)', () => {
-    const same = recommend(withQ(0.8, 0.8), MH, 'coding')
-    expect(same.ranked.find((s) => s.configId === Q)!.eligible).toBe(true) // 13 t/s passes the 10 t/s Coding gate
-    expect(same.best?.configId).toBe(L8)
-    const apart = recommend(withQ(1, 0.6), MH, 'coding')
-    expect(apart.best?.configId).toBe(Q)
-    expect(apart.reasons.join('\n')).toMatch(/\[I-5\.2\] qwen38\|ngl=55 vs llama8b\|ngl=all: quality difference \+40 \[\+\d+, \+\d+\] on 15 shared items — the interval excludes 0; quality decided/)
-    expect(apart.decisionTrace!.steps.map((s) => s.kind)).toEqual(['total', 'quality-decides'])
-    expect(apart.reasons.join('\n')).toMatch(/\[I-7\.4\] Quality vs speed: chosen for quality/)
+  it('Coding: the 27B stops at 8K below the common 16K rung → its speed basis is unmatched, so it is provisional (F2)', () => {
+    for (const [a, b] of [[0.8, 0.8], [1, 0.6]]) {
+      const r = recommend(withQ(a, b), MH, 'coding')
+      expect(r.ranked.find((s) => s.configId === Q)!.eligible, `${a}/${b}`).toBe(true) // 13 t/s passes the 10 t/s Coding gate
+      expect(r.best?.configId, `${a}/${b}`).toBe(L8)
+      expect(r.decisionTrace!.candidates.find((c) => c.configId === Q)!.undecided.join(' ')).toMatch(/unmatched-rung/)
+    }
   })
 
   it('Fast Assistant rejects the 27B on the decode gate (13 < 30 t/s)', () => {

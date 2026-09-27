@@ -35,10 +35,10 @@ describe('heavy: Qwen3.8-27B 55/65 layers vs Llama-3.1-8B', () => {
   const MH = { ...machine(fh.vramBytes), vramInUseBytes: { value: fh.vramInUseBytes, kind: 'measured' as const } }
   const withQ = () => inputs(fh).map((c) => ({ ...c, quality: q5(c.model.id, c.model.id.startsWith('qwen') ? 1 : 0.6) }))
 
-  it('Coding, quality 100 vs 60 (paired difference excludes 0): the 27B wins; the faster 8B says quality decided', () => {
+  it('Coding: the 27B (clean only to 8K) is provisional below the common 16K rung; its why-not says so', () => {
     const r = recommend(withQ(), MH, 'coding')
-    expect(r.best?.headline).toBe('Qwen3.8-27B-UD-Q4_K_M (55/65 layers) @ 8K — 13.0 t/s, quality 100 [78, 100], no spill up to 8K')
-    expect(r.whyNot![0].summary).toBe('[I-7.3] Meta-Llama-3.1-8B-Instruct Q4_K_M: quality −40 [−67, −15] (60 [35, 81] vs 100 [78, 100]); decode 93.2 t/s at 16K vs 13.0 at 8K; largest clean context 32K vs 8K; Coding total 80 vs 68 — outranked because quality decides (paired quality difference +40 [+15, +67] excludes 0)')
+    expect(r.best?.configId).toBe('llama8b|ngl=all')
+    expect(r.whyNot!.find((w) => w.configId === 'qwen38|ngl=55')!.summary).toMatch(/provisional — genSpeed unmatched-rung/)
   })
 
   it('Maximum Quality: partial-offload headline; the 8B lost on quality', () => {

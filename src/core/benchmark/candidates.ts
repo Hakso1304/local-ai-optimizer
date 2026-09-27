@@ -130,7 +130,11 @@ export function estimateMemory(m: ModelMeta, gpuLayers: number, ctx: number, kv:
     ramResidentBytes: m.fileBytes - wGpu + kvCpu + 512 * MiB + (onGpu === 0 ? 1.5 * GiB : 0),
     kvBytes,
     kvSource,
-    kvUnknown
+    kvUnknown,
+    /** VRAM breakdown (F9: whether a KV-only remedy can fit): weights incl. output, KV on GPU, compute + logits. */
+    vramWeightsBytes: onGpu > 0 ? wGpu + outputBytes : 0,
+    vramKvBytes: kvGpu,
+    vramOverheadBytes: onGpu > 0 ? compute + logits : 0
   }
 }
 
@@ -209,7 +213,7 @@ export function generateCandidates(
           overVramKept = true; steps.push(ctx); notes.push(`${ctxK(ctx)} is above the VRAM estimate; kept to observe the cliff`); continue
         }
         overVramKept = true // never skip a step and then run a larger one
-        skipped.push({ ctx, reason: `est. VRAM ${gib(vramNeed)} > budget ${gib(gpuBudget)}`, skip: { resource: 'vram', estimateBytes: vramNeed, budgetBytes: gpuBudget, ruleId: 'I-2.3' } })
+        skipped.push({ ctx, reason: `est. VRAM ${gib(vramNeed)} > budget ${gib(gpuBudget)}`, skip: { resource: 'vram', estimateBytes: vramNeed, budgetBytes: gpuBudget, ruleId: 'I-2.3', weightsBytes: e.vramWeightsBytes, kvBytes: e.vramKvBytes, overheadBytes: e.vramOverheadBytes } })
         continue
       }
       steps.push(ctx)

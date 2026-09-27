@@ -21,7 +21,7 @@ function quality(n = 10, passes = 8): UncertaintyRow[] {
 function run(configId: string, ctx = 8192, decode = 40): BenchmarkRunResult {
   return { configId, ctx, promptTokens: ctx * .75, status: 'pass', failureKind: null, warm: true,
     loadTimeMs: m(500), ttftMs: m(1000), prefillTps: m(2000), decodeTps: m(decode), totalMs: m(2000),
-    peakVramBytes: m(8 * GiB), peakSharedGpuBytes: m(0), peakRamBytes: m(GiB), minRamAvailBytes: m(20 * GiB), avgGpuUtil: m(80), avgCpuUtil: m(10),
+    peakVramBytes: m(8 * GiB), peakSharedGpuBytes: m(0), peakRamBytes: m(GiB), minRamAvailBytes: m(20 * GiB), ramFloorBytes: 4 * GiB /* F1 (w4j): the floor must be recorded, unknown safety fails */, avgGpuUtil: m(80), avgCpuUtil: m(10),
     versions: { benchmark: 'synthetic-1', prompts: 'synthetic-1', quality: 'synthetic-1', runtime: 'synthetic-1' } }
 }
 function candidate(id = 'a', contexts = [8192]): CandidateInput {

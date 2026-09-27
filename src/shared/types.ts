@@ -230,6 +230,8 @@ export interface SessionPayload {
   /** Declared VRAM of the bench GPU, for cliff/spill rules. */
   vramBytes: number | null
   candidates: { config: CandidateConfig; model: ModelMeta }[]
+  /** The session's benchmark/prompt versions (I-6.0 identity), recorded at creation. */
+  versions?: { benchmark: string; prompts: string }
   /** Original request (for resume). */
   request?: SessionRequest
   /** The scan the candidate plan was generated from; resume re-plans from it so configIds/ctxSteps match. */

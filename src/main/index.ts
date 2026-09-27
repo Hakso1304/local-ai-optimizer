@@ -197,7 +197,7 @@ ipcMain.handle('recommendation:compute', async (_e, rawId: unknown, w: WorkloadI
   const machine = machineFromProfile(s.machine ?? (profileCache ??= await scanSystem()), device)
   // The session's own requiredContext / minDecodeTps still apply when viewing it as another workload.
   const recommendation = recommendForWorkload(
-    { candidates: s.inputs, machine, allRuns: s.allRuns, planningSnapshot: s.planningSnapshot, ...(s.stopReason ? { stopReason: s.stopReason } : {}) },
+    { candidates: s.inputs, machine, allRuns: s.allRuns, planningSnapshot: s.planningSnapshot, ...(s.stopReason ? { stopReason: s.stopReason } : {}), ...(s.sessionVersions ? { sessionVersions: s.sessionVersions } : {}) },
     w, { requiredContext: s.request?.requiredContext, minDecodeTps: s.request?.minDecodeTps })
   return { sessionId: Number(id), workload: w, recommendation, label: `computed from session #${Number(id)}` }
 })

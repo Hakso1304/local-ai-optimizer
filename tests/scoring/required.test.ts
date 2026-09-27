@@ -63,7 +63,7 @@ describe('large_coding profile (quality over speed)', () => {
   const fh = load('calib-heavy-qwen38-rx9070.json')
   // Qwen3.8-27B 55/65: measured 2K–8K; 16K–64K extrapolated flat (decode is set by the CPU-side layers), prefill ~600 t/s.
   const q = inputs(fh).find((c) => c.config.id === 'qwen38|ngl=55')!
-  const extra = [16384, 32768, 65536].map((ctx) => toRun({ ...fh.runs.find((r) => r.configId === 'qwen38|ngl=55' && r.ctx === 8192)!, ctx, ttftMs: ((ctx * 0.75) / 600) * 1000, prefillTps: 600, decodeTps: 12.4 }))
+  const extra = [16384, 32768, 65536].map((ctx) => toRun({ ...fh.runs.find((r) => r.configId === 'qwen38|ngl=55' && r.ctx === 8192)!, ctx, promptTokens: ctx * 0.75, ttftMs: ((ctx * 0.75) / 600) * 1000, prefillTps: 600, decodeTps: 12.4 })) // synthetic: 0.75·ctx prompt
   const big: CandidateInput = { ...q, runs: [...q.runs, ...extra], quality: q5(q.model.id, 1) }
   const all = () => [big, ...eight().map((c) => ({ ...c, quality: q5(c.model.id, 0.6) }))]
 

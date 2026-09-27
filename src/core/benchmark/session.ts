@@ -38,6 +38,8 @@ export interface SessionBackend {
   /** Token count of text with the loaded model (llama-server POST /tokenize); optional — without it the ladder prompt
    *  stays character-sized. */
   tokenize?(text: string): Promise<number>
+  /** Hash of the loaded model's chat template (from /props), for the I-8.0 application contract; optional. */
+  readonly templateHash?: string | null
 }
 
 export interface SessionSampler {
@@ -66,7 +68,7 @@ export interface RunDetail {
 
 /** #2 implements this against db.ts. Resume reads back what save* wrote. */
 export interface SessionStorage {
-  createSession(s: { workload: SessionRequest['workload']; request: SessionRequest; startedAt: number }): Awaitable<string>
+  createSession(s: { workload: SessionRequest['workload']; request: SessionRequest; startedAt: number; /** the session's identity (I-6.0), persisted */ versions?: { benchmark: string; prompts: string } }): Awaitable<string>
   setSessionStatus(sessionId: string, status: 'running' | 'done' | 'cancelled' | 'paused' | 'failed', error?: string): Awaitable<void>
   listRuns(sessionId: string): Awaitable<BenchmarkRunResult[]>
   /** Every persisted attempt incl. superseded retries (I-6.3); absent → listRuns is taken as the history. */
@@ -213,7 +215,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   signal?.addEventListener('abort', onAbort)
 
   try {
-    if (!sessionId) sessionId = await storage.createSession({ workload: req.workload, request: suite.suiteSeed === null ? req : { ...req, qualitySeed: suite.suiteSeed }, startedAt: clock.now() })
+    if (!sessionId) sessionId = await storage.createSession({ workload: req.workload, request: suite.suiteSeed === null ? req : { ...req, qualitySeed: suite.suiteSeed }, startedAt: clock.now(), versions: { benchmark: BENCHMARK_VERSION, prompts: PROMPT_VERSION } })
     await storage.setSessionStatus(sessionId, 'running')
     // Resume re-runs steps that never really ran: cancelled ones and RAM-guard skips (memory may be free now).
     // retryFailed also re-runs fail/timeout steps (not config_drift: same config → same drift; a changed config has a
@@ -672,6 +674,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         const onset = ordered.findIndex((x) => x.procVramSharedBytes != null && x.procVramSharedBytes - pinned - spillBase > DEFAULT_SCORING_CONFIG.cliff.sharedSpillBytes)
         return (onset < 0 ? [] : ordered.slice(0, onset)).filter((x) => x.procVramDedicatedBytes != null && x.procVramDedicatedBytes >= peakDed * 0.99).length
       })(),
+      peakVramPlateauVersion: 'pre-spill-1',
       minRamAvailDuringLoadBytes: minLoadRam === null ? { value: null, kind: 'unavailable', reason: 'no RAM reading during load' } : { value: minLoadRam, kind: 'measured', source: 'RAM guard during load' },
       repDecodeTps: reps.map((r) => r.decodeTps).filter((x): x is number => typeof x === 'number'),
       minRamAvailBytes: minRam === null ? { value: null, kind: 'unavailable', reason: 'no RAM reading during the step' } : { value: minRam, kind: 'measured', source: 'RAM guard: OS free RAM / typeperf' },
@@ -816,7 +819,10 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
                 maxTokens: preq.maxTokens, checkerVersion: suite.suite, outputTruncated: truncated,
                 // A failed request is an infrastructure failure, never a wrong answer (rule I-5.7); a budget stop is truncation (I-5.8).
                 evaluationStatus: (r.error && !r.timedOut ? 'infra_error' : truncated ? 'truncated' : 'valid') as GenRow['evaluationStatus'],
-                ...(templateKwargs ? { requestedTemplateKwargs: templateKwargs } : {})
+                ...(templateKwargs ? { requestedTemplateKwargs: templateKwargs } : {}),
+                // F5 contract: identities + runtime-accepted sampling (null when the backend does not report them)
+                templateHash: backend.templateHash ?? null, runtimeVersion: deps.runtimeVersion ?? null, modelFingerprint: `${model.id}#${model.fileBytes}`,
+                acceptedSampling: (r as PromptResult & { acceptedSampling?: Record<string, unknown> | null }).acceptedSampling ?? null
               }
               rows.push(r.error
                 ? { testId: test.id, category: test.category, weight: test.weight, pass: false, score: 0, detail: `request failed: ${r.error}`, ...tag, ...counts }

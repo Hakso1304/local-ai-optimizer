@@ -31,6 +31,11 @@ export const toRun = (r: FixtureRun): BenchmarkRunResult => ({
   peakVramBytes: m(r.peakVramBytes), peakSharedGpuBytes: m(r.peakSharedGpuBytes), peakRamBytes: m(r.peakRamBytes),
   avgGpuUtil: m(r.gpuAvgPct), avgCpuUtil: m(r.cpuAvgPct),
   warm: true, // fixture rows are warmed measurements (I-6.0 requires a recorded successful warmup)
+  // SYNTHETIC provenance (the calibration rows predate these records): version proof (I-6.0) and a RAM-safety
+  // observation well above the floor (I-1.1/I-4.3). Labelled so they are never mistaken for measurements.
+  versions: { benchmark: 'bench-1.0.0', prompts: 'ladder-2', quality: 'qb-1.1.0', runtime: 'fixture' },
+  minRamAvailBytes: { value: 16 * 1024 ** 3, kind: 'measured', source: 'SYNTHETIC test safety record (not in the source run)' },
+  ramFloorBytes: 4 * 1024 ** 3,
   ...(r.peakSharedGpuRawBytes !== undefined ? { peakSharedGpuRawBytes: m(r.peakSharedGpuRawBytes) } : {})
 })
 

@@ -39,9 +39,19 @@ const synth = (runs: BenchmarkRunResult[], over: Partial<CandidateInput['model']
   return { ...base, model: { ...base.model, ...over }, config: { ...base.config, ...cfg }, runs: runs.map((r) => ({ ...r, configId: cfg.id ?? base.config.id })) }
 }
 
+// Two models measured on the same rungs (same prompt sizes): 'slow' (decode 20, quality rateA) vs 'fast' (decode 90, rateB).
+const pair = (rateA: number, rateB: number): CandidateInput[] => {
+  const mk = (id: string, decode: number, rate: number) => {
+    const c = synth([run(2048, { decode }), run(4096, { decode }), run(8192, { decode })], { id: `m-${id}`, name: `Model ${id}` }, { id, modelId: `m-${id}` })
+    return { ...c, quality: q5('x', rate) }
+  }
+  return [mk('slow', 20, rateA), mk('fast', 90, rateB)]
+}
+
 // Generation configs: thinking at two efforts (applied template kwargs verified) vs the deterministic baseline.
 const genRows = (g: GenConfig, rate: number, reasoning: number, ms: number, applied = true): GenRow[] =>
-  q5('m', rate).map((r) => ({ ...r, genId: g.id, sample: 1, answerTokens: 100, reasoningTokens: reasoning, totalMs: ms, tokenSource: 'runtime', ...(applied ? { appliedTemplateKwargs: { enable_thinking: g.thinking } } : {}) }))
+  q5('m', rate).map((r) => ({ ...r, genId: g.id, sample: 1, answerTokens: 100, reasoningTokens: reasoning, totalMs: ms, tokenSource: 'runtime',
+    ...(applied ? { appliedTemplateKwargs: { enable_thinking: g.thinking }, templateHash: 'tpl-1', runtimeVersion: 'b11208', modelFingerprint: 'llama8b#1', acceptedSampling: { temperature: g.temperature } } : {}) }))
 const OFF: GenConfig = { id: 'off', thinking: false, temperature: 0, source: 'default' }
 const LOW: GenConfig = { id: 'think-low-t1', thinking: true, effort: 'low', temperature: 1, source: 'default' }
 const MED: GenConfig = { id: 'think-medium-t1', thinking: true, effort: 'medium', temperature: 1, source: 'default' }
@@ -228,7 +238,7 @@ describe('§4 memory', () => {
     expect(has(panel(full8(), 'coding'), 'I-4.4')).toBe(false)
   })
   it('I-4.5 saturation only with ≥ 3 plateau samples before the spill; not with one', () => {
-    const c = withQuality(inputs(f14)).map((x) => ({ ...x, runs: x.runs.map((r) => (r.ctx === 32768 ? { ...r, peakVramPlateauSamples: 4 } : r)) }))
+    const c = withQuality(inputs(f14)).map((x) => ({ ...x, runs: x.runs.map((r) => (r.ctx === 32768 ? { ...r, peakVramPlateauSamples: 4, peakVramPlateauVersion: 'pre-spill-1' } : r)) }))
     expect(text(panel(c, 'reasoning'), 'I-4.5')).toMatch(/spill began at ≈83 % dedicated VRAM \(4 samples at the plateau, this run\)/)
     expect(has(panel(withQuality(inputs(f14)), 'reasoning'), 'I-4.5')).toBe(false)
   })
@@ -236,14 +246,14 @@ describe('§4 memory', () => {
 
 describe('§5 quality', () => {
   it('I-5.1 Q with the heuristic band, method and coverage counts; not for a prior', () => {
-    expect(text(panel(full8(), 'coding'), 'I-5.1')).toMatch(/^\[I-5\.1\] Meta-Llama-3\.1-8B-Instruct Q4_K_M: Q 60 \(uncertainty \[\d+, \d+\], heuristic wilson-item unc-1; n=15 items \/ 15 skills \/ 1 samples\) — instruction 3\/5, coding 3\/5, structured 3\/5\.$/)
+    expect(text(panel(full8(), 'coding'), 'I-5.1')).toMatch(/^\[I-5\.1\] Meta-Llama-3\.1-8B-Instruct Q4_K_M: Q 60 \(uncertainty \[\d+, \d+\], heuristic wilson-item unc-1; n=15 items \/ 15 skills \/ 1 samples\) — instruction 60 % \(5 items\), coding 60 % \(5 items\), structured 60 % \(5 items\)\.$/)
     expect(has(panel(inputs(f8).filter((c) => c.config.id === FULL), 'general_chat'), 'I-5.1')).toBe(false)
   })
   it('I-5.2 decisive paired difference vs "insufficient evidence" with the delta neutralized; none without a rival', () => {
-    const apart = panel(withQuality(inputs(fh), (m) => (m.startsWith('qwen') ? 1 : 0.6)), 'coding', {}, MH).find((i) => i.ruleId === 'I-5.2')!
+    const apart = panel(pair(1, 0.6), 'max_quality').find((i) => i.ruleId === 'I-5.2')!
     expect(apart).toMatchObject({ severity: 'info' })
-    expect(apart.text).toMatch(/the interval excludes 0; quality decided/)
-    const close = panel(withQuality(inputs(fh), (m) => (m.startsWith('qwen') ? 0.8 : 0.6)), 'coding', {}, MH).find((i) => i.ruleId === 'I-5.2')!
+    expect(apart.text).toMatch(/the interval excludes 0/)
+    const close = panel(pair(0.6, 0.6), 'max_quality').find((i) => i.ruleId === 'I-5.2')!
     expect(close).toMatchObject({ severity: 'warn', action: 'run-thorough-quality' })
     expect(close.text).toMatch(/insufficient evidence to distinguish quality on this suite .* the quality delta is neutralized/)
     expect(has(panel(full8(), 'coding'), 'I-5.2')).toBe(false)
@@ -331,12 +341,13 @@ describe('§7 comparisons', () => {
     expect(has(panel(full8(), 'coding'), 'I-7.1')).toBe(false)
   })
   it('I-7.2 the decision trace records constraints, eligibility, neutralizations and the tie-break path', () => {
-    const r = recommend(withQuality(inputs(fh), (m) => (m.startsWith('qwen') ? 0.8 : 0.6)), MH, 'coding')
+    const r = recommend(pair(0.6, 0.6), M, 'max_quality')
     const t = r.decisionTrace!
-    expect(t.hardConstraints).toMatchObject({ minDecodeTps: { value: 10, source: 'workload' }, latencyToleranceMs: 15000 })
-    expect(t.neutralizations[0]).toMatchObject({ a: 'qwen38|ngl=55', b: 'llama8b|ngl=all', winner: 'llama8b|ngl=all' })
+    expect(t.hardConstraints).toMatchObject({ minDecodeTps: { value: 2, source: 'workload' }, latencyToleranceMs: 20000 })
+    expect(t.neutralizations[0]).toMatchObject({ a: 'slow', b: 'fast', winner: 'fast' })
+    expect(t.comparisons[0]).toMatchObject({ a: 'slow', b: 'fast', basis: 'without-quality', winner: 'fast' })
     expect(t.steps.map((s) => s.kind)).toEqual(['total'])
-    expect(r.reasons[0]).toMatch(/^\[I-7\.2\] Decision trace .*: best for Coding: llama8b\|ngl=all .*1 quality neutralization/)
+    expect(r.reasons[0]).toMatch(/^\[I-7\.2\] Decision trace .*: best for Maximum Quality: fast .*1 quality neutralization/)
   })
   it('I-7.3 why-not carries the paired difference first, and cites the rule', () => {
     const r = recommend([...full8(), ...withQuality(inputs(f14).filter((c) => c.config.id === 'qwen14b|ngl=all'))], M, 'coding')
@@ -368,7 +379,7 @@ describe('§8 generation configs', () => {
   it('I-8.0 thinking configs without verified applied kwargs are not considered; verified ones are', () => {
     const v = verdicts({ candidates: withGens(1, 1, { applied: false }), machine: M }, 'general_chat')
     expect(v.winner!.gen!.gq.gen.id).toBe('off')
-    expect(text(interpret(v), 'I-8.0')).toMatch(/thinking on \(effort low, T=1\.0\) not comparable — template kwargs not verified as applied/)
+    expect(text(interpret(v), 'I-8.0')).toMatch(/thinking on \(effort low, T=1\.0\) not comparable — application contract not met: applied template kwargs not verified on every row/)
     expect(has(panel(withGens(1, 1), 'reasoning'), 'I-8.0')).toBe(false)
   })
   it('I-8.1 the chosen thinking config with its paired difference and both effective speeds; baseline kept → none', () => {

@@ -33,6 +33,20 @@ function band(x: number, edges: [number, string][], last: string): string {
 const firstOf = (list: CandidateVerdict[]) => list.filter((c, i) => list.findIndex((x) => x.input.model.id === c.input.model.id) === i)
 const CATS: QualityCategory[] = ['instruction', 'reasoning', 'coding', 'structured', 'extraction', 'context']
 
+/** F9: which remedy can actually fit a VRAM-skipped rung, from the planner's weights / KV / overhead breakdown. */
+function vramRemedy(cfg: CandidateInput['config'], s: { estimateBytes?: number; budgetBytes?: number; weightsBytes?: number; kvBytes?: number; overheadBytes?: number }): string {
+  if (s.budgetBytes === undefined || s.weightsBytes === undefined || s.kvBytes === undefined || s.overheadBytes === undefined) return action('inspect-diagnostics')
+  if (s.weightsBytes + s.overheadBytes > s.budgetBytes) return cfg.gpuLayersAll ? action('enable-heavy-mode') : action('inspect-diagnostics') // weights alone do not fit
+  if (cfg.kvType === 'f16' && s.weightsBytes + s.kvBytes * 0.53 + s.overheadBytes <= s.budgetBytes) return action('enable-kv-q8') // q8_0 ≈ 0.53 × f16 KV
+  return cfg.gpuLayersAll ? action('enable-heavy-mode') : action('lower-required-context')
+}
+
+/** F4: the adjusted spill as observed, or why it is unavailable. */
+function adjustedText(m: Metric | undefined): string {
+  if (!m || m.kind !== 'measured' || m.value === null) return `the adjusted spill is unavailable (${m?.reason ?? 'not recorded'})`
+  return `the adjusted spill was ${gib(m.value)} (${m.source ?? 'adjusted-spill'})`
+}
+
 export function interpret(v: Verdicts): Insight[] {
   const out: Insight[] = []
   const push = (key: string, text: string, evidence: Evidence[], o: { severity?: Severity; configId?: string; action?: string | null; evaluable?: boolean } = {}) => {
@@ -45,7 +59,7 @@ export function interpret(v: Verdicts): Insight[] {
   const machine = data.machine
   const everyone = v.ranked
   const allInputs: CandidateInput[] = data.candidates
-  const id = (c: CandidateVerdict) => c.input.config.id
+  const id = (c: { input: CandidateInput }) => c.input.config.id
 
   // §1 provenance
   for (const c of everyone) for (const f of c.failures) {
@@ -70,8 +84,9 @@ export function interpret(v: Verdicts): Insight[] {
   }
 
   // §2 coverage
-  for (const c of everyone) {
+  for (const c of v.coverageAll) {
     const cov = c.coverage
+    const cleanM = { value: cov.largestCleanTested, kind: cov.largestCleanTested === null ? 'unavailable' : 'measured', ...(cov.largestCleanTested === null ? { reason: 'no clean rung' } : {}) } as Metric
     const declared = c.input.model.ctxTrain
     const stopped = cov.limitKind === 'failure' || cov.limitKind === 'spill' || cov.limitKind === 'cliff'
       ? `Stopped because of a ${cov.limitKind} at ${fmtCtx(cov.firstObservedFailure!.ctx)}: ${cov.firstObservedFailure!.reason}.`
@@ -80,14 +95,14 @@ export function interpret(v: Verdicts): Insight[] {
           : cov.limitKind === 'cancelled' ? 'Higher contexts were not attempted (the session stopped early).'
             : 'Higher contexts were not attempted.'
     if (cov.largestCleanTested === null) {
-      push('ctx.coverage', tag('ctx.coverage', `${id(c)}: no clean context measured in this run${cov.firstObservedFailure ? ` — first observed at ${fmtCtx(cov.firstObservedFailure.ctx)}: ${cov.firstObservedFailure.reason}` : ''}${c.dropped.length ? `; ${c.dropped.length} completed row(s) not verified (I-6.0)` : ''}.`), [], { configId: id(c) })
+      push('ctx.coverage', tag('ctx.coverage', `${id(c)}: no clean context measured in this run${cov.firstObservedFailure ? ` — first observed at ${fmtCtx(cov.firstObservedFailure.ctx)}: ${cov.firstObservedFailure.reason}` : ''}${c.dropped.length ? `; not verified: ${c.dropped.map((d) => `${fmtCtx(d.ctx)} (${d.reason})`).join(', ')}` : ''}${c.excluded ? ' — excluded from ranking' : ''}.`), [], { configId: id(c) })
     } else {
       add('ctx.coverage', { config: id(c), clean: fmtCtx(cov.largestCleanTested), declared: declared ? fmtCtx(declared) : 'unknown', stopped },
-        [ev('largestCleanTested', c.cs.cliff.practicalContextCeiling, undefined, id(c))], { configId: id(c) })
+        [ev('largestCleanTested', cleanM, undefined, id(c))], { configId: id(c) })
       if (declared && cov.largestCleanTested < declared * P('ctx.declared-vs-tested', 'fraction')) {
         const observed = stopped.startsWith('Stopped') ? ` (a ${cov.limitKind} was observed at ${fmtCtx(cov.firstObservedFailure!.ctx)})` : ''
         add('ctx.declared-vs-tested', { config: id(c), clean: fmtCtx(cov.largestCleanTested), declared: fmtCtx(declared), observed },
-          [ev('largestCleanTested', c.cs.cliff.practicalContextCeiling, undefined, id(c)), num('ctxTrain', declared, 'declared')],
+          [ev('largestCleanTested', cleanM, undefined, id(c)), num('ctxTrain', declared, 'declared')],
           { configId: id(c), severity: observed ? 'warn' : 'note', action: observed ? action('use-context', fmtCtx(cov.largestCleanTested)) : null })
       }
     }
@@ -95,9 +110,7 @@ export function interpret(v: Verdicts): Insight[] {
       const s = cov.firstPlannedSkip
       const what = `estimated ${s.resource === 'vram' ? 'VRAM' : 'RAM'} ${s.estimateBytes !== undefined ? gib(s.estimateBytes) : '?'} > budget ${s.budgetBytes !== undefined ? gib(s.budgetBytes) : '?'} (planning snapshot)`
       add('ctx.planned-skip', { config: id(c), ctx: fmtCtx(s.ctx), what }, [num('estimateBytes', s.estimateBytes ?? null, 'estimated', s.ctx, id(c)), num('budgetBytes', s.budgetBytes ?? null, 'estimated', s.ctx, id(c))],
-        { configId: id(c), action: s.resource === 'vram'
-          ? (c.input.config.kvType === 'f16' ? action('enable-kv-q8') : c.input.config.gpuLayersAll ? action('enable-heavy-mode') : profile.requiredContext ? action('lower-required-context') : action('inspect-diagnostics'))
-          : action('rerun-idle') })
+        { configId: id(c), action: s.resource === 'vram' ? vramRemedy(c.input.config, s) : action('rerun-idle') })
     }
   }
   for (const c of everyone) {
@@ -113,7 +126,7 @@ export function interpret(v: Verdicts): Insight[] {
       const single = ' — one peak per rung, sample count not recorded: provisional'
       const act = clean ? action('use-context', fmtCtx(clean)) : c.input.config.kvType === 'f16' ? action('enable-kv-q8') : action('inspect-diagnostics')
       if (spill.metric === 'peakSharedGpuRawBytes') {
-        push('ctx.spill', tag('ctx.spill', `${id(c)}: raw shared-GPU usage (host-pinned excluded) grew +${gib(spill.to!)} at ${fmtCtx(spill.toCtx)} vs ${spill.fromCtx ? fmtCtx(spill.fromCtx) : 'the previous rung'} — above the ${gib(v.cfg.cliff.rawSharedGrowthBytes)} growth rule; the adjusted spill stayed below ${gib(v.cfg.cliff.sharedSpillBytes)}${delta}${single}.`),
+        push('ctx.spill', tag('ctx.spill', `${id(c)}: raw shared-GPU usage (host-pinned excluded) grew +${gib(spill.to!)} at ${fmtCtx(spill.toCtx)} vs ${spill.fromCtx ? fmtCtx(spill.fromCtx) : 'the previous rung'} — above the ${gib(v.cfg.cliff.rawSharedGrowthBytes)} growth rule (raw-growth-1); ${adjustedText(runs[i]?.peakSharedGpuBytes)}${delta}${single}.`),
           [num('peakSharedGpuRawBytes', spill.to, 'measured', spill.toCtx, id(c), { algorithm: 'raw-growth-1' })], { configId: id(c), action: act })
       } else {
         add('ctx.spill', { config: id(c), threshold: gib(v.cfg.cliff.sharedSpillBytes), ctx: fmtCtx(spill.toCtx), spill: gib(spill.to!), delta, single },
@@ -135,13 +148,15 @@ export function interpret(v: Verdicts): Insight[] {
     const models = [...new Map(allInputs.map((i) => [i.model.id, i.model])).values()]
     let reached = 0
     const per = models.map((m) => {
-      const mine = everyone.filter((c) => c.input.model.id === m.id)
+      const mine = v.coverageAll.filter((c) => c.input.model.id === m.id)
       const ok = mine.find((c) => (c.coverage.largestCleanTested ?? 0) >= req)
       if (ok) { reached++; return `${m.name} reached (${id(ok)})` }
-      const tried = allInputs.filter((i) => i.model.id === m.id).flatMap((i) => i.runs).find((r) => r.ctx >= req)
+      const tried = allInputs.filter((i) => i.model.id === m.id).flatMap((i) => i.runs).filter((r) => r.ctx >= req)
       const unverified = mine.flatMap((c) => c.dropped).find((d) => d.ctx >= req)
-      if (tried && (tried.status === 'pass' || tried.status === 'degraded') && unverified) return `${m.name} measured at ${fmtCtx(tried.ctx)} but not verified (${unverified.reason})`
-      if (tried) return `${m.name} tested and failed at ${fmtCtx(tried.ctx)} (${tried.failureKind ?? tried.status})`
+      if (unverified) return `${m.name} measured at ${fmtCtx(unverified.ctx)} but not verified (${unverified.reason})`
+      const failed = tried.find((r) => r.status !== 'pass' && r.status !== 'degraded')
+      if (failed) return `${m.name} tested and failed at ${fmtCtx(failed.ctx)} (${failed.failureKind ?? failed.status})`
+      if (tried.length) return `${m.name} tested at ${fmtCtx(tried[0].ctx)} but not clean (${mine.map((c) => c.coverage.limitKind).join(', ') || 'degraded'})`
       const best = mine.map((c) => c.coverage).sort((a, b) => (b.largestCleanTested ?? 0) - (a.largestCleanTested ?? 0))[0]
       return `${m.name} not tested (${best ? `largest clean ${best.largestCleanTested === null ? 'none' : fmtCtx(best.largestCleanTested)}, ${best.limitKind}` : 'no usable configuration'})`
     })
@@ -158,7 +173,12 @@ export function interpret(v: Verdicts): Insight[] {
       const cov = q.coverage!
       let flagsU: ReturnType<typeof categoryFlags> = []
       try { flagsU = categoryFlags(mine, { weakAtMost: P('quality.category', 'weakAtMost'), codingAtMost: P('quality.category', 'codingAtMost'), minItems: 1 }) } catch { /* quarantined */ }
-      const cats = CATS.filter((k) => profile.promptSetIds.includes(k)).map((k) => { const f = flagsU.find((x) => x.category === k); return f && f.validItems ? `${k} ${Math.round(f.rate! * f.validItems)}/${f.validItems}` : null }).filter(Boolean).join(', ')
+      const cats = CATS.filter((k) => profile.promptSetIds.includes(k)).map((k) => {
+        const f = flagsU.find((x) => x.category === k)
+        if (!f || !f.validItems) return null
+        const completions = mine.filter((x) => x.category === k && x.evaluationStatus !== 'infra_error' && x.evaluationStatus !== 'unrun').length
+        return `${k} ${Math.round(f.rate! * 100)} % (${f.validItems} item${f.validItems === 1 ? '' : 's'}${completions > f.validItems ? `, ${completions} completions` : ''})`
+      }).filter(Boolean).join(', ')
       add('quality.report', { model: c.input.model.name, q: Math.round(q.score), lo: Math.round(q.lower), hi: Math.round(q.upper!), method: q.method, version: q.algorithm, items: cov.uniqueItems, skills: cov.uniqueSkills, samples: cov.uniqueItems ? Math.round(cov.completions / cov.uniqueItems) : 0, categories: cats },
         [ev('quality', q.input, undefined, id(c), { samples: cov.completions, algorithm: `${q.method} ${q.algorithm}` })], { configId: id(c) })
       const missingCats = profile.promptSetIds.filter((k) => (flagsU.find((x) => x.category === k)?.validItems ?? 0) < P('quality.coverage', 'minPerCategory'))
@@ -311,7 +331,7 @@ export function interpret(v: Verdicts): Insight[] {
     const sp = c.cs.cliff.steps.find((s) => s.reasons.some((x) => x.code === 'shared_spill'))
     const at = sp && c.input.runs.find((r) => r.ctx === sp.ctx)
     const total = val(machine.vramBytes, true), ded = at ? val(at.peakVramBytes) : null
-    if (at && total && ded !== null && (at.peakVramPlateauSamples ?? 0) >= P('mem.saturation-observed', 'minSamples')) {
+    if (at && total && ded !== null && at.peakVramPlateauVersion === 'pre-spill-1' && (at.peakVramPlateauSamples ?? 0) >= P('mem.saturation-observed', 'minSamples')) {
       add('mem.saturation-observed', { config: cid, pct: Math.round((ded / total) * 100), samples: at.peakVramPlateauSamples }, [ev('peakVramBytes', at.peakVramBytes, sp!.ctx, cid, { samples: at.peakVramPlateauSamples })], { configId: cid })
     }
   }

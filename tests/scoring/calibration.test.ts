@@ -126,7 +126,7 @@ describe('calibration: Qwen2.5-14B Q4_K_M real spill cliff at 32K (per-PID telem
   it('I-1.2: an unmeasured 14B (quality prior only) is provisional, never the confirmed best; the measured 8B is', () => {
     const rec = recommend(both(), M, 'document_analysis')
     expect(rec.best?.configId).toBe(FULL)
-    expect(rec.decisionTrace!.candidates.find((c) => c.configId === FULL14)).toMatchObject({ confirmed: false, undecided: ['quality (estimated)'] })
+    expect(rec.decisionTrace!.candidates.find((c) => c.configId === FULL14)).toMatchObject({ confirmed: false, undecided: expect.arrayContaining(['quality (estimated)']) })
     expect(rec.insights!.map((i) => i.text).join('\n')).toMatch(/\[I-5\.5\] qwen14b\|ngl=all: no measured quality — the quality term is a prior/)
   })
 

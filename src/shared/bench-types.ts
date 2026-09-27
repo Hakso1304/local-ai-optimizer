@@ -182,6 +182,10 @@ export interface PlannedSkip {
   estimateBytes?: number
   budgetBytes?: number
   ruleId: string
+  /** VRAM skips: the estimate's breakdown (weights incl. output, KV on GPU, compute + logits). */
+  weightsBytes?: number
+  kvBytes?: number
+  overheadBytes?: number
 }
 
 /** The planner's machine snapshot and budgets for this config. */
@@ -262,6 +266,8 @@ export interface BenchmarkRunResult {
   mmapCreditBytes?: number
   /** Telemetry samples within 1 % of the dedicated-VRAM peak BEFORE spill onset (rule I-4.5 needs ≥ 3); 0 = no spill. */
   peakVramPlateauSamples?: number
+  /** Algorithm of peakVramPlateauSamples; only 'pre-spill-1' rows support I-4.5 (older rows counted any sample). */
+  peakVramPlateauVersion?: string
   /** Structured reason when the runner skipped the step before loading (live RAM pre-check). */
   skip?: PlannedSkip
   /** What produced this row (X17), all declared. runtime null = not reported by detect(). */

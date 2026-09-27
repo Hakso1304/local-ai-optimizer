@@ -87,6 +87,12 @@ export type GenRow = QualityResult & {
   requestedTemplateKwargs?: Record<string, unknown>
   /** Set only when the kwargs demonstrably changed the rendered prompt. */
   appliedTemplateKwargs?: Record<string, unknown>
+  /** I-8.0 application contract (F5): identities the comparison needs; absent → the gen config is not evaluable. */
+  templateHash?: string | null
+  runtimeVersion?: string | null
+  modelFingerprint?: string | null
+  /** Sampling as the runtime reported it accepted (llama-server generation_settings), not as requested. */
+  acceptedSampling?: Record<string, unknown> | null
   skillId?: string
   generatorSeed?: number | string
 }
