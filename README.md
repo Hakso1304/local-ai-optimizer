@@ -34,18 +34,40 @@ nothing is guessed silently.
 
 ## Prerequisites
 
-- Windows 11 (the scanner and telemetry use PowerShell 5.1, WMI/CIM, the registry and `typeperf`); no admin rights
-- A GPU with a Vulkan driver (AMD / NVIDIA / Intel). CPU-only works but is slow
-- Disk: ~30 MB for the runtime, plus the GGUF models you want to test (0.6–10+ GB each)
-- Internet on first run (llama.cpp runtime download from github.com/ggml-org/llama.cpp)
-- For development: Node 24+ and npm. No compilers and no native Node modules (storage is the built-in `node:sqlite`)
+- Windows 11, x64 (developed and tested there; Windows 10 is untested). The scanner and telemetry use PowerShell 5.1,
+  WMI/CIM, the registry and `typeperf`; no admin rights are needed
+- A GPU with a Vulkan driver (AMD / NVIDIA / Intel). NVIDIA gets the CUDA build when its driver supports it
+  (untested on real NVIDIA hardware). CPU-only works but is slow
+- Disk: ~30 MB for the runtime (a CUDA build adds its runtime DLLs), plus the GGUF models you test (0.4–17+ GB each)
+- Internet for the runtime download (github.com/ggml-org/llama.cpp) and optional Hugging Face downloads
+- For development only: Node 24+ and npm. No compilers and no native Node modules (storage is the built-in `node:sqlite`)
 
 ## Runtimes
 
-- **llama.cpp (`llama-server`, official Windows Vulkan build)** is the only benchmark runtime. The app downloads
-  it on first run (System page → *Install llama.cpp runtime*); in dev, `npm run setup:runtime` puts it in `vendor/llama.cpp`.
-- **Ollama / LM Studio**: detected only (is the API up, where are the models). Their GGUF files can be benchmarked
-  through llama-server; the export can emit an Ollama Modelfile / LM Studio settings (unverified translations).
+- **llama.cpp (`llama-server`)**, official Windows build (Vulkan, or CUDA + cudart on NVIDIA with a Vulkan fallback),
+  is the only benchmark runtime. The app installs it on first run (System page → *Install llama.cpp runtime*); in dev,
+  `npm run setup:runtime` puts the Vulkan build in `vendor/llama.cpp`.
+- **Ollama / LM Studio**: detected (is the API up) and their GGUF files are listed as model sources. They are
+  benchmarked through our own llama-server, never through Ollama/LM Studio. The export can emit an Ollama Modelfile /
+  LM Studio settings (translations; LM Studio keys unverified).
+
+## Where things live
+
+| What | Installed / portable app | Dev (`npm run dev`) |
+|---|---|---|
+| App data folder (below: *userData*) | `%APPDATA%\local-ai-optimizer` | `%APPDATA%\local-ai-optimizer-dev` (never touches the installed app's data) |
+| Results database | *userData*`\optimizer.db` | same; `LAO_SEED_DEMO=1` uses a separate `optimizer-demo.db` |
+| Settings (workload, required context, model folders) | *userData*`\settings.json` | same |
+| llama.cpp runtime | *userData*`\runtime\llama.cpp` (downloaded on first run) | `<project>\vendor\llama.cpp` |
+| Models scanned | *userData*`\models` + every folder in `settings.json` → `modelDirs` + LM Studio's model dirs + Ollama's blob store | `<project>\models` + the same extra sources |
+| Hugging Face token | *userData*`\hf-token.bin`, encrypted with Windows DPAPI (never in plain text) | same |
+| Running server record | *userData*`\llama-server.pid` (pid, exe path, start time; used to clean up after a crash) | same |
+| Model-card cache | `<model>.gguf.meta.json` next to a downloaded or linked model | same |
+
+There is no default model folder beyond *userData*`\models`: a folder like `D:\llm-models` is used only when it is
+listed in `settings.json` → `modelDirs` (or chosen as a download target that is already configured). Uninstalling keeps
+*userData* (database, settings, runtime, token); delete the folder by hand for a clean slate. Only one copy of the app
+runs at a time per *userData* (the portable and installed builds share it); a second launch focuses the first window.
 
 ## Develop, build, package
 
@@ -60,11 +82,7 @@ npm run package          # build + electron-builder -> dist/ (portable .exe and 
 LAO_SEED_DEMO=1 npm run dev   # UI demo with fixture data in a separate optimizer-demo.db, flagged "DEMO DATA"
 ```
 
-Models are read from `<project>/models` (dev) or `%APPDATA%\local-ai-optimizer\models` (packaged), plus any
-`modelDirs` listed in `settings.json` in the same folder (none by default), plus LM Studio's model dirs and Ollama's
-blob store. Results live in `optimizer.db` there. Dev runs use `%APPDATA%\local-ai-optimizer-dev` so they never touch
-the installed app's data. Uninstalling keeps `%APPDATA%\local-ai-optimizer` (database, settings, downloaded runtime);
-delete it by hand for a clean slate. Small test model:
+Storage locations are listed in *Where things live* above. Small test model:
 
 ```sh
 curl -L -o models/qwen2.5-0.5b-instruct-q8_0.gguf https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q8_0.gguf
