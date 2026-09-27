@@ -29,10 +29,11 @@ function RecommendedCard({ d, go }: { d: SessionDetail; go: Go }) {
   const rec = d.recommendation
   // A stored recommendation from before the rule engine has no insights: borrow a reinterpretation's for the card lines.
   const [reinterp, setReinterp] = useState<Insight[] | null>(null)
+  const [provisionalNow, setProvisionalNow] = useState(false)
   useEffect(() => {
-    if (!rec || d.session.demo || (rulesOf(rec) !== null && rulesOf(rec) === ENGINE_RULES)) return setReinterp(null)
+    if (!rec || d.session.demo || (rulesOf(rec) !== null && rulesOf(rec) === ENGINE_RULES)) { setProvisionalNow(false); return setReinterp(null) }
     let live = true
-    window.api.computeRecommendation(d.session.id, d.session.workload).then((r) => { if (live) setReinterp(insightsOf(r?.recommendation)) }, () => {})
+    window.api.computeRecommendation(d.session.id, d.session.workload).then((r) => { if (live) { setReinterp(insightsOf(r?.recommendation)); setProvisionalNow(!r?.recommendation?.best && !!r?.recommendation?.provisionalBest) } }, () => {})
     return () => { live = false }
   }, [d.session.id, d.session.workload, rec, d.session.demo])
   const c = d.candidates.find((x) => x.config.id === rec?.best?.configId)
@@ -40,6 +41,7 @@ function RecommendedCard({ d, go }: { d: SessionDetail; go: Go }) {
     <div className={`card${d.session.demo ? ' demo-card' : ''}`}>
       {d.session.demo && <DemoBanner what={`DEMO DATA (workload ${d.session.workload})`} />}
       <h2>Recommended configuration</h2>
+      {rec?.best && provisionalNow && <p><span className="pill warn-pill" title="Recorded under older rules; the current rules give only a provisional pick until quality is measured">provisional under rules {ENGINE_RULES} — run the quality suite to confirm</span></p>}
       {!rec?.best || !c ? (
         <><p>No candidate met this workload's requirements.</p>{rec?.provisionalBest && (
             <div className="provisional">

@@ -275,7 +275,11 @@ export function ResultsPage({ sessionId, go }: { sessionId?: number; go: Go }) {
   // insights come from the current rules. Another workload: the recomputed recommendation replaces it.
   const reinterpreting = !!(detail && computed && computed.workload === detail.session.workload)
   const shown: SessionDetail | null = detail && computed && reinterpreting && detail.recommendation
-    ? { ...detail, recommendation: { ...detail.recommendation, insights: insightsOf(computed.recommendation) } as typeof detail.recommendation }
+    ? { ...detail, recommendation: {
+        ...detail.recommendation, insights: insightsOf(computed.recommendation),
+        // the current rules' trace and eligibility lists (labelled "reinterpreted" above); best/ranking stay as recorded
+        decisionTrace: computed.recommendation?.decisionTrace, unmetAlternatives: computed.recommendation?.unmetAlternatives
+      } as typeof detail.recommendation }
     : detail && computed ? {
     ...detail,
     session: { ...detail.session, workload: computed.workload },
