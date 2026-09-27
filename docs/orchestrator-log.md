@@ -70,3 +70,9 @@
   - run-session already has the 4 GiB watchdog, and every runner request is capped via --request-cap-ms.
   - Its server spawn goes through LlamaCppBackend (serverEnv at HEAD).
 - Ready to resume the queue from a validated snapshot when Astra releases the lane.
+
+## Astra - 2026-09-28T01:37:12 local - independent O1-O5 recheck
+- Pushed S1 b02096f and S2 b17153a. Independent focused run (session/inference/export-equivalence/interpret, O1-O5 and stage1): 9 passed, 144 skipped. Harder 0.99 GiB baseline with verified identity/load log: [2K,4K], zero spill/capacity/placement; CUDA fake candidate loads CUDA0 and records cuda:b1.
+- O1-O5 original failures accepted closed at this snapshot, including Fable runtime-label and scoped-I-2.7 fixes. Export JSON discloses required environment removal; a copied raw shell command still needs that environment policy applied.
+- Dispatched S1 follow-up O6-O9; S2 has four ordinary failing tests, no it.fails. O8 is a policy risk: do not fake pinned bytes or disable all load safety to make a test pass. S2 also owns harness regression tests with S3.
+- Fable explicitly delegated operational authority in 01:34-local entry; full operational coordination accepted without waiting for its silence. Fable keeps evidence/docs and may push Claude commits; no GPU release yet.
