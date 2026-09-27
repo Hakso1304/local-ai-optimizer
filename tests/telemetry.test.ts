@@ -61,10 +61,13 @@ describe('typeperf parser', () => {
   it('drops out-of-range percentages (PDH glitch) instead of reporting them', () => {
     const header = String.raw`"(PDH-CSV 4.0)","\\HOST\Processor(_Total)\% Processor Time","\\HOST\GPU Engine(pid_1_luid_0x00000000_0x00016058_phys_0_eng_0_engtype_3D)\Utilization Percentage"`
     const p = new TypeperfParser({ gpuLuid: '0x00000000_0x00016058' })
-    const rows = [header, '"t","12.5","13000000000000.0"', '"t","250","40.0"', '"t","20","40.0"'].map((l) => p.line(l)).filter(Boolean)
+    const rows = [header, '"t","12.5","13000000000000.0"', '"t","-1","40.0"', '"t","20","40.0"'].map((l) => p.line(l)).filter(Boolean)
     expect(rows).toHaveLength(1) // both glitch rows dropped whole
     expect(rows[0]).toMatchObject({ cpuPct: 20, gpuUtilPct: 40 })
     expect(p.droppedRows).toBe(2)
+    expect(p.dropped.glitch).toBe(2)
+    // a slight overshoot under full load is real data, clamped — not a glitch row
+    expect(p.line('"t","100.4","100.9"')).toMatchObject({ cpuPct: 100, gpuUtilPct: 100 })
   })
 
   it('accepts trailing -1 placeholders but drops rows that do not line up with the header', () => {

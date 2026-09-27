@@ -73,6 +73,8 @@ export class TypeperfParser {
   private luidLocked: boolean
   readonly unavailable: Partial<Record<Field, string>> = {}
   droppedRows = 0
+  /** Why rows were dropped (for RunDetail.samplerErrors): misaligned vs glitch. */
+  readonly dropped = { misaligned: 0, glitch: 0 }
 
   constructor(private o: SamplerOpts) {
     this.luid = o.gpuLuid?.toLowerCase() ?? null
@@ -91,18 +93,21 @@ export class TypeperfParser {
     // of the header but still emit a "-1" cell at their position; ours is last, so it shows up as a trailing extra.
     // Any other length mismatch means the row doesn't line up with the header: drop it rather than mis-assign cells.
     const extra = cells.slice(this.cols.length)
-    if (cells.length < this.cols.length || extra.some((x) => x.replace(/"/g, '').trim() !== '-1')) { this.droppedRows++; return null }
+    if (cells.length < this.cols.length || extra.some((x) => x.replace(/"/g, '').trim() !== '-1')) { this.droppedRows++; this.dropped.misaligned++; return null }
     const vals = new Map<Col, number>()
     let glitch = false
     this.cols.forEach((c, i) => {
       const v = Number(cells[i]?.trim())
       if (!c || cells[i]?.trim() === '' || !Number.isFinite(v)) return
-      if (/Percent|^% /.test(c.counter) && (v < 0 || v > 100)) glitch = true
-      vals.set(c, v)
+      const pct = /Percent|^% /.test(c.counter)
+      // Real engine counters overshoot 100 a little under full load; only absurd values mark a glitch row. Rows with
+      // every engine at 100.x were all dropped before, which left whole 60 s steps with 0 samples (#3's heavy run).
+      if (pct && (v < 0 || v > 1000)) glitch = true
+      vals.set(c, pct ? Math.min(v, 100) : v)
     })
     // PDH glitch rows (1.3e13 % util in #3's calibration; 62 MB "available" RAM + 794 KB private WS in the E2E run)
     // carry an impossible percentage and garbage in the other cells too: drop the whole row, never report it.
-    if (glitch) { this.droppedRows++; return null }
+    if (glitch) { this.droppedRows++; this.dropped.glitch++; return null }
     return this.sample(vals)
   }
 
@@ -269,6 +274,8 @@ export function startSampler(o: SamplerOpts = {}): Sampler {
     stop() {
       stopped = true
       child.kill()
+      const { misaligned, glitch } = parser.dropped
+      if (misaligned + glitch) errors.push(`typeperf rows dropped: ${misaligned} misaligned with the header, ${glitch} with impossible values (${samples.length} kept)`)
       return samples
     }
   }
