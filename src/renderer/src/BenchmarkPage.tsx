@@ -71,7 +71,7 @@ export function BenchmarkPage({ live }: { live: LiveState }) {
           {models?.map((m) => (
             <tr key={m.id} className="click" onClick={() => !running && !m.meta?.incomplete && toggle(m.id)}>
               <td><input type="checkbox" checked={picked.has(m.id)} readOnly disabled={running} /></td>
-              <td>{m.name}{fit[m.id] && <span className="pill warn-pill" title={fit[m.id]!}>{/incomplete/.test(fit[m.id]!) ? 'incomplete download' : /does not fit/.test(fit[m.id]!) ? 'needs heavy mode' : 'no config'}</span>}</td>
+              <td>{m.name}{fit[m.id] && <span className="pill warn-pill" title={fit[m.id]!}>{/incomplete/.test(fit[m.id]!) ? 'incomplete download' : /does not fit/.test(fit[m.id]!) ? 'needs heavy mode' : /runtime not installed/.test(fit[m.id]!) ? 'no runtime' : 'no config'}</span>}</td>
               <td className="muted">{m.runtime === 'llamacpp' ? 'folder' : m.runtime === 'lmstudio' ? 'LM Studio' : 'Ollama'}</td>
               <td>{v(m.meta?.parameterCount.value, (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : `${(n / 1e6).toFixed(0)}M`))}</td>
               <td>{m.meta?.quantName ?? '—'}</td>

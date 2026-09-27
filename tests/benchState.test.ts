@@ -22,6 +22,11 @@ describe('live benchmark reducer', () => {
     expect(st.log.some((l) => l.includes('decode 88.5 t/s'))).toBe(true)
   })
 
+  it('a pre-session log event (sessionId "") does not blank the watched session', () => {
+    const st = applyEvent({ ...initialLive, sessionId: '7', status: 'running' }, { sessionId: '', type: 'log', level: 'warn', msg: 'skipped' })
+    expect(st.sessionId).toBe('7')
+  })
+
   it('caps the log', () => {
     let st = initialLive
     for (let i = 0; i < LOG_MAX + 50; i++) st = applyEvent(st, { sessionId: s, type: 'log', level: 'info', msg: `m${i}` })

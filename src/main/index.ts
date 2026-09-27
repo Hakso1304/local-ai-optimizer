@@ -89,7 +89,9 @@ ipcMain.handle('models:list', () => listAllModels())
 ipcMain.handle('models:fit', async (_e, w: WorkloadId): Promise<Record<string, string | null>> => {
   if (!(w in WORKLOADS)) throw new Error(`unknown workload ${String(w)}`)
   profileCache ??= await scanSystem()
-  const [infos, devices] = await Promise.all([listAllModels(), llama.listDevices().catch(() => [])])
+  const infos = await listAllModels()
+  const devices = await llama.listDevices().catch(() => null)
+  if (!devices) return Object.fromEntries(infos.map((m) => [m.id, 'llama.cpp runtime not installed (System page)']))
   const device = pickDiscreteDevice(devices)?.id ?? null
   const machine = machineFromProfile(profileCache, device)
   const out: Record<string, string | null> = {}

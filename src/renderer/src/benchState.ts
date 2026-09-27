@@ -47,7 +47,8 @@ const line = (e: SessionEvent): string | null => {
 export function applyEvent(s: LiveState, e: SessionEvent): LiveState {
   const l = line(e)
   const log = l ? [...s.log, `${new Date().toLocaleTimeString()} ${l}`].slice(-LOG_MAX) : s.log
-  const n = { ...s, log, sessionId: e.sessionId }
+  // Pre-session warnings (e.g. a skipped model) carry sessionId '' — they must not blank the watched session.
+  const n = { ...s, log, sessionId: e.sessionId || s.sessionId }
   switch (e.type) {
     case 'session:started': return { ...initialLive, log, sessionId: e.sessionId, status: 'running', candidatesTotal: e.candidates ?? null }
     case 'candidate:started': return { ...n, configId: e.configId, model: e.model, ctxSteps: e.ctxSteps, stepsDone: 0, phase: null, ctx: null, candidatesStarted: s.candidatesStarted + 1 }

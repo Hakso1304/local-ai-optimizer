@@ -201,10 +201,11 @@ export interface Sampler {
   stop(): TelemetrySample[]
 }
 
-const active = new Set<ChildProcess>()
-/** Kill every running typeperf (app quit). */
+/** Stop hooks of every running sampler child (typeperf, nvidia-smi -lms). */
+const active = new Set<() => void>()
+/** Kill every running sampler child (app quit). */
 export function stopAllSamplers(): void {
-  for (const c of active) c.kill()
+  for (const stop of active) stop()
   active.clear()
 }
 // Safety net if stop() is never reached (hard kill of the app): typeperf exits by itself after this many samples.
@@ -218,8 +219,9 @@ export function startSampler(o: SamplerOpts = {}): Sampler {
   const si = String(Math.max(1, Math.round((o.intervalMs ?? 1000) / 1000)))
   let stopped = false
   const child: ChildProcess = spawn('typeperf', [...counterPaths(o), '-si', si, '-sc', String(MAX_SAMPLES)], { windowsHide: true })
-  active.add(child)
-  child.on('close', () => active.delete(child))
+  const kill = () => { child.kill() }
+  active.add(kill)
+  child.on('close', () => active.delete(kill))
   createInterface({ input: child.stdout! }).on('line', (l) => {
     const s = parser.line(l)
     if (s) samples.push(s)
@@ -245,21 +247,34 @@ export function startSampler(o: SamplerOpts = {}): Sampler {
   }
 }
 
-/** Merge nvidia-smi samples (nearest within 1.5 s) into the PDH stream: adds tempC/powerW, fills a missing GPU util. */
+/** Merge nvidia-smi samples (nearest within 1.5 s) into the PDH stream: adds tempC/powerW, fills a missing GPU util.
+ *  A row is enriched once, when it is settled (an nvidia sample ≥1.5 s newer exists, or the sampler stopped). */
 export function withNvidia(pdh: Sampler, nv: { readonly samples: NvidiaSample[]; stop(): unknown } | null): Sampler {
   if (!nv) return pdh
+  const stopNv = () => { nv.stop() }
+  active.add(stopNv)
   const enrich = (s: TelemetrySample): TelemetrySample => {
     let best: NvidiaSample | null = null
     for (const n of nv.samples) if (Math.abs(n.ts - s.ts) <= 1500 && (!best || Math.abs(n.ts - s.ts) < Math.abs(best.ts - s.ts))) best = n
     return best ? { ...s, tempC: best.tempC, powerW: best.powerW, gpuUtilPct: s.gpuUtilPct ?? best.gpuUtilPct } : s
   }
+  const settled: TelemetrySample[] = []
+  let stopped = false
+  const view = () => {
+    const lastNv = nv.samples.at(-1)?.ts ?? -Infinity
+    while (settled.length < pdh.samples.length && (stopped || lastNv >= pdh.samples[settled.length].ts + 1500)) settled.push(enrich(pdh.samples[settled.length]))
+    return settled.length === pdh.samples.length ? settled : [...settled, ...pdh.samples.slice(settled.length).map(enrich)]
+  }
   return {
-    get samples() { return pdh.samples.map(enrich) },
+    get samples() { return view() },
     unavailable: pdh.unavailable,
     errors: pdh.errors,
     stop() {
-      nv.stop()
-      return pdh.stop().map(enrich)
+      stopNv()
+      active.delete(stopNv)
+      pdh.stop()
+      stopped = true
+      return view()
     }
   }
 }

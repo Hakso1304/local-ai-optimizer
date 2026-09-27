@@ -102,5 +102,10 @@ describe('typeperf parser', () => {
     expect(m.samples[1].tempC).toBeUndefined() // no nvidia sample within 1.5 s: left absent, not invented
     expect(peaks(m.stop()).max.tempC).toBe(71)
     expect(withNvidia(pdh, null)).toBe(pdh)
+    // settled rows are enriched once and the same object is returned on later reads (no O(n·m) re-map per poll)
+    const nv2 = { samples: [{ ts: 1100, gpuUtilPct: 1, vramUsedBytes: 1, tempC: 60, powerW: 1 }, { ts: 20000, gpuUtilPct: 1, vramUsedBytes: 1, tempC: 61, powerW: 1 }], stop: () => [] }
+    const w = withNvidia(pdh, nv2)
+    expect(w.samples[0]).toBe(w.samples[0])
+    expect(w.samples[0].tempC).toBe(60)
   })
 })
