@@ -1,0 +1,2015 @@
+{
+ "scenario": "B",
+ "startedAt": "2026-09-27T08:49:23.802Z",
+ "wallMs": 43435,
+ "abortToCancelledMs": 783,
+ "leftoverLlamaServers": 0,
+ "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)",
+ "device": {
+  "id": "Vulkan0",
+  "name": "AMD Radeon RX 9070 XT",
+  "totalMiB": 16304,
+  "freeMiB": 15416
+ },
+ "models": [
+  {
+   "id": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf",
+   "name": "qwen2.5-1.5b-instruct",
+   "fileBytes": 1117320736,
+   "paramCount": 1777088000,
+   "quant": "Q4_K_M",
+   "arch": "qwen2",
+   "ctxTrain": 32768,
+   "layers": 28,
+   "nEmbd": 1536,
+   "heads": 12,
+   "headsKv": 2,
+   "keyLength": null,
+   "valueLength": null,
+   "nVocab": 151936,
+   "slidingWindow": null
+  },
+  {
+   "id": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+   "name": "Meta Llama 3.1 8B Instruct",
+   "fileBytes": 4920739232,
+   "paramCount": 8030261312,
+   "quant": "Q4_K_M",
+   "arch": "llama",
+   "ctxTrain": 131072,
+   "layers": 32,
+   "nEmbd": 4096,
+   "heads": 32,
+   "headsKv": 8,
+   "keyLength": null,
+   "valueLength": null,
+   "nVocab": 128256,
+   "slidingWindow": null
+  }
+ ],
+ "request": {
+  "workload": "coding",
+  "modelIds": [
+   "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf",
+   "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+  ],
+  "runQuality": false
+ },
+ "recommendation": null,
+ "db": {
+  "sessions": [
+   {
+    "id": "s1",
+    "workload": "coding",
+    "request": {
+     "workload": "coding",
+     "modelIds": [
+      "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf",
+      "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+     ],
+     "runQuality": false
+    },
+    "startedAt": 1790498965687,
+    "status": "cancelled"
+   }
+  ],
+  "runs": [
+   {
+    "sessionId": "s1",
+    "run": {
+     "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+     "ctx": 2048,
+     "promptTokens": 1167,
+     "status": "pass",
+     "failureKind": null,
+     "loadTimeMs": {
+      "value": 874.7231999999999,
+      "kind": "measured",
+      "source": "spawn → /health ok"
+     },
+     "ttftMs": {
+      "value": 100.3723,
+      "kind": "measured",
+      "source": "client wall clock, request → first token"
+     },
+     "prefillTps": {
+      "value": 11976.82216472138,
+      "kind": "measured",
+      "source": "llama-server timings"
+     },
+     "decodeTps": {
+      "value": 366.0091310315132,
+      "kind": "measured",
+      "source": "llama-server timings"
+     },
+     "totalMs": {
+      "value": 447.4763499999999,
+      "kind": "measured",
+      "source": "client wall clock"
+     },
+     "peakVramBytes": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples (run too short or sampler failed)"
+     },
+     "peakSharedGpuBytes": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples (run too short or sampler failed)"
+     },
+     "peakRamBytes": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples (run too short or sampler failed)"
+     },
+     "avgGpuUtil": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples (run too short or sampler failed)"
+     },
+     "avgCpuUtil": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples (run too short or sampler failed)"
+     },
+     "warm": true,
+     "versions": {
+      "benchmark": "bench-1.0.0",
+      "prompts": "ladder-1",
+      "quality": "qb-1.0.0",
+      "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+     }
+    },
+    "detail": {
+     "samples": [],
+     "reason": null,
+     "stderrTail": [],
+     "load": {
+      "loadTimeMs": 874.7231999999999,
+      "declared": {
+       "layersOffloaded": 29,
+       "layersTotal": 29,
+       "modelBufferMiB": {
+        "CPU_Mapped": 125.19,
+        "Vulkan0": 934.69
+       },
+       "kvBufferMiB": {
+        "Vulkan0": 56
+       },
+       "computeBufferMiB": {
+        "Vulkan0": 60.51,
+        "Vulkan_Host": 8.01
+       }
+      }
+     },
+     "startedAt": 1790498965688,
+     "endedAt": 1790498967612,
+     "sampleCount": 0
+    }
+   },
+   {
+    "sessionId": "s1",
+    "run": {
+     "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+     "ctx": 4096,
+     "promptTokens": 2296,
+     "status": "pass",
+     "failureKind": null,
+     "loadTimeMs": {
+      "value": 856.6088,
+      "kind": "measured",
+      "source": "spawn → /health ok"
+     },
+     "ttftMs": {
+      "value": 184.95829999999978,
+      "kind": "measured",
+      "source": "client wall clock, request → first token"
+     },
+     "prefillTps": {
+      "value": 12739.707189071536,
+      "kind": "measured",
+      "source": "llama-server timings"
+     },
+     "decodeTps": {
+      "value": 352.06190566256384,
+      "kind": "measured",
+      "source": "llama-server timings"
+     },
+     "totalMs": {
+      "value": 545.8939499999997,
+      "kind": "measured",
+      "source": "client wall clock"
+     },
+     "peakVramBytes": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples (run too short or sampler failed)"
+     },
+     "peakSharedGpuBytes": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples (run too short or sampler failed)"
+     },
+     "peakRamBytes": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples (run too short or sampler failed)"
+     },
+     "avgGpuUtil": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples (run too short or sampler failed)"
+     },
+     "avgCpuUtil": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples (run too short or sampler failed)"
+     },
+     "warm": true,
+     "versions": {
+      "benchmark": "bench-1.0.0",
+      "prompts": "ladder-1",
+      "quality": "qb-1.0.0",
+      "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+     }
+    },
+    "detail": {
+     "samples": [],
+     "reason": null,
+     "stderrTail": [],
+     "load": {
+      "loadTimeMs": 856.6088,
+      "declared": {
+       "layersOffloaded": 29,
+       "layersTotal": 29,
+       "modelBufferMiB": {
+        "CPU_Mapped": 125.19,
+        "Vulkan0": 934.69
+       },
+       "kvBufferMiB": {
+        "Vulkan0": 112
+       },
+       "computeBufferMiB": {
+        "Vulkan0": 62.51,
+        "Vulkan_Host": 10.01
+       }
+      }
+     },
+     "startedAt": 1790498967612,
+     "endedAt": 1790498969969,
+     "sampleCount": 0
+    }
+   },
+   {
+    "sessionId": "s1",
+    "run": {
+     "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+     "ctx": 8192,
+     "promptTokens": 4592,
+     "status": "pass",
+     "failureKind": null,
+     "loadTimeMs": {
+      "value": 967.4817000000003,
+      "kind": "measured",
+      "source": "spawn → /health ok"
+     },
+     "ttftMs": {
+      "value": 379.13934999999947,
+      "kind": "measured",
+      "source": "client wall clock, request → first token"
+     },
+     "prefillTps": {
+      "value": 12307.521733750858,
+      "kind": "measured",
+      "source": "llama-server timings"
+     },
+     "decodeTps": {
+      "value": 338.81973993929876,
+      "kind": "measured",
+      "source": "llama-server timings"
+     },
+     "totalMs": {
+      "value": 754.1710499999999,
+      "kind": "measured",
+      "source": "client wall clock"
+     },
+     "peakVramBytes": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples (run too short or sampler failed)"
+     },
+     "peakSharedGpuBytes": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples (run too short or sampler failed)"
+     },
+     "peakRamBytes": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples (run too short or sampler failed)"
+     },
+     "avgGpuUtil": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples (run too short or sampler failed)"
+     },
+     "avgCpuUtil": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples (run too short or sampler failed)"
+     },
+     "warm": true,
+     "versions": {
+      "benchmark": "bench-1.0.0",
+      "prompts": "ladder-1",
+      "quality": "qb-1.0.0",
+      "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+     }
+    },
+    "detail": {
+     "samples": [
+      {
+       "ts": 1790498973055,
+       "cpuPct": 30.200677,
+       "ramAvailBytes": 15889072128,
+       "gpuUtilPct": 91.120941,
+       "vramDedicatedBytes": 2985316352,
+       "vramSharedBytes": 904396800,
+       "procRamPrivateBytes": 120246272,
+       "procVramDedicatedBytes": 1403944960,
+       "procVramSharedBytes": 15745024
+      }
+     ],
+     "reason": null,
+     "stderrTail": [],
+     "load": {
+      "loadTimeMs": 967.4817000000003,
+      "declared": {
+       "layersOffloaded": 29,
+       "layersTotal": 29,
+       "modelBufferMiB": {
+        "CPU_Mapped": 125.19,
+        "Vulkan0": 934.69
+       },
+       "kvBufferMiB": {
+        "Vulkan0": 224
+       },
+       "computeBufferMiB": {
+        "Vulkan0": 66.51,
+        "Vulkan_Host": 14.01
+       }
+      }
+     },
+     "startedAt": 1790498969969,
+     "endedAt": 1790498973054,
+     "sampleCount": 0
+    }
+   },
+   {
+    "sessionId": "s1",
+    "run": {
+     "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+     "ctx": 16384,
+     "promptTokens": 9152,
+     "status": "pass",
+     "failureKind": null,
+     "loadTimeMs": {
+      "value": 975.9447,
+      "kind": "measured",
+      "source": "spawn → /health ok"
+     },
+     "ttftMs": {
+      "value": 858.8323,
+      "kind": "measured",
+      "source": "client wall clock, request → first token"
+     },
+     "prefillTps": {
+      "value": 10848.943411827939,
+      "kind": "measured",
+      "source": "llama-server timings"
+     },
+     "decodeTps": {
+      "value": 312.8291679381094,
+      "kind": "measured",
+      "source": "llama-server timings"
+     },
+     "totalMs": {
+      "value": 1265.3105499999992,
+      "kind": "measured",
+      "source": "client wall clock"
+     },
+     "peakVramBytes": {
+      "value": 1644986368,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "peakSharedGpuBytes": {
+      "value": 24133632,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "peakRamBytes": {
+      "value": 128761856,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "avgGpuUtil": {
+      "value": 94.60585,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "avgCpuUtil": {
+      "value": 22.846462,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "warm": true,
+     "versions": {
+      "benchmark": "bench-1.0.0",
+      "prompts": "ladder-1",
+      "quality": "qb-1.0.0",
+      "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+     }
+    },
+    "detail": {
+     "samples": [
+      {
+       "ts": 1790498976941,
+       "cpuPct": 22.846462,
+       "ramAvailBytes": 15549333504,
+       "gpuUtilPct": 94.60585,
+       "vramDedicatedBytes": 3268186112,
+       "vramSharedBytes": 925077504,
+       "procRamPrivateBytes": 128761856,
+       "procVramDedicatedBytes": 1644986368,
+       "procVramSharedBytes": 24133632
+      },
+      {
+       "ts": 1790498977662,
+       "cpuPct": 16.083823,
+       "ramAvailBytes": 15624830976,
+       "gpuUtilPct": 92.681252,
+       "vramDedicatedBytes": 3268186112,
+       "vramSharedBytes": 925077504,
+       "procRamPrivateBytes": 127655936,
+       "procVramDedicatedBytes": 1644986368,
+       "procVramSharedBytes": 24133632
+      }
+     ],
+     "reason": null,
+     "stderrTail": [],
+     "load": {
+      "loadTimeMs": 975.9447,
+      "declared": {
+       "layersOffloaded": 29,
+       "layersTotal": 29,
+       "modelBufferMiB": {
+        "CPU_Mapped": 125.19,
+        "Vulkan0": 934.69
+       },
+       "kvBufferMiB": {
+        "Vulkan0": 448
+       },
+       "computeBufferMiB": {
+        "Vulkan0": 74.51,
+        "Vulkan_Host": 22.01
+       }
+      }
+     },
+     "startedAt": 1790498973054,
+     "endedAt": 1790498977661,
+     "sampleCount": 1
+    }
+   },
+   {
+    "sessionId": "s1",
+    "run": {
+     "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+     "ctx": 32768,
+     "promptTokens": 18247,
+     "status": "pass",
+     "failureKind": null,
+     "loadTimeMs": {
+      "value": 975.2645999999986,
+      "kind": "measured",
+      "source": "spawn → /health ok"
+     },
+     "ttftMs": {
+      "value": 2106.00165,
+      "kind": "measured",
+      "source": "client wall clock, request → first token"
+     },
+     "prefillTps": {
+      "value": 8766.178169034607,
+      "kind": "measured",
+      "source": "llama-server timings"
+     },
+     "decodeTps": {
+      "value": 272.42887443453264,
+      "kind": "measured",
+      "source": "llama-server timings"
+     },
+     "totalMs": {
+      "value": 2572.997849999998,
+      "kind": "measured",
+      "source": "client wall clock"
+     },
+     "peakVramBytes": {
+      "value": 2132590592,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "peakSharedGpuBytes": {
+      "value": 40910848,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "peakRamBytes": {
+      "value": 148054016,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "avgGpuUtil": {
+      "value": 95.70764080000001,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "avgCpuUtil": {
+      "value": 13.530385999999998,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "warm": true,
+     "versions": {
+      "benchmark": "bench-1.0.0",
+      "prompts": "ladder-1",
+      "quality": "qb-1.0.0",
+      "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+     }
+    },
+    "detail": {
+     "samples": [
+      {
+       "ts": 1790498981533,
+       "cpuPct": 16.798693,
+       "ramAvailBytes": 15625879552,
+       "gpuUtilPct": 97.397295,
+       "vramDedicatedBytes": 3765018624,
+       "vramSharedBytes": 950243328,
+       "procRamPrivateBytes": 145313792,
+       "procVramDedicatedBytes": 2131595264,
+       "procVramSharedBytes": 40910848
+      },
+      {
+       "ts": 1790498982541,
+       "cpuPct": 8.110681,
+       "ramAvailBytes": 15622733824,
+       "gpuUtilPct": 94.335128,
+       "vramDedicatedBytes": 3766013952,
+       "vramSharedBytes": 950243328,
+       "procRamPrivateBytes": 146124800,
+       "procVramDedicatedBytes": 2132590592,
+       "procVramSharedBytes": 40910848
+      },
+      {
+       "ts": 1790498983552,
+       "cpuPct": 15.204401,
+       "ramAvailBytes": 15613296640,
+       "gpuUtilPct": 97.271252,
+       "vramDedicatedBytes": 3760766976,
+       "vramSharedBytes": 941854720,
+       "procRamPrivateBytes": 146137088,
+       "procVramDedicatedBytes": 2132590592,
+       "procVramSharedBytes": 40910848
+      },
+      {
+       "ts": 1790498984559,
+       "cpuPct": 15.76888,
+       "ramAvailBytes": 15558770688,
+       "gpuUtilPct": 94.622835,
+       "vramDedicatedBytes": 3797213184,
+       "vramSharedBytes": 941854720,
+       "procRamPrivateBytes": 148054016,
+       "procVramDedicatedBytes": 2132590592,
+       "procVramSharedBytes": 40910848
+      },
+      {
+       "ts": 1790498985574,
+       "cpuPct": 11.769275,
+       "ramAvailBytes": 15578693632,
+       "gpuUtilPct": 94.911694,
+       "vramDedicatedBytes": 3797213184,
+       "vramSharedBytes": 941854720,
+       "procRamPrivateBytes": 145723392,
+       "procVramDedicatedBytes": 2132590592,
+       "procVramSharedBytes": 40910848
+      },
+      {
+       "ts": 1790498986137,
+       "cpuPct": 14.164327,
+       "ramAvailBytes": 15591276544,
+       "gpuUtilPct": 97.362105,
+       "vramDedicatedBytes": 3775971328,
+       "vramSharedBytes": 941854720,
+       "procRamPrivateBytes": 146247680,
+       "procVramDedicatedBytes": 2132590592,
+       "procVramSharedBytes": 40910848
+      }
+     ],
+     "reason": null,
+     "stderrTail": [],
+     "load": {
+      "loadTimeMs": 975.2645999999986,
+      "declared": {
+       "layersOffloaded": 29,
+       "layersTotal": 29,
+       "modelBufferMiB": {
+        "CPU_Mapped": 125.19,
+        "Vulkan0": 934.69
+       },
+       "kvBufferMiB": {
+        "Vulkan0": 896
+       },
+       "computeBufferMiB": {
+        "Vulkan0": 90.51,
+        "Vulkan_Host": 38.01
+       }
+      }
+     },
+     "startedAt": 1790498977661,
+     "endedAt": 1790498986136,
+     "sampleCount": 5
+    }
+   },
+   {
+    "sessionId": "s1",
+    "run": {
+     "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+     "ctx": 2048,
+     "promptTokens": 1168,
+     "status": "pass",
+     "failureKind": null,
+     "loadTimeMs": {
+      "value": 2566.552599999999,
+      "kind": "measured",
+      "source": "spawn → /health ok"
+     },
+     "ttftMs": {
+      "value": 482.4385000000002,
+      "kind": "measured",
+      "source": "client wall clock, request → first token"
+     },
+     "prefillTps": {
+      "value": 2439.3863488701218,
+      "kind": "measured",
+      "source": "llama-server timings"
+     },
+     "decodeTps": {
+      "value": 98.33442340256505,
+      "kind": "measured",
+      "source": "llama-server timings"
+     },
+     "totalMs": {
+      "value": 1779.7271,
+      "kind": "measured",
+      "source": "client wall clock"
+     },
+     "peakVramBytes": {
+      "value": 5129904128,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "peakSharedGpuBytes": {
+      "value": 19845120,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "peakRamBytes": {
+      "value": 134864896,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "avgGpuUtil": {
+      "value": 92.3166975,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "avgCpuUtil": {
+      "value": 17.726219,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "warm": true,
+     "versions": {
+      "benchmark": "bench-1.0.0",
+      "prompts": "ladder-1",
+      "quality": "qb-1.0.0",
+      "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+     }
+    },
+    "detail": {
+     "samples": [
+      {
+       "ts": 1790498991745,
+       "cpuPct": 15.046657,
+       "ramAvailBytes": 11821645824,
+       "gpuUtilPct": 93.013733,
+       "vramDedicatedBytes": 6857814016,
+       "vramSharedBytes": 921227264,
+       "procRamPrivateBytes": 134520832,
+       "procVramDedicatedBytes": 5129904128,
+       "procVramSharedBytes": 19845120
+      },
+      {
+       "ts": 1790498992748,
+       "cpuPct": 20.405781,
+       "ramAvailBytes": 11265900544,
+       "gpuUtilPct": 91.619662,
+       "vramDedicatedBytes": 7500873728,
+       "vramSharedBytes": 929718272,
+       "procRamPrivateBytes": 134864896,
+       "procVramDedicatedBytes": 5129904128,
+       "procVramSharedBytes": 19845120
+      },
+      {
+       "ts": 1790498993069,
+       "cpuPct": 16.477684,
+       "ramAvailBytes": 11264851968,
+       "gpuUtilPct": 95.017354,
+       "vramDedicatedBytes": 7500873728,
+       "vramSharedBytes": 929718272,
+       "procRamPrivateBytes": 134868992,
+       "procVramDedicatedBytes": 5129904128,
+       "procVramSharedBytes": 19845120
+      }
+     ],
+     "reason": null,
+     "stderrTail": [],
+     "load": {
+      "loadTimeMs": 2566.552599999999,
+      "declared": {
+       "layersOffloaded": 33,
+       "layersTotal": 33,
+       "modelBufferMiB": {
+        "CPU_Mapped": 281.81,
+        "Vulkan0": 4403.49
+       },
+       "kvBufferMiB": {
+        "Vulkan0": 256
+       },
+       "computeBufferMiB": {
+        "Vulkan0": 102.01,
+        "Vulkan_Host": 18.01
+       }
+      }
+     },
+     "startedAt": 1790498986367,
+     "endedAt": 1790498993069,
+     "sampleCount": 2
+    }
+   },
+   {
+    "sessionId": "s1",
+    "run": {
+     "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+     "ctx": 4096,
+     "promptTokens": 2297,
+     "status": "pass",
+     "failureKind": null,
+     "loadTimeMs": {
+      "value": 2671.7538999999997,
+      "kind": "measured",
+      "source": "spawn → /health ok"
+     },
+     "ttftMs": {
+      "value": 844.7899999999972,
+      "kind": "measured",
+      "source": "client wall clock, request → first token"
+     },
+     "prefillTps": {
+      "value": 2742.569515611768,
+      "kind": "measured",
+      "source": "llama-server timings"
+     },
+     "decodeTps": {
+      "value": 106.01489642125426,
+      "kind": "measured",
+      "source": "llama-server timings"
+     },
+     "totalMs": {
+      "value": 2043.365899999997,
+      "kind": "measured",
+      "source": "client wall clock"
+     },
+     "peakVramBytes": {
+      "value": 5400969216,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "peakSharedGpuBytes": {
+      "value": 21942272,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "peakRamBytes": {
+      "value": 140087296,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "avgGpuUtil": {
+      "value": 93.657082,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "avgCpuUtil": {
+      "value": 20.164732,
+      "kind": "measured",
+      "source": "typeperf"
+     },
+     "warm": true,
+     "versions": {
+      "benchmark": "bench-1.0.0",
+      "prompts": "ladder-1",
+      "quality": "qb-1.0.0",
+      "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+     }
+    },
+    "detail": {
+     "samples": [
+      {
+       "ts": 1790498999314,
+       "cpuPct": 27.277826,
+       "ramAvailBytes": 11036262400,
+       "gpuUtilPct": 94.515499,
+       "vramDedicatedBytes": 7787536384,
+       "vramSharedBytes": 932306944,
+       "procRamPrivateBytes": 138465280,
+       "procVramDedicatedBytes": 5400969216,
+       "procVramSharedBytes": 21942272
+      },
+      {
+       "ts": 1790499000320,
+       "cpuPct": 21.062519,
+       "ramAvailBytes": 11904483328,
+       "gpuUtilPct": 93.418678,
+       "vramDedicatedBytes": 7081844736,
+       "vramSharedBytes": 922886144,
+       "procRamPrivateBytes": 140087296,
+       "procVramDedicatedBytes": 5400969216,
+       "procVramSharedBytes": 21942272
+      },
+      {
+       "ts": 1790499001336,
+       "cpuPct": 12.153851,
+       "ramAvailBytes": 11902386176,
+       "gpuUtilPct": 93.037069,
+       "vramDedicatedBytes": 7077912576,
+       "vramSharedBytes": 922886144,
+       "procRamPrivateBytes": 138903552,
+       "procVramDedicatedBytes": 5400969216,
+       "procVramSharedBytes": 21942272
+      },
+      {
+       "ts": 1790499001555,
+       "cpuPct": 10.78859,
+       "ramAvailBytes": 11863588864,
+       "gpuUtilPct": 92.467506,
+       "vramDedicatedBytes": 7026262016,
+       "vramSharedBytes": 922886144,
+       "procRamPrivateBytes": 140447744,
+       "procVramDedicatedBytes": 5400969216,
+       "procVramSharedBytes": 21942272
+      }
+     ],
+     "reason": null,
+     "stderrTail": [],
+     "load": {
+      "loadTimeMs": 2671.7538999999997,
+      "declared": {
+       "layersOffloaded": 33,
+       "layersTotal": 33,
+       "modelBufferMiB": {
+        "CPU_Mapped": 281.81,
+        "Vulkan0": 4403.49
+       },
+       "kvBufferMiB": {
+        "Vulkan0": 512
+       },
+       "computeBufferMiB": {
+        "Vulkan0": 104.01,
+        "Vulkan_Host": 20.01
+       }
+      }
+     },
+     "startedAt": 1790498993069,
+     "endedAt": 1790499001554,
+     "sampleCount": 3
+    }
+   },
+   {
+    "sessionId": "s1",
+    "run": {
+     "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+     "ctx": 8192,
+     "promptTokens": null,
+     "status": "cancelled",
+     "failureKind": null,
+     "loadTimeMs": {
+      "value": 2550.2004000000015,
+      "kind": "measured",
+      "source": "spawn → /health ok"
+     },
+     "ttftMs": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no successful request"
+     },
+     "prefillTps": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no timings"
+     },
+     "decodeTps": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no timings"
+     },
+     "totalMs": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no successful request"
+     },
+     "peakVramBytes": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples (run too short or sampler failed)"
+     },
+     "peakSharedGpuBytes": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples (run too short or sampler failed)"
+     },
+     "peakRamBytes": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples (run too short or sampler failed)"
+     },
+     "avgGpuUtil": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples (run too short or sampler failed)"
+     },
+     "avgCpuUtil": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry samples (run too short or sampler failed)"
+     },
+     "warm": false,
+     "versions": {
+      "benchmark": "bench-1.0.0",
+      "prompts": "ladder-1",
+      "quality": "qb-1.0.0",
+      "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+     }
+    },
+    "detail": {
+     "samples": [],
+     "reason": "cancelled by user",
+     "stderrTail": [],
+     "load": {
+      "loadTimeMs": 2550.2004000000015,
+      "declared": {
+       "layersOffloaded": 33,
+       "layersTotal": 33,
+       "modelBufferMiB": {
+        "CPU_Mapped": 281.81,
+        "Vulkan0": 4403.49
+       },
+       "kvBufferMiB": {
+        "Vulkan0": 1024
+       },
+       "computeBufferMiB": {
+        "Vulkan0": 108.01,
+        "Vulkan_Host": 24.01
+       }
+      }
+     },
+     "startedAt": 1790499001554,
+     "endedAt": 1790499006375,
+     "sampleCount": 0
+    }
+   }
+  ],
+  "quality": [],
+  "recommendations": []
+ },
+ "transcripts": [],
+ "events": [
+  {
+   "sessionId": "s1",
+   "type": "session:started",
+   "workload": "coding",
+   "modelIds": [
+    "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf",
+    "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+   ],
+   "resumed": false
+  },
+  {
+   "sessionId": "s1",
+   "type": "candidate:started",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "model": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf",
+   "gpuLayers": 28,
+   "ctxSteps": [
+    2048,
+    4096,
+    8192,
+    16384,
+    32768
+   ]
+  },
+  {
+   "sessionId": "s1",
+   "type": "log",
+   "level": "info",
+   "msg": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8 @65536: skipped (above declared context 32K)"
+  },
+  {
+   "sessionId": "s1",
+   "type": "log",
+   "level": "info",
+   "msg": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8 @131072: skipped (above declared context 32K)"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "phase": "ladder"
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:started",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "phase": "load"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "phase": "warmup"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "phase": "measure"
+  },
+  {
+   "sessionId": "s1",
+   "type": "token-rate",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "prefillTps": 12187.989556135772,
+   "decodeTps": 362.6851264828681,
+   "ttftMs": 98.37300000000005
+  },
+  {
+   "sessionId": "s1",
+   "type": "token-rate",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "prefillTps": 11765.654773306987,
+   "decodeTps": 369.3331355801584,
+   "ttftMs": 102.37159999999994
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:done",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "result": {
+    "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+    "ctx": 2048,
+    "promptTokens": 1167,
+    "status": "pass",
+    "failureKind": null,
+    "loadTimeMs": {
+     "value": 874.7231999999999,
+     "kind": "measured",
+     "source": "spawn → /health ok"
+    },
+    "ttftMs": {
+     "value": 100.3723,
+     "kind": "measured",
+     "source": "client wall clock, request → first token"
+    },
+    "prefillTps": {
+     "value": 11976.82216472138,
+     "kind": "measured",
+     "source": "llama-server timings"
+    },
+    "decodeTps": {
+     "value": 366.0091310315132,
+     "kind": "measured",
+     "source": "llama-server timings"
+    },
+    "totalMs": {
+     "value": 447.4763499999999,
+     "kind": "measured",
+     "source": "client wall clock"
+    },
+    "peakVramBytes": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples (run too short or sampler failed)"
+    },
+    "peakSharedGpuBytes": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples (run too short or sampler failed)"
+    },
+    "peakRamBytes": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples (run too short or sampler failed)"
+    },
+    "avgGpuUtil": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples (run too short or sampler failed)"
+    },
+    "avgCpuUtil": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples (run too short or sampler failed)"
+    },
+    "warm": true,
+    "versions": {
+     "benchmark": "bench-1.0.0",
+     "prompts": "ladder-1",
+     "quality": "qb-1.0.0",
+     "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+    }
+   },
+   "verdict": "pass"
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:started",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 4096
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 4096,
+   "phase": "load"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 4096,
+   "phase": "warmup"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 4096,
+   "phase": "measure"
+  },
+  {
+   "sessionId": "s1",
+   "type": "token-rate",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 4096,
+   "prefillTps": 12839.583496437797,
+   "decodeTps": 351.0488621317788,
+   "ttftMs": 184.58740000000034
+  },
+  {
+   "sessionId": "s1",
+   "type": "token-rate",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 4096,
+   "prefillTps": 12639.830881705275,
+   "decodeTps": 353.07494919334886,
+   "ttftMs": 185.32919999999922
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:done",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 4096,
+   "result": {
+    "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+    "ctx": 4096,
+    "promptTokens": 2296,
+    "status": "pass",
+    "failureKind": null,
+    "loadTimeMs": {
+     "value": 856.6088,
+     "kind": "measured",
+     "source": "spawn → /health ok"
+    },
+    "ttftMs": {
+     "value": 184.95829999999978,
+     "kind": "measured",
+     "source": "client wall clock, request → first token"
+    },
+    "prefillTps": {
+     "value": 12739.707189071536,
+     "kind": "measured",
+     "source": "llama-server timings"
+    },
+    "decodeTps": {
+     "value": 352.06190566256384,
+     "kind": "measured",
+     "source": "llama-server timings"
+    },
+    "totalMs": {
+     "value": 545.8939499999997,
+     "kind": "measured",
+     "source": "client wall clock"
+    },
+    "peakVramBytes": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples (run too short or sampler failed)"
+    },
+    "peakSharedGpuBytes": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples (run too short or sampler failed)"
+    },
+    "peakRamBytes": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples (run too short or sampler failed)"
+    },
+    "avgGpuUtil": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples (run too short or sampler failed)"
+    },
+    "avgCpuUtil": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples (run too short or sampler failed)"
+    },
+    "warm": true,
+    "versions": {
+     "benchmark": "bench-1.0.0",
+     "prompts": "ladder-1",
+     "quality": "qb-1.0.0",
+     "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+    }
+   },
+   "verdict": "pass"
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:started",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 8192
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 8192,
+   "phase": "load"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 8192,
+   "phase": "warmup"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 8192,
+   "phase": "measure"
+  },
+  {
+   "sessionId": "s1",
+   "type": "token-rate",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 8192,
+   "prefillTps": 12270.758344623391,
+   "decodeTps": 337.65639872169135,
+   "ttftMs": 380.72069999999985
+  },
+  {
+   "sessionId": "s1",
+   "type": "token-rate",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 8192,
+   "prefillTps": 12344.285122878324,
+   "decodeTps": 339.9830811569062,
+   "ttftMs": 377.5579999999991
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:done",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 8192,
+   "result": {
+    "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+    "ctx": 8192,
+    "promptTokens": 4592,
+    "status": "pass",
+    "failureKind": null,
+    "loadTimeMs": {
+     "value": 967.4817000000003,
+     "kind": "measured",
+     "source": "spawn → /health ok"
+    },
+    "ttftMs": {
+     "value": 379.13934999999947,
+     "kind": "measured",
+     "source": "client wall clock, request → first token"
+    },
+    "prefillTps": {
+     "value": 12307.521733750858,
+     "kind": "measured",
+     "source": "llama-server timings"
+    },
+    "decodeTps": {
+     "value": 338.81973993929876,
+     "kind": "measured",
+     "source": "llama-server timings"
+    },
+    "totalMs": {
+     "value": 754.1710499999999,
+     "kind": "measured",
+     "source": "client wall clock"
+    },
+    "peakVramBytes": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples (run too short or sampler failed)"
+    },
+    "peakSharedGpuBytes": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples (run too short or sampler failed)"
+    },
+    "peakRamBytes": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples (run too short or sampler failed)"
+    },
+    "avgGpuUtil": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples (run too short or sampler failed)"
+    },
+    "avgCpuUtil": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples (run too short or sampler failed)"
+    },
+    "warm": true,
+    "versions": {
+     "benchmark": "bench-1.0.0",
+     "prompts": "ladder-1",
+     "quality": "qb-1.0.0",
+     "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+    }
+   },
+   "verdict": "pass"
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:started",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 16384
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 16384,
+   "phase": "load"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 16384,
+   "phase": "warmup"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 16384,
+   "phase": "measure"
+  },
+  {
+   "sessionId": "s1",
+   "type": "token-rate",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 16384,
+   "prefillTps": 10818.721400192211,
+   "decodeTps": 314.4295950047783,
+   "ttftMs": 866.8757000000005
+  },
+  {
+   "sessionId": "s1",
+   "type": "token-rate",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 16384,
+   "prefillTps": 10879.165423463668,
+   "decodeTps": 311.22874087144044,
+   "ttftMs": 850.7888999999996
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:done",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 16384,
+   "result": {
+    "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+    "ctx": 16384,
+    "promptTokens": 9152,
+    "status": "pass",
+    "failureKind": null,
+    "loadTimeMs": {
+     "value": 975.9447,
+     "kind": "measured",
+     "source": "spawn → /health ok"
+    },
+    "ttftMs": {
+     "value": 858.8323,
+     "kind": "measured",
+     "source": "client wall clock, request → first token"
+    },
+    "prefillTps": {
+     "value": 10848.943411827939,
+     "kind": "measured",
+     "source": "llama-server timings"
+    },
+    "decodeTps": {
+     "value": 312.8291679381094,
+     "kind": "measured",
+     "source": "llama-server timings"
+    },
+    "totalMs": {
+     "value": 1265.3105499999992,
+     "kind": "measured",
+     "source": "client wall clock"
+    },
+    "peakVramBytes": {
+     "value": 1644986368,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "peakSharedGpuBytes": {
+     "value": 24133632,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "peakRamBytes": {
+     "value": 128761856,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "avgGpuUtil": {
+     "value": 94.60585,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "avgCpuUtil": {
+     "value": 22.846462,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "warm": true,
+    "versions": {
+     "benchmark": "bench-1.0.0",
+     "prompts": "ladder-1",
+     "quality": "qb-1.0.0",
+     "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+    }
+   },
+   "verdict": "pass"
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:started",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 32768
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 32768,
+   "phase": "load"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 32768,
+   "phase": "warmup"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 32768,
+   "phase": "measure"
+  },
+  {
+   "sessionId": "s1",
+   "type": "token-rate",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 32768,
+   "prefillTps": 8768.675544107684,
+   "decodeTps": 273.25402511785427,
+   "ttftMs": 2108.530600000002
+  },
+  {
+   "sessionId": "s1",
+   "type": "token-rate",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 32768,
+   "prefillTps": 8763.680793961528,
+   "decodeTps": 271.60372375121096,
+   "ttftMs": 2103.4726999999984
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:done",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 32768,
+   "result": {
+    "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+    "ctx": 32768,
+    "promptTokens": 18247,
+    "status": "pass",
+    "failureKind": null,
+    "loadTimeMs": {
+     "value": 975.2645999999986,
+     "kind": "measured",
+     "source": "spawn → /health ok"
+    },
+    "ttftMs": {
+     "value": 2106.00165,
+     "kind": "measured",
+     "source": "client wall clock, request → first token"
+    },
+    "prefillTps": {
+     "value": 8766.178169034607,
+     "kind": "measured",
+     "source": "llama-server timings"
+    },
+    "decodeTps": {
+     "value": 272.42887443453264,
+     "kind": "measured",
+     "source": "llama-server timings"
+    },
+    "totalMs": {
+     "value": 2572.997849999998,
+     "kind": "measured",
+     "source": "client wall clock"
+    },
+    "peakVramBytes": {
+     "value": 2132590592,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "peakSharedGpuBytes": {
+     "value": 40910848,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "peakRamBytes": {
+     "value": 148054016,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "avgGpuUtil": {
+     "value": 95.70764080000001,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "avgCpuUtil": {
+     "value": 13.530385999999998,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "warm": true,
+    "versions": {
+     "benchmark": "bench-1.0.0",
+     "prompts": "ladder-1",
+     "quality": "qb-1.0.0",
+     "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+    }
+   },
+   "verdict": "pass"
+  },
+  {
+   "sessionId": "s1",
+   "type": "candidate:done",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "status": "done",
+   "reason": null
+  },
+  {
+   "sessionId": "s1",
+   "type": "candidate:started",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "model": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+   "gpuLayers": 32,
+   "ctxSteps": [
+    2048,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536
+   ]
+  },
+  {
+   "sessionId": "s1",
+   "type": "log",
+   "level": "info",
+   "msg": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8 @131072: skipped (est. VRAM 20.8 GiB > budget 14.9 GiB)"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "phase": "ladder"
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:started",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "phase": "load"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "phase": "warmup"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "phase": "measure"
+  },
+  {
+   "sessionId": "s1",
+   "type": "token-rate",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "prefillTps": 2470.629545175715,
+   "decodeTps": 104.8006971309365,
+   "ttftMs": 477.52730000000156
+  },
+  {
+   "sessionId": "s1",
+   "type": "token-rate",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "prefillTps": 2408.143152564528,
+   "decodeTps": 91.8681496741936,
+   "ttftMs": 487.34969999999885
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:done",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "result": {
+    "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+    "ctx": 2048,
+    "promptTokens": 1168,
+    "status": "pass",
+    "failureKind": null,
+    "loadTimeMs": {
+     "value": 2566.552599999999,
+     "kind": "measured",
+     "source": "spawn → /health ok"
+    },
+    "ttftMs": {
+     "value": 482.4385000000002,
+     "kind": "measured",
+     "source": "client wall clock, request → first token"
+    },
+    "prefillTps": {
+     "value": 2439.3863488701218,
+     "kind": "measured",
+     "source": "llama-server timings"
+    },
+    "decodeTps": {
+     "value": 98.33442340256505,
+     "kind": "measured",
+     "source": "llama-server timings"
+    },
+    "totalMs": {
+     "value": 1779.7271,
+     "kind": "measured",
+     "source": "client wall clock"
+    },
+    "peakVramBytes": {
+     "value": 5129904128,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "peakSharedGpuBytes": {
+     "value": 19845120,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "peakRamBytes": {
+     "value": 134864896,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "avgGpuUtil": {
+     "value": 92.3166975,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "avgCpuUtil": {
+     "value": 17.726219,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "warm": true,
+    "versions": {
+     "benchmark": "bench-1.0.0",
+     "prompts": "ladder-1",
+     "quality": "qb-1.0.0",
+     "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+    }
+   },
+   "verdict": "pass"
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:started",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 4096
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 4096,
+   "phase": "load"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 4096,
+   "phase": "warmup"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 4096,
+   "phase": "measure"
+  },
+  {
+   "sessionId": "s1",
+   "type": "token-rate",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 4096,
+   "prefillTps": 2529.1785950231224,
+   "decodeTps": 103.99589912234012,
+   "ttftMs": 910.4571999999971
+  },
+  {
+   "sessionId": "s1",
+   "type": "token-rate",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 4096,
+   "prefillTps": 2955.9604362004134,
+   "decodeTps": 108.0338937201684,
+   "ttftMs": 779.1227999999974
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:done",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 4096,
+   "result": {
+    "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+    "ctx": 4096,
+    "promptTokens": 2297,
+    "status": "pass",
+    "failureKind": null,
+    "loadTimeMs": {
+     "value": 2671.7538999999997,
+     "kind": "measured",
+     "source": "spawn → /health ok"
+    },
+    "ttftMs": {
+     "value": 844.7899999999972,
+     "kind": "measured",
+     "source": "client wall clock, request → first token"
+    },
+    "prefillTps": {
+     "value": 2742.569515611768,
+     "kind": "measured",
+     "source": "llama-server timings"
+    },
+    "decodeTps": {
+     "value": 106.01489642125426,
+     "kind": "measured",
+     "source": "llama-server timings"
+    },
+    "totalMs": {
+     "value": 2043.365899999997,
+     "kind": "measured",
+     "source": "client wall clock"
+    },
+    "peakVramBytes": {
+     "value": 5400969216,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "peakSharedGpuBytes": {
+     "value": 21942272,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "peakRamBytes": {
+     "value": 140087296,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "avgGpuUtil": {
+     "value": 93.657082,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "avgCpuUtil": {
+     "value": 20.164732,
+     "kind": "measured",
+     "source": "typeperf"
+    },
+    "warm": true,
+    "versions": {
+     "benchmark": "bench-1.0.0",
+     "prompts": "ladder-1",
+     "quality": "qb-1.0.0",
+     "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+    }
+   },
+   "verdict": "pass"
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:started",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 8192
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 8192,
+   "phase": "load"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 8192,
+   "phase": "warmup"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 8192,
+   "phase": "measure"
+  },
+  {
+   "sessionId": "s1",
+   "type": "log",
+   "level": "error",
+   "msg": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8 @8192: cancelled by user"
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:done",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 8192,
+   "result": {
+    "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+    "ctx": 8192,
+    "promptTokens": null,
+    "status": "cancelled",
+    "failureKind": null,
+    "loadTimeMs": {
+     "value": 2550.2004000000015,
+     "kind": "measured",
+     "source": "spawn → /health ok"
+    },
+    "ttftMs": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no successful request"
+    },
+    "prefillTps": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no timings"
+    },
+    "decodeTps": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no timings"
+    },
+    "totalMs": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no successful request"
+    },
+    "peakVramBytes": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples (run too short or sampler failed)"
+    },
+    "peakSharedGpuBytes": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples (run too short or sampler failed)"
+    },
+    "peakRamBytes": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples (run too short or sampler failed)"
+    },
+    "avgGpuUtil": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples (run too short or sampler failed)"
+    },
+    "avgCpuUtil": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry samples (run too short or sampler failed)"
+    },
+    "warm": false,
+    "versions": {
+     "benchmark": "bench-1.0.0",
+     "prompts": "ladder-1",
+     "quality": "qb-1.0.0",
+     "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+    }
+   },
+   "verdict": "fail"
+  },
+  {
+   "sessionId": "s1",
+   "type": "candidate:done",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "status": "cancelled",
+   "reason": "stopped after cancelled at 8192"
+  },
+  {
+   "sessionId": "s1",
+   "type": "session:cancelled"
+  }
+ ],
+ "telemetryEvents": 11
+}

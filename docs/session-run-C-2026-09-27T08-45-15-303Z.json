@@ -1,0 +1,582 @@
+{
+ "scenario": "C",
+ "startedAt": "2026-09-27T08:45:15.303Z",
+ "wallMs": 1985,
+ "abortToCancelledMs": null,
+ "leftoverLlamaServers": 0,
+ "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)",
+ "device": {
+  "id": "Vulkan0",
+  "name": "AMD Radeon RX 9070 XT",
+  "totalMiB": 16304,
+  "freeMiB": 15416
+ },
+ "models": [
+  {
+   "id": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf",
+   "name": "qwen2.5-1.5b-instruct",
+   "fileBytes": 1117320736,
+   "paramCount": 1777088000,
+   "quant": "Q4_K_M",
+   "arch": "qwen2",
+   "ctxTrain": 32768,
+   "layers": 28,
+   "nEmbd": 1536,
+   "heads": 12,
+   "headsKv": 2,
+   "keyLength": null,
+   "valueLength": null,
+   "nVocab": 151936,
+   "slidingWindow": null
+  },
+  {
+   "id": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+   "name": "Meta Llama 3.1 8B Instruct",
+   "fileBytes": 4920739232,
+   "paramCount": 8030261312,
+   "quant": "Q4_K_M",
+   "arch": "llama",
+   "ctxTrain": 131072,
+   "layers": 32,
+   "nEmbd": 4096,
+   "heads": 32,
+   "headsKv": 8,
+   "keyLength": null,
+   "valueLength": null,
+   "nVocab": 128256,
+   "slidingWindow": null
+  }
+ ],
+ "request": {
+  "workload": "coding",
+  "modelIds": [
+   "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf",
+   "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+  ],
+  "runQuality": false
+ },
+ "recommendation": {
+  "workload": "coding",
+  "scoringVersion": "scoring-1.0.0",
+  "best": null,
+  "alternatives": {
+   "fastest": null,
+   "bestQuality": null,
+   "bestLongContext": null,
+   "lowestMemory": null
+  },
+  "ranked": [],
+  "excluded": [
+   {
+    "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+    "reasons": [
+     "2K: run fail (skipped_memory)"
+    ]
+   },
+   {
+    "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+    "reasons": [
+     "2K: run fail (skipped_memory)"
+    ]
+   }
+  ],
+  "reasons": [
+   "No recommendation: no successful runs"
+  ]
+ },
+ "db": {
+  "sessions": [
+   {
+    "id": "s1",
+    "workload": "coding",
+    "request": {
+     "workload": "coding",
+     "modelIds": [
+      "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf",
+      "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+     ],
+     "runQuality": false
+    },
+    "startedAt": 1790498717210,
+    "status": "done"
+   }
+  ],
+  "runs": [
+   {
+    "sessionId": "s1",
+    "run": {
+     "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+     "ctx": 2048,
+     "promptTokens": null,
+     "status": "fail",
+     "failureKind": "skipped_memory",
+     "loadTimeMs": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "not loaded"
+     },
+     "ttftMs": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no request"
+     },
+     "prefillTps": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no request"
+     },
+     "decodeTps": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no request"
+     },
+     "totalMs": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no request"
+     },
+     "peakVramBytes": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry"
+     },
+     "peakSharedGpuBytes": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry"
+     },
+     "peakRamBytes": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry"
+     },
+     "avgGpuUtil": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry"
+     },
+     "avgCpuUtil": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry"
+     },
+     "warm": false,
+     "versions": {
+      "benchmark": "bench-1.0.0",
+      "prompts": "ladder-1",
+      "quality": "qb-1.0.0",
+      "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+     }
+    },
+    "detail": {
+     "samples": [],
+     "reason": "est. RAM 1.5 GiB > available 15.0 GiB − floor 64.0 GiB",
+     "stderrTail": [],
+     "load": null,
+     "startedAt": 1790498717211,
+     "endedAt": 1790498717211,
+     "sampleCount": 0
+    }
+   },
+   {
+    "sessionId": "s1",
+    "run": {
+     "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+     "ctx": 2048,
+     "promptTokens": null,
+     "status": "fail",
+     "failureKind": "skipped_memory",
+     "loadTimeMs": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "not loaded"
+     },
+     "ttftMs": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no request"
+     },
+     "prefillTps": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no request"
+     },
+     "decodeTps": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no request"
+     },
+     "totalMs": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no request"
+     },
+     "peakVramBytes": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry"
+     },
+     "peakSharedGpuBytes": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry"
+     },
+     "peakRamBytes": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry"
+     },
+     "avgGpuUtil": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry"
+     },
+     "avgCpuUtil": {
+      "value": null,
+      "kind": "unavailable",
+      "reason": "no telemetry"
+     },
+     "warm": false,
+     "versions": {
+      "benchmark": "bench-1.0.0",
+      "prompts": "ladder-1",
+      "quality": "qb-1.0.0",
+      "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+     }
+    },
+    "detail": {
+     "samples": [],
+     "reason": "est. RAM 5.1 GiB > available 15.0 GiB − floor 64.0 GiB",
+     "stderrTail": [],
+     "load": null,
+     "startedAt": 1790498717212,
+     "endedAt": 1790498717212,
+     "sampleCount": 0
+    }
+   }
+  ],
+  "quality": [],
+  "recommendations": [
+   {
+    "sessionId": "s1",
+    "rec": {
+     "workload": "coding",
+     "scoringVersion": "scoring-1.0.0",
+     "best": null,
+     "alternatives": {
+      "fastest": null,
+      "bestQuality": null,
+      "bestLongContext": null,
+      "lowestMemory": null
+     },
+     "ranked": [],
+     "excluded": [
+      {
+       "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+       "reasons": [
+        "2K: run fail (skipped_memory)"
+       ]
+      },
+      {
+       "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+       "reasons": [
+        "2K: run fail (skipped_memory)"
+       ]
+      }
+     ],
+     "reasons": [
+      "No recommendation: no successful runs"
+     ]
+    }
+   }
+  ]
+ },
+ "transcripts": [],
+ "events": [
+  {
+   "sessionId": "s1",
+   "type": "session:started",
+   "workload": "coding",
+   "modelIds": [
+    "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf",
+    "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+   ],
+   "resumed": false
+  },
+  {
+   "sessionId": "s1",
+   "type": "candidate:started",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "model": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf",
+   "gpuLayers": 28,
+   "ctxSteps": [
+    2048,
+    4096,
+    8192,
+    16384,
+    32768
+   ]
+  },
+  {
+   "sessionId": "s1",
+   "type": "log",
+   "level": "info",
+   "msg": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8 @65536: skipped (above declared context 32K)"
+  },
+  {
+   "sessionId": "s1",
+   "type": "log",
+   "level": "info",
+   "msg": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8 @131072: skipped (above declared context 32K)"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "phase": "ladder"
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:started",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048
+  },
+  {
+   "sessionId": "s1",
+   "type": "log",
+   "level": "error",
+   "msg": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8 @2048: est. RAM 1.5 GiB > available 15.0 GiB − floor 64.0 GiB"
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:done",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "result": {
+    "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+    "ctx": 2048,
+    "promptTokens": null,
+    "status": "fail",
+    "failureKind": "skipped_memory",
+    "loadTimeMs": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "not loaded"
+    },
+    "ttftMs": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no request"
+    },
+    "prefillTps": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no request"
+    },
+    "decodeTps": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no request"
+    },
+    "totalMs": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no request"
+    },
+    "peakVramBytes": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry"
+    },
+    "peakSharedGpuBytes": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry"
+    },
+    "peakRamBytes": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry"
+    },
+    "avgGpuUtil": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry"
+    },
+    "avgCpuUtil": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry"
+    },
+    "warm": false,
+    "versions": {
+     "benchmark": "bench-1.0.0",
+     "prompts": "ladder-1",
+     "quality": "qb-1.0.0",
+     "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+    }
+   },
+   "verdict": "fail"
+  },
+  {
+   "sessionId": "s1",
+   "type": "candidate:done",
+   "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+   "status": "failed",
+   "reason": "stopped after fail (skipped_memory) at 2048"
+  },
+  {
+   "sessionId": "s1",
+   "type": "candidate:started",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "model": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+   "gpuLayers": 32,
+   "ctxSteps": [
+    2048,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536
+   ]
+  },
+  {
+   "sessionId": "s1",
+   "type": "log",
+   "level": "info",
+   "msg": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8 @131072: skipped (est. VRAM 20.8 GiB > budget 14.9 GiB)"
+  },
+  {
+   "sessionId": "s1",
+   "type": "phase",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "phase": "ladder"
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:started",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048
+  },
+  {
+   "sessionId": "s1",
+   "type": "log",
+   "level": "error",
+   "msg": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8 @2048: est. RAM 5.1 GiB > available 15.0 GiB − floor 64.0 GiB"
+  },
+  {
+   "sessionId": "s1",
+   "type": "step:done",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "ctx": 2048,
+   "result": {
+    "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+    "ctx": 2048,
+    "promptTokens": null,
+    "status": "fail",
+    "failureKind": "skipped_memory",
+    "loadTimeMs": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "not loaded"
+    },
+    "ttftMs": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no request"
+    },
+    "prefillTps": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no request"
+    },
+    "decodeTps": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no request"
+    },
+    "totalMs": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no request"
+    },
+    "peakVramBytes": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry"
+    },
+    "peakSharedGpuBytes": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry"
+    },
+    "peakRamBytes": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry"
+    },
+    "avgGpuUtil": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry"
+    },
+    "avgCpuUtil": {
+     "value": null,
+     "kind": "unavailable",
+     "reason": "no telemetry"
+    },
+    "warm": false,
+    "versions": {
+     "benchmark": "bench-1.0.0",
+     "prompts": "ladder-1",
+     "quality": "qb-1.0.0",
+     "runtime": "b11208 / 0.5.0-dev (build 11208, commit 85ca3b52c)"
+    }
+   },
+   "verdict": "fail"
+  },
+  {
+   "sessionId": "s1",
+   "type": "candidate:done",
+   "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+   "status": "failed",
+   "reason": "stopped after fail (skipped_memory) at 2048"
+  },
+  {
+   "sessionId": "s1",
+   "type": "session:done",
+   "recommendation": {
+    "workload": "coding",
+    "scoringVersion": "scoring-1.0.0",
+    "best": null,
+    "alternatives": {
+     "fastest": null,
+     "bestQuality": null,
+     "bestLongContext": null,
+     "lowestMemory": null
+    },
+    "ranked": [],
+    "excluded": [
+     {
+      "configId": "D:\\llm-models\\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|ngl=all|kv=f16|t=8",
+      "reasons": [
+       "2K: run fail (skipped_memory)"
+      ]
+     },
+     {
+      "configId": "D:\\llm-models\\qwen2.5-1.5b-instruct-q4_k_m.gguf|ngl=all|kv=f16|t=8",
+      "reasons": [
+       "2K: run fail (skipped_memory)"
+      ]
+     }
+    ],
+    "reasons": [
+     "No recommendation: no successful runs"
+    ]
+   }
+  }
+ ],
+ "telemetryEvents": 0
+}
