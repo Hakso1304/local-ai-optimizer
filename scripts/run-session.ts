@@ -13,7 +13,7 @@ import type { SessionEvent, SessionRequest } from '../src/shared/bench-events'
 import type { BenchmarkRunResult, ModelMeta, QualityResult, Recommendation } from '../src/shared/bench-types'
 import type { ModelInfo } from '../src/shared/types'
 import { runSession, type RunDetail, type SessionBackend, type SessionStorage } from '../src/core/benchmark/session'
-import { findGgufModels } from '../src/core/models/gguf'
+import { findGgufModels, toModelMeta } from '../src/core/models/gguf'
 import { LlamaCppBackend } from '../src/core/runtimes/llamacpp'
 import { pickDiscreteDevice } from '../src/core/runtimes/llamacpp/parse'
 import { scanSystem } from '../src/core/system/scanner'
@@ -27,16 +27,10 @@ const GiB = 1024 ** 3
 const t0 = Date.now()
 const el = () => `${((Date.now() - t0) / 1000).toFixed(1).padStart(7)}s`
 
-// Local GGUF → ModelMeta (#2's toModelMeta is not committed yet). No field is invented: missing → model skipped.
+// GGUF → ModelMeta via the app's own mapping (carries supportsThinking etc.); missing fields → model skipped.
 function toMeta(info: ModelInfo): ModelMeta | string {
-  const g = info.meta
-  if (!g) return info.metaError ?? 'no GGUF metadata'
-  if (!g.arch || !g.blockCount || !g.embeddingLength || !g.headCount || !g.nVocab) return 'GGUF lacks arch/blockCount/embeddingLength/headCount/nVocab'
-  return {
-    id: info.path, name: g.name ?? info.name, fileBytes: g.fileSizeBytes, paramCount: g.parameterCount.value, quant: g.quantName,
-    arch: g.arch, ctxTrain: g.contextLength, layers: g.blockCount, nEmbd: g.embeddingLength, heads: g.headCount,
-    headsKv: g.headCountKv ?? g.headCount, keyLength: g.keyLength, valueLength: g.valueLength, nVocab: g.nVocab, slidingWindow: g.slidingWindow
-  }
+  const r = toModelMeta(info)
+  return r.meta ?? r.reason
 }
 
 // In-memory storage implementing #1's SessionStorage.
