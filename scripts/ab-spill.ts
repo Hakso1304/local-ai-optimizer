@@ -81,7 +81,7 @@ export function assertNewArtifact(path: string, exists: (path: string) => boolea
 const out = outputPathFor(process.argv.slice(2))
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const g = (b: number | null) => (b == null ? null : +(b / GiB).toFixed(2))
-const baseArgv = (ctx: number, extra: string[] = [], dev = 'Vulkan0') => ['-m', MODEL, '-c', String(ctx), '-ngl', '999', '-dev', dev, '-t', '8', '-b', '2048', '-ub', '512', '-fa', 'on', '-fit', 'off', '--parallel', '1', '-lm', 'none', '--cache-ram', '0', ...extra]
+export const baseArgv = (ctx: number, extra: string[] = [], dev = 'Vulkan0') => ['-m', MODEL, '-c', String(ctx), '-ngl', '999', '-dev', dev, '-t', '8', '-b', '2048', '-ub', '512', '-fa', 'on', '-fit', 'off', '--parallel', '1', '-lm', 'none', '--cache-ram', '0', '-lv', '4', ...extra]
 
 /** Backend's own view (llama-server --list-devices): total/free MiB per device. */
 function listDevices(exe = EXE): string[] {
