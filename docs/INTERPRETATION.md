@@ -186,6 +186,13 @@ dedicated ceiling A vs B GiB (per-process budget is backend-specific)". Backends
 ordinary candidate axis: the recommendation names the backend and the export uses its
 executable. Managed-memory oversubscription (GGML_CUDA_ENABLE_UNIFIED_MEMORY) is never
 enabled by the benchmark; a runtime that uses it is not comparable.
+Rule I-3.8 (`speed.igpu-uma`, info, origin heuristic → measured once the 2026-09-28
+experiment lands): an integrated GPU's "VRAM" is system RAM (UMA); layers placed on it
+run at CPU-memory bandwidth (DDR5 ≈ 60–80 GB/s vs ≈ 640 GB/s dedicated here) with far
+less compute, so an iGPU-assisted split is expected to match or trail CPU offload. The
+app reports the measured comparison when both were run and never offers the iGPU as
+"extra VRAM". Shared-memory spill of the discrete GPU is the same mechanism (system RAM
+over PCIe) and is why context cliffs appear.
 Rule I-3.6 (`speed.moe-note`, info): expertCount > 0 → "mixture-of-experts:
 <expertUsedCount>/<expertCount> experts per token; partial offload tends to cost less
 than for a dense model (one cross-family observation: 3.6× on 2026-09-27)". Active
