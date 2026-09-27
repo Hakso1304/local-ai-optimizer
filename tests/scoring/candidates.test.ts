@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { ModelMeta } from '../../src/shared/bench-types'
+import type { MachineLimits, ModelMeta, VramBudgetObservation } from '../../src/shared/bench-types'
 import { budgetFor, estimateMemory, generateCandidates, machineFromProfile, vramBudgetKey } from '../../src/core/benchmark/candidates'
 import type { SystemProfile } from '../../src/shared/types'
 import { WORKLOADS } from '../../src/core/scoring/workloads'
@@ -121,32 +121,48 @@ describe('planning snapshot (data contract §12)', () => {
 })
 })
 
-describe('effective per-process VRAM budget (observations per GPU/driver/backend)', () => {
+describe('effective per-process VRAM budget — advisory until qualified (w4m)', () => {
   const G = 1024 ** 3
   const f = load('calib-8b-rx9070.json')
+  const origin = { sessionId: 's', configId: 'c', status: 'pass' as const, attempts: 2, firstPeakVramBytes: null, firstResidentSharedBytes: null }
   // cal-2026-09-27, one card: 14B spill at 13.25 GiB dedicated, 8B f16 64K at 11.6 GiB (KV 8 GiB largest buffer)
-  const obs14 = { ceilingBytes: 13.25 * G, modelId: 'qwen14b', ctx: 32768, kvType: 'f16' as const, kvBytes: 3 * G, largestBufferBytes: 8.4 * G, observedAt: 1 }
-  const obs8 = { ceilingBytes: 11.6 * G, modelId: 'llama8b', ctx: 65536, kvType: 'f16' as const, kvBytes: 8 * G, largestBufferBytes: 8 * G, observedAt: 2 }
-  const small = { ...obs14, ceilingBytes: 14 * G, largestBufferBytes: 2 * G }
-  const mach = (o: typeof obs14[]) => ({ ...machine(f.vramBytes), vramBudgetObservations: o })
-  it('min of comparable observations; else the most conservative, said so; else 80 % labelled estimated', () => {
-    expect(budgetFor(mach([obs14, obs8]), 8 * G)).toMatchObject({ value: 11.6 * G, kind: 'measured', source: expect.stringMatching(/min of 2 observation\(s\) with a comparable largest buffer/) })
-    expect(budgetFor(mach([small, obs14]), 2 * G)).toMatchObject({ value: 14 * G, kind: 'measured' })
-    expect(budgetFor(mach([obs14, obs8]), 0.5 * G)).toMatchObject({ value: 11.6 * G, source: expect.stringMatching(/most conservative of 2 observation\(s\) — none with a comparable largest buffer/) })
-    expect(budgetFor(mach([]), 8 * G)).toMatchObject({ value: f.vramBytes * 0.8, kind: 'estimated' })
-    expect(machineFromProfile({ gpus: { value: [] }, ram: { value: null }, cpu: { value: null } } as unknown as SystemProfile, null).vramEffectiveBudgetBytes).toMatchObject({ value: null, kind: 'unavailable' })
+  const cap = (ceiling: number, largest: number | null, over: Partial<VramBudgetObservation> = {}): VramBudgetObservation =>
+    ({ kind: 'capacity', qualified: true, ceilingBytes: ceiling * G, modelId: 'm', ctx: 65536, kvType: 'f16', gpuLayers: 33, kvBytes: null, largestBufferBytes: largest === null ? null : largest * G, origin, observedAt: 1, ...over })
+  const mach = (o: VramBudgetObservation[]) => ({ ...machine(f.vramBytes), vramBudgetObservations: o })
+  it('measured only from qualified capacity observations with a comparable load-log buffer (min of them)', () => {
+    expect(budgetFor(mach([cap(13.25, 8.4), cap(11.6, 8)]), 8 * G)).toMatchObject({ value: 11.6 * G, kind: 'measured', source: expect.stringMatching(/min of 2 qualified observation\(s\) with a comparable largest buffer/) })
+    expect(budgetFor(mach([]), 8 * G)).toMatchObject({ value: f.vramBytes * 0.8, kind: 'estimated', source: expect.stringMatching(/^no measured budget on this machine yet; assuming 80 %/) })
   })
-  it('a measured budget prunes planning (min with the adapter budget); the estimated fallback does not', () => {
+  it('w4m-3: a non-comparable observation is advisory (estimated) and never prunes — 100 GiB buffer / 6 GiB ceiling', () => {
+    const far = [cap(6, 100)]
+    expect(budgetFor(mach(far), 8 * G)).toMatchObject({ value: 6 * G, kind: 'estimated', source: expect.stringMatching(/^advisory: 1 capacity observation\(s\) not comparable .* not applied to planning$/) })
+    const last = (m: MachineLimits, w = WORKLOADS.long_context_coding) => Math.max(...generateCandidates(m, f.models[0], { backend: 'vulkan' }, w).candidates.flatMap((c) => c.ctxSteps))
+    expect(last(mach(far))).toBe(last(machine(f.vramBytes)))
+  })
+  it('w4m-7: unqualified identity (or a buffer not from the load log) never prunes; pre-qualification rows are ignored', () => {
+    expect(budgetFor(mach([cap(6, 8, { qualified: false })]), 8 * G)).toMatchObject({ kind: 'estimated', source: expect.stringMatching(/1 with unverified adapter\/driver\/backend identity/) })
+    expect(budgetFor(mach([cap(6, null)]), 8 * G).kind).toBe('estimated')
+    const legacy = { ceilingBytes: 6 * G, modelId: 'm', ctx: 65536, kvType: 'f16', kvBytes: null, largestBufferBytes: 8 * G, observedAt: 1 } as unknown as VramBudgetObservation
+    expect(budgetFor(mach([legacy]), 8 * G).kind).toBe('estimated')
+  })
+  it('a comparable qualified ceiling prunes; an allocation observed clean there is protected', () => {
     const plain = generateCandidates(machine(f.vramBytes), f.models[0], { backend: 'vulkan' }, WORKLOADS.long_context_coding).candidates
-    const tight = generateCandidates(mach([{ ...obs8, ceilingBytes: 6 * G }]), f.models[0], { backend: 'vulkan' }, WORKLOADS.long_context_coding).candidates
-    const last = (cs: typeof plain) => Math.max(...cs.flatMap((c) => c.ctxSteps))
-    expect(last(tight)).toBeLessThan(last(plain))
-    expect(tight.flatMap((c) => c.skippedSteps).find((s) => s.skip?.resource === 'vram')!.reason).toMatch(/> budget 6\.0 GiB \(per-process budget 6\.0 GiB, measured\)$/)
-    expect(tight[0].planning!.effectiveBudget).toMatchObject({ kind: 'measured' })
+    const largest = (ctx: number) => Math.max(...Object.values((({ vramWeightsBytes, vramKvBytes, vramOverheadBytes }) => ({ vramWeightsBytes, vramKvBytes, vramOverheadBytes }))(estimateMemory(f.models[0], f.models[0].layers, ctx, 'f16'))))
+    const top = Math.max(...plain[0].ctxSteps)
+    const tightObs = cap(6, largest(top) / G)
+    const tight = generateCandidates(mach([tightObs]), f.models[0], { backend: 'vulkan' }, WORKLOADS.long_context_coding).candidates
+    expect(Math.max(...tight[0].ctxSteps)).toBeLessThan(top)
+    expect(tight[0].skippedSteps.find((x) => x.skip?.resource === 'vram')!.reason).toMatch(/\(per-process budget 6\.0 GiB, measured\)$/)
+    const clean: VramBudgetObservation = { ...tightObs, kind: 'clean', ceilingBytes: 7 * G, modelId: f.models[0].id, ctx: top, gpuLayers: f.models[0].layers }
+    expect(generateCandidates(mach([tightObs, clean]), f.models[0], { backend: 'vulkan' }, WORKLOADS.long_context_coding).candidates[0].ctxSteps).toContain(top)
   })
-  it('the key names GPU, driver and backend build', () => {
-    const p = { gpus: { value: [{ name: 'RX 9070 XT', driverVersion: '32.0.1', isIntegrated: false, dedicatedVramBytes: { value: 16 * G } }] } } as unknown as SystemProfile
-    expect(vramBudgetKey(p, 'vulkan', 'b11208')).toBe('RX 9070 XT|32.0.1|vulkan:b11208')
-    expect(vramBudgetKey(p, 'hip', 'b11208')).not.toBe(vramBudgetKey(p, 'vulkan', 'b11208'))
+  it('w4m-7: the key is the adapter PNP id + driver + backend build; ambiguous or unknown → unverified', () => {
+    const gpu = (pnp: string, drv: string | null) => ({ name: 'RX 9070 XT', pnpDeviceId: pnp, driverVersion: drv, isIntegrated: false, dedicatedVramBytes: { value: 16 * G } })
+    const p = (...g: ReturnType<typeof gpu>[]) => ({ gpus: { value: g } }) as unknown as SystemProfile
+    expect(vramBudgetKey(p(gpu('PCI\\VEN_1002&DEV_7550\\1', '32.0.1')), 'vulkan', 'b11208')).toEqual({ key: 'pnp:PCI\\VEN_1002&DEV_7550\\1|drv:32.0.1|vulkan:b11208', verified: true })
+    expect(vramBudgetKey(p(gpu('PCI\\A', '32.0.1'), gpu('PCI\\B', '32.0.1')), 'vulkan', 'b11208')!.verified).toBe(false) // same name, two adapters
+    expect(vramBudgetKey(p(gpu('PCI\\A', null)), 'vulkan', 'b11208')!.verified).toBe(false)
+    expect(vramBudgetKey(p(gpu('PCI\\A', '32.0.1')), 'vulkan', null)!.verified).toBe(false)
+    expect(vramBudgetKey(p(gpu('PCI\\A', '32.0.1')), 'hip', 'b11208')!.key).not.toBe(vramBudgetKey(p(gpu('PCI\\A', '32.0.1')), 'vulkan', 'b11208')!.key)
   })
 })

@@ -192,7 +192,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   const suite = suiteFor(req.qualityMode, suiteSeed)
   // Effective per-process budget: learned per GPU + driver + backend build (never generalised across them).
   const budgetKey = vramBudgetKey(deps.machine, deps.backendKind ?? 'vulkan', deps.runtimeVersion)
-  const machine = machineFromProfile(deps.machine, deps.gpuDevice, undefined, budgetKey ? [...((await storage.listVramBudget?.(budgetKey)) ?? [])] : [])
+  const machine = machineFromProfile(deps.machine, deps.gpuDevice, undefined, budgetKey ? [...((await storage.listVramBudget?.(budgetKey.key)) ?? [])] : [])
   const vramTotal = val(machine.vramBytes, true)
   /** Per-PID shared − host-pinned − the config's unsaturated baseline (not the saturation-gated spill metric). */
   const residentShared = (r: BenchmarkRunResult, base: number): number | null => {
@@ -206,13 +206,6 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     const all = dl ? [...dev(dl.modelBufferMiB), ...dev(dl.kvBufferMiB), ...dev(dl.computeBufferMiB)] : []
     const kv = dl ? dev(dl.kvBufferMiB) : []
     return { largestBytes: all.length ? Math.max(...all) : null, kvBytes: kv.length ? kv.reduce((a, b) => a + b, 0) : null }
-  }
-  /** I-2.8: dedicated room the process still had — per-process budget (at this allocation's largest buffer) minus
-   *  its dedicated peak, capped by adapter-wide free VRAM in the same window when that was read. */
-  const freeWithinBudget = (r: BenchmarkRunResult, d: RunDetail): number | null => {
-    const budget = val(budgetFor(machine, buffersOf(d).largestBytes), true), ded = val(r.peakVramBytes), adapterFree = val(r.adapterFreeAtSharedPeakBytes)
-    if (budget === null || ded === null) return null
-    return adapterFree === null ? budget - ded : Math.min(budget - ded, adapterFree)
   }
   // L1: the saturation share for spill is taken against what this process could get — min(VRAM total minus what
   // other processes held at planning, the per-process budget), not the adapter total.
@@ -409,15 +402,17 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         } else {
           let out = await runStep(cand, model, ctx, spillBase)
           checkStuck()
-          // I-2.8: a spill while ≥ 1 GiB dedicated was free in the same window is driver placement, not capacity —
-          // restart the server once and re-measure the rung before recording a spill verdict (both rows persisted).
-          // Per-PID shared − pinned − baseline, not the saturation-gated spill (that is 0 below 80 % — exactly this case).
-          const sh0 = residentShared(out.run, spillBase), free = freeWithinBudget(out.run, out.detail)
-          if (isUsable(out.run) && sh0 !== null && sh0 > DEFAULT_SCORING_CONFIG.cliff.sharedSpillBytes && free !== null && free >= cfg.placementFreeBytes && !signal?.aborted) {
+          // I-2.8 evidence step: shared residency (per-PID shared − pinned − baseline, not the saturation-gated metric)
+          // after a successful measured request → restart the server once and re-measure BEFORE any spill verdict or
+          // learning. No budget decides this: the retry is how placement and capacity are told apart.
+          const residentOf = (r: BenchmarkRunResult) => { const x = residentShared(r, spillBase); return x !== null && x > DEFAULT_SCORING_CONFIG.cliff.sharedSpillBytes ? x : null }
+          const sh0 = residentOf(out.run)
+          let first: BenchmarkRunResult | null = null
+          if (isUsable(out.run) && sh0 !== null && !signal?.aborted) {
             await storage.saveRun(sessionId, out.run, out.detail)
             recordAttempt(out.run, out.detail)
-            log('warn', `${cand.id} @${ctx}: ${(sh0 / GiB).toFixed(2)} GiB in shared memory with ${(free / GiB).toFixed(2)} GiB dedicated free — restarting the server and re-measuring once (I-2.8)`)
-            const first = out.run
+            log('warn', `${cand.id} @${ctx}: ${(sh0 / GiB).toFixed(2)} GiB resident in shared memory — restarting the server and re-measuring once (I-2.8)`)
+            first = out.run
             await unload((e) => log('warn', `unload before placement retry: ${(e as Error).message}`))
             checkStuck()
             out = await runStep(cand, model, ctx, spillBase)
@@ -425,18 +420,36 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
             out.run.placementRetry = true
             out.run.placementFirst = { peakVramBytes: first.peakVramBytes, peakSharedGpuBytes: first.peakSharedGpuBytes, ...(first.peakSharedGpuRawBytes ? { peakSharedGpuRawBytes: first.peakSharedGpuRawBytes } : {}), ...(first.adapterFreeAtSharedPeakBytes ? { adapterFreeAtSharedPeakBytes: first.adapterFreeAtSharedPeakBytes } : {}), decodeTps: first.decodeTps }
           }
+          // Reconcile ONCE on the post-retry evidence: residency reproduced on a fresh server is capacity-suspect spill
+          // for the persisted metric (→ cliff shared_spill, degraded), the reason, the learner and the insight alike.
+          const persistent = first !== null && isUsable(out.run) ? residentOf(out.run) : null
+          if (persistent !== null) {
+            if ((val(out.run.peakSharedGpuBytes) ?? 0) < persistent) {
+              out.run.peakSharedGpuBytes = { value: persistent, kind: 'measured', source: 'per-PID shared − host-pinned − baseline, reproduced after a fresh restart (capacity-suspect; saturation gate not applied to reproduced residency)' }
+            }
+            const why = `shared residency ${(persistent / GiB).toFixed(2)} GiB persisted after a fresh restart — capacity-suspect, not placement`
+            out.run.reason = out.run.reason ? `${out.run.reason}; ${why}` : why
+            out.detail.reason = out.detail.reason ? `${out.detail.reason}; ${why}` : why
+          }
           run = out.run
           await storage.saveRun(sessionId, run, out.detail)
           recordAttempt(run, out.detail)
-          // A spill that survived the placement retry (or had no free budget) is a capacity observation.
-          const shN = residentShared(run, spillBase), dedN = val(run.peakVramBytes)
-          if (budgetKey && shN !== null && shN > DEFAULT_SCORING_CONFIG.cliff.sharedSpillBytes && dedN !== null) {
+          // Learner (advisory until qualified): a capacity observation only from reproduced residency with a successful
+          // measured request; a clean observation from a measured clean run. Identity unverified → stored, never prunes.
+          const dedN = val(run.peakVramBytes)
+          const kind = persistent !== null ? 'capacity' as const : isUsable(run) && residentOf(run) === null ? 'clean' as const : null
+          if (budgetKey && kind && dedN !== null) {
             const b = buffersOf(out.detail)
-            const o: VramBudgetObservation = { ceilingBytes: dedN, modelId: model.id, ctx, kvType: cand.kvType, kvBytes: b.kvBytes, largestBufferBytes: b.largestBytes, observedAt: clock.now() }
+            const o: VramBudgetObservation = {
+              kind, qualified: budgetKey.verified && (kind === 'clean' || b.largestBytes !== null), ceilingBytes: dedN, modelId: model.id, ctx, kvType: cand.kvType, gpuLayers: Math.min(cand.gpuLayers, model.layers),
+              kvBytes: b.kvBytes, largestBufferBytes: b.largestBytes,
+              origin: { sessionId, configId: cand.id, status: run.status, attempts: first ? 2 : 1, firstPeakVramBytes: first ? val(first.peakVramBytes) : null, firstResidentSharedBytes: first ? residentOf(first) : null },
+              observedAt: clock.now()
+            }
             machine.vramBudgetObservations = [...(machine.vramBudgetObservations ?? []), o]
             machine.vramEffectiveBudgetBytes = budgetFor(machine, null)
-            try { await storage.saveVramBudgetObservation?.(budgetKey, o) } catch (e) { log('warn', `VRAM budget observation not saved: ${(e as Error).message}`) }
-            log('info', `${cand.id} @${ctx}: per-process VRAM ceiling observed at ${(dedN / GiB).toFixed(2)} GiB dedicated (largest buffer ${b.largestBytes === null ? '?' : (b.largestBytes / GiB).toFixed(2) + ' GiB'})`)
+            try { await storage.saveVramBudgetObservation?.(budgetKey.key, o) } catch (e) { log('warn', `VRAM budget observation not saved: ${(e as Error).message}`) }
+            if (kind === 'capacity') log('info', `${cand.id} @${ctx}: per-process VRAM ceiling observed at ${(dedN / GiB).toFixed(2)} GiB dedicated (${o.qualified ? 'qualified' : 'advisory: identity or load-log buffer unverified'})`)
           }
           if (run.failureKind === 'device_lost') gpuLost = true
           if (out.detail.reason) log(run.status === 'pass' ? 'warn' : 'error', `${cand.id} @${ctx}: ${out.detail.reason}`)

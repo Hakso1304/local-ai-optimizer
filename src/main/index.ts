@@ -138,7 +138,7 @@ ipcMain.handle('models:fit', async (_e, w: WorkloadId): Promise<ModelFit> => {
   if (!devices) return { reasons: Object.fromEntries(infos.map((m) => [m.id, 'llama.cpp runtime not installed (System page)'])), vramInUseBytes: null, vramTotalBytes: null }
   const device = pickDiscreteDevice(devices)?.id ?? null
   const bk = vramBudgetKey(profileCache, device ? 'vulkan' : 'cpu', (await llama.detect()).version)
-  const machine = machineFromProfile(await withVramInUse(profileCache), device, undefined, bk ? listVramBudget(needDb(), bk) : [])
+  const machine = machineFromProfile(await withVramInUse(profileCache), device, undefined, bk ? listVramBudget(needDb(), bk.key) : [])
   const vramInUseBytes = machine.vramInUseBytes.kind === 'measured' ? machine.vramInUseBytes.value : null
   const out: Record<string, string | null> = {}
   for (const info of infos) {
@@ -292,7 +292,7 @@ async function startSession(req: SessionRequest, storedMachine?: SystemProfile, 
     const planFor: PlanFor = (r) => {
       // Same per-process budget observations the runner reads (key: GPU + driver + backend build).
       const bk = vramBudgetKey(profile, backendKind, runtime.version)
-      const machine = machineFromProfile(profile, device, undefined, bk ? listVramBudget(needDb(), bk) : [])
+      const machine = machineFromProfile(profile, device, undefined, bk ? listVramBudget(needDb(), bk.key) : [])
       return {
         machine: profile,
         vramBytes: val(machine.vramBytes, true),

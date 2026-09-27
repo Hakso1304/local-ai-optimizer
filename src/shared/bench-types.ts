@@ -66,17 +66,24 @@ export interface MachineLimits {
   vramEffectiveBudgetBytes?: Metric
 }
 
-/** One observed per-process ceiling: the per-PID dedicated peak of a run in which shared residency began
- *  (after the I-2.8 placement retry, so driver placement is not recorded as capacity). */
+/** One per-process VRAM observation (advisory until qualified). 'capacity': shared residency reproduced on a fresh
+ *  server after the I-2.8 retry, with a successful measured request — the only kind that can prune, and only when
+ *  `qualified` and comparable. 'clean': a measured clean run at this dedicated peak — protects that allocation. */
 export interface VramBudgetObservation {
+  kind: 'capacity' | 'clean'
+  /** adapter identity (PNP id) + driver + backend build all verified; false → advisory, never prunes */
+  qualified: boolean
   ceilingBytes: number
   modelId: string
   ctx: number
   kvType: KvType
-  /** KV buffer on the GPU (declared by the runtime at load, else the planning estimate). */
+  gpuLayers: number
+  /** KV buffer on the GPU as declared by the runtime at load; null when not logged. */
   kvBytes: number | null
-  /** Largest single device buffer (model / KV / compute) — allocations of similar size behave alike. */
+  /** Largest individual device buffer from the load log (model / KV / compute); null when not logged. */
   largestBufferBytes: number | null
+  /** Where the observation came from: session, config, the attempts behind it and the first attempt's peak. */
+  origin: { sessionId: string; configId: string; status: RunStatus; attempts: number; firstPeakVramBytes: number | null; firstResidentSharedBytes: number | null }
   observedAt: number
 }
 

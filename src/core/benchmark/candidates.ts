@@ -146,9 +146,13 @@ const pickGpu = (p: SystemProfile) => (p.gpus.value ?? []).filter((g) => !g.isIn
 /** The per-process VRAM ceiling is specific to GPU, driver, backend build and allocation pattern (13.25 GiB for a
  *  14B vs 11.6 GiB for 8B f16 64K on one card; a ROCm/HIP backend used the full 16 GB on another) — observations
  *  are kept per this key, never generalised. */
-export function vramBudgetKey(p: SystemProfile, backend: string, runtimeVersion: string | null | undefined): string | null {
+export function vramBudgetKey(p: SystemProfile, backend: string, runtimeVersion: string | null | undefined): { key: string; verified: boolean } | null {
+  const discrete = (p.gpus.value ?? []).filter((g) => !g.isIntegrated)
   const g = pickGpu(p)
-  return g ? `${g.name}|${g.driverVersion ?? '?'}|${backend}:${runtimeVersion ?? '?'}` : null
+  if (!g) return null
+  // Stable identity = the adapter's PNP device id (not its display name); unambiguous only with one discrete GPU.
+  const verified = discrete.length === 1 && !!g.pnpDeviceId && !!g.driverVersion && !!runtimeVersion
+  return { key: `pnp:${g.pnpDeviceId || '?'}|drv:${g.driverVersion ?? '?'}|${backend}:${runtimeVersion ?? '?'}`, verified }
 }
 
 /** Fallback share of the adapter total while nothing was measured (cal-2026-09-27: spill began at 83 % / 73 %). */
@@ -156,22 +160,24 @@ export const VRAM_BUDGET_FALLBACK_SHARE = 0.8
 /** Observations whose largest single buffer is within this ratio of the planned one are "comparable". */
 export const VRAM_BUDGET_COMPARABLE_RATIO = 1.25
 
-/** Per-process budget for an allocation whose largest single buffer is `largestBufferBytes`: the min of comparable
- *  observations, else the most conservative observation (said so), else 80 % of the total (estimated). */
+/** Per-process budget for an allocation whose largest individual buffer is `largestBufferBytes` (planning estimate,
+ *  matched against observations' load-log buffers). MEASURED only from qualified capacity observations with a
+ *  comparable buffer (min of them); any other capacity observation is advisory → estimated, never prunes; none at
+ *  all → 80 % of the total, estimated. Observations are already scoped to one adapter + driver + backend build. */
 export function budgetFor(machine: MachineLimits, largestBufferBytes: number | null): Metric {
   const total = num(machine.vramBytes)
-  const obs = machine.vramBudgetObservations ?? []
-  if (!obs.length) {
-    return total === null ? { value: null, kind: 'unavailable', reason: 'VRAM size unknown' }
-      : { value: total * VRAM_BUDGET_FALLBACK_SHARE, kind: 'estimated', source: `no measured budget on this machine yet; assuming ${Math.round(VRAM_BUDGET_FALLBACK_SHARE * 100)} % of the adapter total (some GPUs/backends allow 100 %)` }
-  }
+  const cap = (machine.vramBudgetObservations ?? []).filter((o) => o.kind === 'capacity') // pre-qualification rows have no kind
   const near = (o: VramBudgetObservation) => largestBufferBytes !== null && largestBufferBytes > 0 && o.largestBufferBytes != null && o.largestBufferBytes > 0
     && Math.max(o.largestBufferBytes / largestBufferBytes, largestBufferBytes / o.largestBufferBytes) <= VRAM_BUDGET_COMPARABLE_RATIO
-  const comparable = obs.filter(near)
-  const pick = (comparable.length ? comparable : obs).reduce((a, b) => (b.ceilingBytes < a.ceilingBytes ? b : a))
-  return { value: pick.ceilingBytes, kind: 'measured', source: comparable.length
-    ? `per-process ceiling measured on this GPU/driver/backend: min of ${comparable.length} observation(s) with a comparable largest buffer`
-    : `per-process ceiling measured on this GPU/driver/backend: most conservative of ${obs.length} observation(s) — none with a comparable largest buffer` }
+  const min = (xs: VramBudgetObservation[]) => Math.min(...xs.map((o) => o.ceilingBytes))
+  const comparable = cap.filter((o) => o.qualified && near(o))
+  if (comparable.length) return { value: min(comparable), kind: 'measured', source: `per-process ceiling measured on this adapter/driver/backend: min of ${comparable.length} qualified observation(s) with a comparable largest buffer` }
+  if (cap.length) {
+    const unq = cap.filter((o) => !o.qualified).length
+    return { value: min(cap), kind: 'estimated', source: `advisory: ${cap.length} capacity observation(s) ${unq ? `(${unq} with unverified adapter/driver/backend identity) ` : ''}not comparable to this allocation's largest buffer — not applied to planning` }
+  }
+  return total === null ? { value: null, kind: 'unavailable', reason: 'VRAM size unknown' }
+    : { value: total * VRAM_BUDGET_FALLBACK_SHARE, kind: 'estimated', source: `no measured budget on this machine yet; assuming ${Math.round(VRAM_BUDGET_FALLBACK_SHARE * 100)} % of the adapter total (some GPUs/backends allow 100 %)` }
 }
 
 /** Largest non-integrated GPU with the most VRAM. gpuDevice comes from `llama-server --list-devices` mapping. */
@@ -227,8 +233,10 @@ export function generateCandidates(
   /** min(total − in use − reserve, per-process budget at this allocation's largest buffer). Only a MEASURED budget
    *  prunes: the 80 % fallback is reported, not applied (cal-2026-09-27: 27B ngl 55 @8K ran clean at 13.03 GiB
    *  dedicated, above 0.8 × 15.92 GiB — the fallback would have pruned a measured-clean config). */
-  const vramBudgetAt = (e: ReturnType<typeof estimateMemory>): number | null => {
-    const b = budgetFor(machine, largestOf(e)), eb = b.kind === 'measured' ? num(b) : null
+  const vramBudgetAt = (e: ReturnType<typeof estimateMemory>, ngl: number, ctx: number, kv: KvType): number | null => {
+    // An allocation that ran clean here is never pruned by a per-process ceiling (it demonstrably fits).
+    const ranClean = (machine.vramBudgetObservations ?? []).some((o) => o.kind === 'clean' && o.qualified && o.modelId === model.id && o.kvType === kv && o.gpuLayers === Math.min(ngl, model.layers) && o.ctx === ctx)
+    const b = budgetFor(machine, largestOf(e)), eb = b.kind === 'measured' && !ranClean ? num(b) : null
     return gpuBudget === null ? null : eb === null ? gpuBudget : Math.min(gpuBudget, eb)
   }
 
@@ -246,7 +254,7 @@ export function generateCandidates(
     for (const ctx of ladder) {
       const e = estimateMemory(model, ngl, ctx, kv, rules.ubatch, kvOnGpu)
       const vramNeed = e.vramBytes
-      const stepBudget = vramBudgetAt(e)
+      const stepBudget = vramBudgetAt(e, ngl, ctx, kv)
       const ramNeed = heavy ? e.ramResidentBytes : e.ramBytes
       const rb = heavy ? heavyRamBudget : ramBudget
       if (rb !== null && ramNeed > rb) {

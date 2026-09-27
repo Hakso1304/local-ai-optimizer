@@ -162,13 +162,14 @@ function contractCheck(rows: ContractRow[], base: ContractRow[], gen: GenQuality
     if (new Set(present).size > 1) errors.push(`${k} not uniform across this config and its baseline (${[...new Set(present)].join(', ')})`)
     if (!rows.every((r) => !!r[k])) missing.push(`${k} not recorded`)
   }
-  const sampled = rows.filter((r) => r.acceptedSampling && Object.keys(r.acceptedSampling).length > 0)
-  const want: [string, number | undefined][] = [['temperature', gen.temperature], ['top_p', gen.topP], ['top_k', gen.topK], ['min_p', gen.minP]]
+  // Required fields: temperature always, plus every sampler the config sets — present and finite on EVERY row, and
+  // matching. Absent (e.g. only {seed}) → not evaluable; a different value → contradiction.
+  const want: [string, number][] = [['temperature', gen.temperature ?? 0], ...([['top_p', gen.topP], ['top_k', gen.topK], ['min_p', gen.minP]] as [string, number | undefined][]).filter((x): x is [string, number] => x[1] !== undefined)]
   for (const [k, x] of want) {
-    if (x === undefined) continue
-    if (sampled.some((r) => typeof r.acceptedSampling![k] === 'number' && Math.abs((r.acceptedSampling![k] as number) - x) > 1e-6)) { errors.push(`accepted ${k} differs from the config's ${x}`); break }
+    const got = rows.map((r) => r.acceptedSampling?.[k])
+    if (got.some((g) => typeof g === 'number' && Number.isFinite(g) && Math.abs(g - x) > 1e-6)) errors.push(`accepted ${k} differs from the config's ${x}`)
+    if (got.some((g) => !(typeof g === 'number' && Number.isFinite(g)))) missing.push(`runtime-accepted ${k} not recorded on every row`)
   }
-  if (sampled.length < rows.length) missing.push('runtime-accepted sampling not recorded')
   return { errors, missing }
 }
 

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import type { BenchmarkRunResult, CandidateInput, GenQuality, MachineLimits, Metric, ModelMeta, QualityCategory, QualityResult, WorkloadId } from '../../src/shared/bench-types'
 import { interpret, verdicts, type Insight } from '../../src/core/interpret'
 import fixture from '../fixtures/scoring/session-single.json'
+import { RULES } from '../../src/core/interpret/catalog'
 
 const GiB = 1024 ** 3
 const m = (value: number): Metric => ({ value, kind: 'measured', source: 'synthetic' })
@@ -97,7 +98,7 @@ describe('F5 the application contract', () => {
     c.genQuality = [g]
     const v = V([c])
     expect(v.ranked[0].genOptions[0].comparable).toBe(false)
-    expect(v.ranked[0].genOptions[0].why).toMatch(/templateHash not recorded.*runtime-accepted sampling not recorded/)
+    expect(v.ranked[0].genOptions[0].why).toMatch(/templateHash not recorded.*runtime-accepted temperature not recorded on every row/)
     expect(v.winner?.gen ?? null).toBeNull()
   })
 })
@@ -251,31 +252,57 @@ describe('A/B/C (review-w4l): generation contract strictness', () => {
   })
 })
 
-describe('I-2.8 placement spill', () => {
+describe('I-2.8 placement spill (w4m: same-window reading required, heuristic)', () => {
   const B = (g: number) => ({ ...machine(), vramEffectiveBudgetBytes: m(g * GiB) })
-  it('shared residency with ≥ 1 GiB dedicated free in the same window → placement insight with restart-runtime', () => {
+  const shape = { peakVramBytes: m(11.6 * GiB), peakSharedGpuBytes: m(0), peakSharedGpuRawBytes: m(1.08 * GiB) }
+  it('not re-measured: warn + restart-runtime, cause stated as unconfirmed (never "not a capacity limit")', () => {
     const c = candidate('a', [2048, 4096])
-    // run-14 shape: 11.6 GiB dedicated, the gated spill is 0, per-PID shared 1.08 GiB; the 14B showed a 13.25 GiB budget
-    c.runs[1] = { ...c.runs[1], peakVramBytes: m(11.6 * GiB), peakSharedGpuBytes: m(0), peakSharedGpuRawBytes: m(1.08 * GiB), adapterFreeAtSharedPeakBytes: m(3.1 * GiB) }
-    const i = interpret(V([c], 'max_quality', { machine: B(13.25) })).find((x) => x.ruleId === 'I-2.8')!
+    c.runs[1] = { ...c.runs[1], ...shape, adapterFreeAtSharedPeakBytes: m(3.1 * GiB) }
+    const i = interpret(V([c])).find((x) => x.ruleId === 'I-2.8')!
     expect(i).toMatchObject({ severity: 'warn', action: 'restart-runtime' })
-    expect(i.text).toMatch(/1\.08 GiB of this process is resident in shared memory although 1\.65 GiB of its per-process budget \(13\.25 GiB, measured\) was still free in the same window — driver placement/)
-    // the same spill AT the budget (14B at 13.25 GiB) is a capacity limit, not placement
-    c.runs[1] = { ...c.runs[1], peakVramBytes: m(13.25 * GiB) }
-    expect(interpret(V([c], 'max_quality', { machine: B(13.25) })).some((x) => x.ruleId === 'I-2.8')).toBe(false)
+    expect(i.text).toMatch(/1\.08 GiB of this process was resident in shared memory while 3\.10 GiB dedicated VRAM was free in the same window — not re-measured: cause unconfirmed/)
+    expect(i.text).not.toMatch(/not a capacity limit/)
   })
-  it('without a same-window adapter reading, or with the card full, the rule is not evaluable / does not fire', () => {
+  it('w4m-5: without the same-window adapter reading the rule is not evaluable — a budget is no substitute', () => {
     const c = candidate('a', [2048, 4096])
-    c.runs[1] = { ...c.runs[1], peakSharedGpuRawBytes: m(1.08 * GiB) }
-    expect(interpret(V([c])).some((x) => x.ruleId === 'I-2.8')).toBe(false) // no budget → not evaluable
+    c.runs[1] = { ...c.runs[1], ...shape, peakVramBytes: m(8 * GiB) }
+    expect(interpret(V([c], 'max_quality', { machine: B(12.8) })).some((x) => x.ruleId === 'I-2.8')).toBe(false)
     c.runs[1] = { ...c.runs[1], adapterFreeAtSharedPeakBytes: m(0.2 * GiB) }
-    expect(interpret(V([c], 'max_quality', { machine: B(13.25) })).some((x) => x.ruleId === 'I-2.8')).toBe(false) // card full
+    expect(interpret(V([c])).some((x) => x.ruleId === 'I-2.8')).toBe(false) // card full
   })
-  it('a retried rung that came back clean is a note that records both observations', () => {
+  it('a retry that cleared is a placement note with both observations', () => {
     const c = candidate('a', [2048, 4096])
-    c.runs[1] = { ...c.runs[1], placementRetry: true, placementFirst: { peakVramBytes: m(11.6 * GiB), peakSharedGpuBytes: m(0), peakSharedGpuRawBytes: m(1.08 * GiB), adapterFreeAtSharedPeakBytes: m(3.1 * GiB), decodeTps: m(37) } }
-    const i = interpret(V([c], 'max_quality', { machine: B(13.25) })).find((x) => x.ruleId === 'I-2.8')!
+    c.runs[1] = { ...c.runs[1], placementRetry: true, placementFirst: { ...shape, adapterFreeAtSharedPeakBytes: m(3.1 * GiB), decodeTps: m(37) } }
+    const i = interpret(V([c])).find((x) => x.ruleId === 'I-2.8')!
     expect(i.severity).toBe('note')
-    expect(i.text).toMatch(/after a fresh restart the rung measured 0\.00 GiB shared \(decode 40\.0 vs 37\.0 t\/s before\)/)
+    expect(i.action ?? null).toBeNull()
+    expect(i.text).toMatch(/it cleared after a fresh restart \(0\.00 GiB shared, decode 40\.0 vs 37\.0 t\/s before\) — driver placement after a previous large load, not a capacity limit/)
+  })
+  it('w4m-4: a retry that still shows residency is never called placement', () => {
+    const c = candidate('a', [2048, 4096])
+    c.runs[1] = { ...c.runs[1], ...shape, placementRetry: true, placementFirst: { ...shape, adapterFreeAtSharedPeakBytes: m(3.1 * GiB), decodeTps: m(37) } }
+    expect(interpret(V([c])).some((x) => x.ruleId === 'I-2.8')).toBe(false)
+  })
+  it('catalog: I-2.8 is heuristic until the A/B confirms', () => {
+    expect(RULES.find((r) => r.id === 'I-2.8')).toMatchObject({ origin: 'heuristic', action: 'restart-runtime' })
+  })
+})
+
+describe('w4m-6: required sampling fields must be present, finite and matching', () => {
+  const rowsFor = (id: string, over: Record<string, unknown> = {}) => quality(10, () => true).map((r) => ({ ...r, genId: id, templateHash: 'tpl', runtimeVersion: 'b1', modelFingerprint: 'm1', ...over } as QualityResult))
+  const think = (c: CandidateInput) => ({ ...c, model: { ...c.model, genKnobs: { supportsThinking: true, effortValues: ['low'] } } })
+  const gq = (id: string, thinking: boolean, results: QualityResult[]): GenQuality => ({ gen: { id, thinking, ...(thinking ? { effort: 'low' } : {}), temperature: 0, source: 'default' }, results, samples: 1, stochastic: false, answerTokens: m(100), reasoningTokens: m(20), effectiveAnswerLatencyMs: m(2000), effectiveTps: m(50), reasoningMs: m(400), rawTps: m(60) })
+  it('{seed} alone is not evaluable for a thinking config (temperature never reported)', () => {
+    const c = think(candidate('a'))
+    c.quality = rowsFor('off', { appliedTemplateKwargs: { enable_thinking: false }, acceptedSampling: { temperature: 0 } })
+    c.genQuality = [gq('off', false, c.quality), gq('think-low', true, rowsFor('think-low', { appliedTemplateKwargs: { enable_thinking: true, reasoning_effort: 'low' }, acceptedSampling: { seed: 42 } }))]
+    const o = V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')!
+    expect(o).toMatchObject({ comparable: false, why: expect.stringMatching(/runtime-accepted temperature not recorded on every row/) })
+  })
+  it('a non-finite temperature counts as absent, not as agreement', () => {
+    const c = think(candidate('a'))
+    c.quality = rowsFor('off', { appliedTemplateKwargs: { enable_thinking: false }, acceptedSampling: { temperature: 0 } })
+    c.genQuality = [gq('off', false, c.quality), gq('think-low', true, rowsFor('think-low', { appliedTemplateKwargs: { enable_thinking: true, reasoning_effort: 'low' }, acceptedSampling: { temperature: Number.NaN } }))]
+    expect(V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')!.comparable).toBe(false)
   })
 })

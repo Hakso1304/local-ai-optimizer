@@ -134,27 +134,27 @@ export function interpret(v: Verdicts): Insight[] {
           [num('peakSharedGpuBytes', spill.to, 'measured', spill.toCtx, id(c), { algorithm: 'adjusted-spill' })], { configId: id(c), action: act })
       }
     }
-    // I-2.8 placement spill: shared residency while the process was below its own per-process budget (capped by
-    // adapter-wide free VRAM when read). Spill AT the budget is a capacity limit. No budget or no peak → not evaluable.
+    // I-2.8 placement spill (heuristic): shared residency while ≥ 1 GiB dedicated was free in the SAME window
+    // (adapterFreeAtSharedPeakBytes — required; no budget fallback). Cleared after a fresh restart → placement (note);
+    // not re-measured → cause unconfirmed (warn, restart-runtime); persisted after the restart → capacity-suspect,
+    // carried by the reconciled spill metric / cliff / run reason, never "not a capacity limit" here.
     // resident shared = per-PID shared − host-pinned (the saturation-gated spill is 0 exactly when dedicated was free)
     const resident = (x: { peakSharedGpuRawBytes?: Metric; peakSharedGpuBytes: Metric }, pin: number) => { const raw = x.peakSharedGpuRawBytes ? val(x.peakSharedGpuRawBytes) : null; return raw === null ? val(x.peakSharedGpuBytes) : Math.max(0, raw - pin) }
-    const budget = c.input.config.planning?.effectiveBudget ?? machine.vramEffectiveBudgetBytes
-    const bud = budget ? val(budget, true) : null
-    const room = (x: { peakVramBytes: Metric; adapterFreeAtSharedPeakBytes?: Metric }) => {
-      const ded = val(x.peakVramBytes), af = x.adapterFreeAtSharedPeakBytes ? val(x.adapterFreeAtSharedPeakBytes) : null
-      return bud === null || ded === null ? null : af === null ? bud - ded : Math.min(bud - ded, af)
-    }
+    const over = (x: number | null) => x !== null && x > v.cfg.cliff.sharedSpillBytes
     for (const r of c.input.runs) {
       const pin = val(r.hostPinnedBytes) ?? 0
-      const sh = resident(r, pin), fr = room(r)
-      const first = r.placementFirst, fsh = first ? resident(first, pin) : null, ffr = first ? room(first) : null
-      const obs = sh !== null && sh > v.cfg.cliff.sharedSpillBytes && fr !== null && fr >= P('ctx.placement-spill', 'freeBytes') ? { sh, fr, retried: false }
-        : fsh !== null && fsh > v.cfg.cliff.sharedSpillBytes && ffr !== null && ffr >= P('ctx.placement-spill', 'freeBytes') ? { sh: fsh, fr: ffr, retried: true } : null
-      if (!obs) continue
-      const retry = obs.retried ? `; after a fresh restart the rung measured ${sh === null ? 'no shared reading' : `${gib(sh)} shared`} (decode ${val(r.decodeTps, true) === null ? '?' : t1(val(r.decodeTps, true)!)} vs ${val(first!.decodeTps, true) === null ? '?' : t1(val(first!.decodeTps, true)!)} t/s before)` : r.placementRetry ? '' : ' — not yet re-measured'
-      add('ctx.placement-spill', { config: id(c), ctx: fmtCtx(r.ctx), shared: gib(obs.sh), free: gib(obs.fr), budget: gib(bud!), basis: budget!.kind, retry },
-        [ev('peakSharedGpuRawBytes', (obs.retried ? first!.peakSharedGpuRawBytes : r.peakSharedGpuRawBytes) ?? (obs.retried ? first!.peakSharedGpuBytes : r.peakSharedGpuBytes), r.ctx, id(c)), ev('peakVramBytes', obs.retried ? first!.peakVramBytes : r.peakVramBytes, r.ctx, id(c)), ev('vramEffectiveBudgetBytes', budget!)],
-        { configId: id(c), action: obs.retried && (sh === null || sh <= v.cfg.cliff.sharedSpillBytes) ? null : action('restart-runtime'), severity: obs.retried && (sh === null || sh <= v.cfg.cliff.sharedSpillBytes) ? 'note' : 'warn' })
+      const first = r.placementFirst, ev0 = first ?? r
+      const sh0 = resident(ev0, pin), fr = ev0.adapterFreeAtSharedPeakBytes ? val(ev0.adapterFreeAtSharedPeakBytes) : null
+      if (!over(sh0) || fr === null || fr < P('ctx.placement-spill', 'freeBytes')) continue
+      const shN = resident(r, pin)
+      if (first && (over(shN) || !isUsable(r))) continue // persisted / unmeasured retry: not placement
+      const dec = (m: Metric) => (val(m, true) === null ? '?' : t1(val(m, true)!))
+      const outcome = first
+        ? `; it cleared after a fresh restart (${shN === null ? 'no shared reading' : `${gib(shN)} shared`}, decode ${dec(r.decodeTps)} vs ${dec(first.decodeTps)} t/s before) — driver placement after a previous large load, not a capacity limit`
+        : ' — not re-measured: cause unconfirmed (driver placement or capacity); restart the runtime and re-measure this rung'
+      add('ctx.placement-spill', { config: id(c), ctx: fmtCtx(r.ctx), shared: gib(sh0!), free: gib(fr), outcome },
+        [ev('peakSharedGpuRawBytes', ev0.peakSharedGpuRawBytes ?? ev0.peakSharedGpuBytes, r.ctx, id(c)), ev('adapterFreeAtSharedPeakBytes', ev0.adapterFreeAtSharedPeakBytes!, r.ctx, id(c))],
+        { configId: id(c), action: first ? null : action('restart-runtime'), severity: first ? 'note' : 'warn' })
     }
     // I-2.6 recovered dip; disclose skipped rungs between
     const u = [...c.scored.runs].filter(isUsable).sort((a, b) => a.ctx - b.ctx)

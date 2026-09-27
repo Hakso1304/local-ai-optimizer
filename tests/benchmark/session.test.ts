@@ -494,12 +494,38 @@ describe('runSession', () => {
     expect(r[0].adapterFreeAtSharedPeakBytes?.value).toBeGreaterThan(3 * GiB)
     expect(r[1]).toMatchObject({ placementRetry: true, placementFirst: { peakSharedGpuRawBytes: { value: 1.08 * GiB } } })
     expect(r[1].peakSharedGpuRawBytes?.value).toBe(0.02 * GiB)
-    expect(s.budget).toEqual([]) // placement cleared by the restart → not a capacity observation
-    // at its per-process budget (12.5 of the estimated 12.74 GiB) → capacity: no retry, the ceiling is recorded
-    const atBudget = (pid: number) => { const v = [{ ...sample(pid - 1000), procVramDedicatedBytes: 12.5 * GiB, vramDedicatedBytes: 12.8 * GiB, procVramSharedBytes: pid - 1000 === 4096 ? 1.5 * GiB : 0.02 * GiB }]; return { samples: v, unavailable: {}, stop: () => v } }
-    const cap = await run(() => ({}), { ladder: [2048, 4096] }, { startSampler: atBudget })
-    expect(ctxOf(cap.backend)).toEqual([2048, 4096])
-    expect(cap.s.budget).toEqual([{ key: 'RX 9070 XT|?|vulkan:?', o: expect.objectContaining({ ceilingBytes: 12.5 * GiB, ctx: 4096, modelId: model.id, kvType: 'f16' }) }])
+    const capacity = (xs: typeof s.budget) => xs.filter((b) => b.o.kind === 'capacity')
+    expect(capacity(s.budget)).toEqual([]) // placement cleared by the restart → no ceiling learned
+    expect(s.budget.find((b) => b.o.ctx === 4096)?.o).toMatchObject({ kind: 'clean', origin: { attempts: 2, firstResidentSharedBytes: expect.any(Number) } })
+  })
+
+  it('w4m-1: an estimated budget never suppresses the retry — at 12.5 of an estimated 12.74 GiB the rung is still re-measured', async () => {
+    let n = 0
+    const sampler = (pid: number) => { const ctx = pid - 1000, placed = ctx === 4096 && ++n === 1; const v = [{ ...sample(ctx), procVramDedicatedBytes: 12.5 * GiB, vramDedicatedBytes: 12.8 * GiB, procVramSharedBytes: placed ? 1.08 * GiB : 0.02 * GiB }]; return { samples: v, unavailable: {}, stop: () => v } }
+    const { s, backend } = await run(() => ({}), { ladder: [2048, 4096] }, { startSampler: sampler })
+    expect(ctxOf(backend)).toEqual([2048, 4096, 4096])
+    expect(s.budget.filter((b) => b.o.kind === 'capacity')).toEqual([]) // cleared → nothing learned
+  })
+
+  it('w4m-2: a failed measured request (timeout) never creates a capacity observation, and is not retried', async () => {
+    const sampler = (pid: number) => { const v = [{ ...sample(pid - 1000), procVramDedicatedBytes: 8 * GiB, vramDedicatedBytes: 9 * GiB, procVramSharedBytes: pid - 1000 === 4096 ? 1.08 * GiB : 0.02 * GiB }]; return { samples: v, unavailable: {}, stop: () => v } }
+    const { s, backend } = await run((ctx) => (ctx === 4096 ? { prompt: 'timeout' } : {}), { ladder: [2048, 4096] }, { startSampler: sampler })
+    expect(ctxOf(backend)).toEqual([2048, 4096])
+    expect(s.runs.find((r) => r.ctx === 4096)!.status).toBe('timeout')
+    expect(s.budget.filter((b) => b.o.kind === 'capacity')).toEqual([])
+    expect(s.budget.some((b) => b.o.ctx === 4096)).toBe(false)
+  })
+
+  it('w4m-4: residency that persists after the restart is capacity-suspect: metric/cliff/reason/learner agree, no placement claim', async () => {
+    const sampler = (pid: number) => { const v = [{ ...sample(pid - 1000), procVramDedicatedBytes: 8 * GiB, vramDedicatedBytes: 9 * GiB, procVramSharedBytes: pid - 1000 === 4096 ? 1.08 * GiB : 0.02 * GiB }]; return { samples: v, unavailable: {}, stop: () => v } }
+    const { s, backend, rec } = await run(() => ({}), { ladder: [2048, 4096] }, { startSampler: sampler })
+    expect(ctxOf(backend)).toEqual([2048, 4096, 4096]) // exactly one retry
+    const r = s.runs.filter((x) => x.ctx === 4096).at(-1)!
+    expect(r.placementRetry).toBe(true)
+    expect(r.peakSharedGpuBytes.value).toBeGreaterThan(0.9 * GiB) // reconciled: no longer the saturation-gated 0
+    expect(r.reason).toMatch(/persisted after a fresh restart — capacity-suspect, not placement/)
+    expect(s.budget.filter((b) => b.o.kind === 'capacity').map((b) => b.o)).toEqual([expect.objectContaining({ ceilingBytes: 8 * GiB, qualified: false, origin: expect.objectContaining({ attempts: 2, status: 'pass', configId: r.configId }) })]) // fake adapter: no driver / build → advisory
+    expect(rec?.insights?.some((i) => i.ruleId === 'I-2.8') ?? false).toBe(false)
   })
 
   it("quality phase loads the chosen rung with exactly the ladder step's LoadConfig (no RAM-changing drift)", async () => {
