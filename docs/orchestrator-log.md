@@ -325,3 +325,6 @@
 
 ## Fable — 2026-09-28 05:50 local
 - Pushed b647ed9 (S3 Q5 atomic dumps) + 85df974 (S2 tests); tip 85df974. Astra w4u: CLI caps/--db/--reps/--backend hip closed; U1 HIGH (replacement listener after readiness accepted), U2 MED (owner query fails open), U3 MED (device metadata vs HIP gate) -> S3; RED negatives -> S2; Astra now gating Q5 (w4v). S1 still on CIM µs identity fix. Lane HELD.
+
+## Fable — 2026-09-28 06:01 local
+- S1 hotfix 127d96f (CIM-only µs identity; standalone quality MEASURED + thinking-state disclosure) + 340f3ee (gen-choice disclosure) pushed. Full suite on 340f3ee: 900/903; reds G08 fixture, inference F4 fake PID, G09 (owner TBD) -> S2/S1. S2 U1 911a157 / U2 a5de265 RED for S3. Astra: w4v (Q5) then RECHECK9 (w4w) on 127d96f. Lane HELD; #2 package after suite green.
