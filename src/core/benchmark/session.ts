@@ -39,6 +39,12 @@ export interface SessionSampler {
   readonly samples: TelemetrySample[]
   readonly unavailable: Partial<Record<Field, string>>
   stop(): TelemetrySample[]
+  /** null until typeperf printed its header; false = the GPU Process Memory(pid_*) columns are missing because
+   *  typeperf fixed its instance set before llama-server created them → restart() once the model is loaded. */
+  readonly hasPidColumns?: boolean | null
+  /** Respawn with the same counters; keeps samples and errors. */
+  restart?(): void
+  readonly errors?: string[]
 }
 
 export interface RunDetail {
@@ -49,6 +55,8 @@ export interface RunDetail {
   load: LoadResult | null
   startedAt: number
   endedAt: number
+  /** typeperf failures / restarts during this step (e.g. "typeperf restarted after N samples"). */
+  samplerErrors?: string[]
 }
 
 /** #2 implements this against db.ts. Resume reads back what save* wrote. */
@@ -295,6 +303,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     const startedAt = clock.now()
     send({ type: 'step:started', configId: cand.id, ctx })
     const na = (reason: string): Metric => ({ value: null, kind: 'unavailable', reason })
+    let sampler: SessionSampler | null = null
     const result = (status: RunStatus, failureKind: FailureKind | null, reason: string | null, extra: Partial<BenchmarkRunResult> = {}, detail: Partial<RunDetail> = {}) => ({
       run: {
         configId: cand.id, ctx, promptTokens: null, status, failureKind, reason,
@@ -303,7 +312,10 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         avgGpuUtil: na('no telemetry'), avgCpuUtil: na('no telemetry'), warm: false,
         versions: { benchmark: BENCHMARK_VERSION, prompts: PROMPT_VERSION, quality: defaultTestSet.suite, runtime: deps.runtimeVersion ?? null }, ...extra
       },
-      detail: { samples: [], reason, stderrTail: backend.lastExit?.tail.slice(-50) ?? [], load: null, startedAt, endedAt: clock.now(), ...detail }
+      detail: {
+        samples: [], reason, stderrTail: backend.lastExit?.tail.slice(-50) ?? [], load: null, startedAt, endedAt: clock.now(),
+        samplerErrors: [...((sampler as SessionSampler | null)?.errors ?? [])], ...detail
+      }
     })
 
     // A25 pre-check against live RAM (other apps come and go, F10). Unload the previous step's server FIRST: its
@@ -326,8 +338,14 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     // start-up then overlaps the load. Per-step (not per-candidate) because each step restarts the server and
     // typeperf's per-PID counter set is fixed at start.
     const oldPid = backend.pid
-    let sampler: SessionSampler | null = null
     let samplerAt = 0
+    // typeperf fixes its instance set at start; if it started before llama-server created its GPU allocations the
+    // pid-scoped columns are missing → restart it once, as soon as that is known (after load, or on a guard poll).
+    let restarted = false
+    const restartIfBlind = () => {
+      const sm = sampler as SessionSampler | null
+      if (!restarted && !loading && sm?.hasPidColumns === false && sm.restart) { restarted = true; sm.restart() }
+    }
     const startIfNew = () => {
       if (!sampler && backend.pid !== undefined && backend.pid !== oldPid) { sampler = deps.startSampler(backend.pid); samplerAt = Date.now() }
     }
@@ -339,6 +357,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     let guard: string | null = null
     let loading = true
     const flush = () => {
+      restartIfBlind()
       const xs = (sampler as SessionSampler | null)?.samples ?? []
       for (; emitted < xs.length; emitted++) {
         const s = xs[emitted]
@@ -378,6 +397,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     clearInterval(pidPoll)
     if (!sampler && backend.pid !== undefined) { sampler = deps.startSampler(backend.pid); samplerAt = Date.now() }
     loading = false
+    restartIfBlind()
     flush()
     if (guard) { await backend.unloadModel().catch(() => {}); return guardAbort() }
     const loadDoneAt = Date.now()

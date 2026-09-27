@@ -349,6 +349,24 @@ describe('runSession', () => {
     expect(done[0].reason).toBe('spilled 2.31 GiB into shared GPU memory at 2048; next configuration')
   })
 
+  it('restarts a sampler once when its pid columns are missing, and persists sampler errors in the run detail', async () => {
+    let restarts = 0
+    const mk = () => {
+      const xs = [sample(2048)]
+      const errors: string[] = []
+      return {
+        samples: xs, unavailable: {}, errors, stop: () => xs,
+        get hasPidColumns() { return restarts === 0 ? false : true },
+        restart() { restarts++; errors.push(`typeperf restarted after ${xs.length} samples (pid columns missing)`) }
+      }
+    }
+    const { s } = await run(() => ({}), { ladder: [2048] }, { startSampler: () => mk(), config: { guardPollMs: 5 } })
+    expect(restarts).toBe(1)
+    expect(s.details[0].samplerErrors).toEqual(['typeperf restarted after 1 samples (pid columns missing)'])
+    const ok = await run(() => ({}), { ladder: [2048] })
+    expect(ok.s.details[0].samplerErrors).toEqual([]) // fakes without the new fields keep working
+  })
+
   it('emits events in order', async () => {
     const { events } = await run((ctx) => (ctx > 4096 ? { load: 'oom' } : {}), { ladder: [2048, 4096, 8192] })
     const types = events.map((e) => (e.type === 'phase' ? `phase:${e.phase}` : e.type)).filter((t) => t !== 'telemetry' && t !== 'log')
