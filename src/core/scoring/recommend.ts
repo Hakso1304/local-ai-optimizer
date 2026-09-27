@@ -164,6 +164,7 @@ export function recommend(
     if (cliff.spillFreeUpTo !== null) reasons.push(`No VRAM spill up to ${fmtCtx(cliff.spillFreeUpTo)}`)
     for (const s of cliff.steps) for (const r of s.reasons) if (r.code !== 'beyond_limit') reasons.push(r.message)
     if (components.quality.note) reasons.push(components.quality.note)
+    else if (top.input.model.supportsThinking) reasons.push('Quality measured with thinking disabled (chat template enable_thinking=false)')
   }
 
   return { workload, scoringVersion: cfg.version, best, alternatives, ranked: scored.map((s) => s.score), excluded, reasons }

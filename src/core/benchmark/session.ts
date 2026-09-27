@@ -31,7 +31,7 @@ export interface SessionBackend {
   warmup(prompt: string): Promise<void>
   runPrompt(req: PromptRequest): Promise<PromptResult>
   /** Model chat template → raw prompt (llama-server POST /apply-template). */
-  applyTemplate(messages: { role: string; content: string }[]): Promise<string>
+  applyTemplate(messages: { role: string; content: string }[], opts?: { templateKwargs?: Record<string, unknown> }): Promise<string>
   cancel(): Promise<void>
 }
 
@@ -199,25 +199,34 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         if (degradedRun >= cfg.maxConsecutiveDegraded) { stopReason = `stopped after ${degradedRun} consecutive degraded steps`; break }
       }
 
-      const cliff = detectCliffs(runs, vramTotal)
       const anyUsable = runs.some(isUsable)
-      if (req.runQuality !== false && anyUsable && !signal?.aborted && !paused() && !quality.has(model.id)) {
-        const stored = req.resumeSessionId ? await storage.listQuality(sessionId, model.id) : []
-        if (stored.length) quality.set(model.id, stored)
-        else {
-          const usable = runs.filter(isUsable).map((r) => r.ctx)
-          const qctx = Math.min(profile.targetContext, val(cliff.practicalContextCeiling) ?? Math.max(...usable))
-          const results = await runQuality(cand, model, qctx)
-          if (results.length) {
-            quality.set(model.id, results)
-            await storage.saveQuality(sessionId, model.id, cand.id, qctx, results)
-          }
-        }
-      }
       await backend.unloadModel().catch((e) => log('error', `unload failed: ${(e as Error).message}`))
       inputs.push({ config: cand, model, runs, quality: [] })
       const status = signal?.aborted ? 'cancelled' : paused() ? 'paused' : anyUsable ? 'done' : 'failed'
       send({ type: 'candidate:done', configId: cand.id, status, reason: stopReason })
+    }
+
+    // Quality once per model, after all ladders, on its best-offload usable candidate (most GPU layers, then fastest
+    // decode) — never on a CPU baseline or -nkvo probe just because the plan sorted it first.
+    if (req.runQuality !== false) {
+      for (const modelId of [...new Set(inputs.map((i) => i.model.id))]) {
+        if (signal?.aborted || paused()) break
+        const decode = (i: CandidateInput) => Math.max(0, ...i.runs.filter(isUsable).map((r) => val(r.decodeTps, true) ?? 0))
+        const best = inputs.filter((i) => i.model.id === modelId && i.runs.some(isUsable))
+          .sort((a, b) => b.config.gpuLayers - a.config.gpuLayers || decode(b) - decode(a) || (a.config.id < b.config.id ? -1 : 1))[0]
+        if (!best) continue
+        const stored = req.resumeSessionId ? await storage.listQuality(sessionId, modelId) : []
+        if (stored.length) { quality.set(modelId, stored); continue }
+        const cliff = detectCliffs(best.runs, vramTotal)
+        const usable = best.runs.filter(isUsable).map((r) => r.ctx)
+        const qctx = Math.min(profile.targetContext, val(cliff.practicalContextCeiling) ?? Math.max(...usable))
+        const results = await runQuality(best.config, best.model, qctx)
+        await backend.unloadModel().catch((e) => log('error', `unload failed: ${(e as Error).message}`))
+        if (results.length) {
+          quality.set(modelId, results)
+          await storage.saveQuality(sessionId, modelId, best.config.id, qctx, results)
+        }
+      }
     }
 
     if (signal?.aborted) {
@@ -417,14 +426,17 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       log('error', `${cand.id}: quality load at ${ctx} failed: ${(e as Error).message}`)
       return []
     }
-    // ponytail: thinking-model token boost off until ModelMeta carries supportsThinking.
-    const prompts = buildQualityPrompts(defaultTestSet, { fillerTokens: Math.min(cfg.qualityFillerMax, Math.floor(ctx * 0.6)) })
+    // Thinking models (chat template has enable_thinking): quality runs with thinking OFF — deterministic, fast, and the
+    // suite's max_tokens fit. The ×4 token boost (buildQualityPrompts thinking:true) is kept for a future "thinking on".
+    const templateKwargs = model.supportsThinking ? { enable_thinking: false } : undefined
+    if (templateKwargs) log('info', `${model.name}: quality suite runs with thinking disabled (enable_thinking=false)`)
+    const prompts = buildQualityPrompts(defaultTestSet, { fillerTokens: Math.min(cfg.qualityFillerMax, Math.floor(ctx * 0.6)), thinking: false })
     const out: QualityResult[] = []
     for (const p of prompts) {
       if (signal?.aborted || backend.lastExit) break
       const test = defaultTestSet.tests.find((t) => t.id === p.testId)!
       try {
-        const prompt = await backend.applyTemplate(p.messages)
+        const prompt = await backend.applyTemplate(p.messages, templateKwargs ? { templateKwargs } : undefined)
         const r = await backend.runPrompt({ prompt, maxTokens: p.maxTokens, temperature: p.temperature, seed: p.seed, timeoutMs: cfg.qualityTimeoutMs })
         out.push(r.error
           ? { testId: test.id, category: test.category, weight: test.weight, pass: false, score: 0, detail: `request failed: ${r.error}` }

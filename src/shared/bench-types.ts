@@ -82,6 +82,8 @@ export interface ModelMeta {
   slidingWindowPattern?: boolean[] | null
   keyLengthSwa?: number | null
   valueLengthSwa?: number | null
+  /** Chat template supports a reasoning toggle ("enable_thinking"); quality then runs with thinking disabled. */
+  supportsThinking?: boolean
 }
 
 export type KvType = 'f16' | 'q8_0'

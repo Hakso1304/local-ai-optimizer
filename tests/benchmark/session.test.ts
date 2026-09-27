@@ -30,7 +30,7 @@ interface Step { load?: 'oom' | 'drift' | 'slow'; prompt?: 'device_lost' | 'time
 function fakeBackend(script: (ctx: number, cfg: LoadConfig) => Step) {
   let ctx = 0
   let cfg: LoadConfig | null = null
-  const calls = { loads: [] as LoadConfig[], templates: 0, cancels: 0, unloads: 0, order: [] as string[] }
+  const calls = { loads: [] as LoadConfig[], templates: 0, templateOpts: [] as unknown[], cancels: 0, unloads: 0, order: [] as string[] }
   let onCancel: (() => void) | null = null
   const b: { -readonly [K in keyof SessionBackend]: SessionBackend[K] } & { calls: typeof calls } = {
     calls,
@@ -70,7 +70,7 @@ function fakeBackend(script: (ctx: number, cfg: LoadConfig) => Step) {
       if (isMeasured && s.prompt === 'timeout') return { ...base, ttftMs: null, prefillTps: null, decodeTps: null, totalMs: 5, timedOut: true, error: 'timed out' }
       return { ...base, ttftMs: 100 + ctx / 10, prefillTps: s.prefill ?? 3000, decodeTps: s.decode ?? 90, totalMs: 2000, timedOut: false, error: null }
     },
-    async applyTemplate(m) { calls.templates++; return m.map((x) => x.content).join('\n') },
+    async applyTemplate(m, opts) { calls.templates++; calls.templateOpts.push(opts); return m.map((x) => x.content).join('\n') },
     async cancel() { calls.cancels++; onCancel?.() }
   }
   return b
@@ -266,6 +266,25 @@ describe('runSession', () => {
   it('session:started carries the planned candidate count (progress total)', async () => {
     const { events } = await run(() => ({}), { workload: 'long_context_coding' })
     expect(events.find((e) => e.type === 'session:started')).toMatchObject({ candidates: 2 })
+  })
+
+  it('quality runs on the best-offload usable candidate (most GPU layers), not on the first one the plan ran', async () => {
+    const m27 = { ...model, id: 'C:/models/q27b.gguf', fileBytes: Math.round(16.1 * GiB), layers: 64, nEmbd: 5120, heads: 40, headsKv: 8, keyLength: 128, valueLength: 128, nVocab: 152064 }
+    const h = await run(() => ({}), { workload: 'max_quality', modelIds: [m27.id], ladder: [2048], heavyMode: true, runQuality: true }, { models: [m27] })
+    const ran = [...new Set(h.s.runs.map((r) => r.configId))]
+    const most = Math.max(...h.s.runs.map((r) => Number(/ngl=(\d+)/.exec(r.configId)?.[1] ?? 0)))
+    expect(ran.length).toBeGreaterThan(1)
+    expect(h.s.quality).toHaveLength(1)
+    expect(h.s.quality[0].configId).toContain(`ngl=${most}|`)
+  })
+
+  it('thinking models: quality templates use enable_thinking=false; others get no kwargs', async () => {
+    const thinking = await run(() => ({}), { workload: 'fast_assistant', runQuality: true, ladder: [2048, 4096] }, { models: [{ ...model, supportsThinking: true }] })
+    expect(thinking.backend.calls.templateOpts.length).toBe(17)
+    expect(thinking.backend.calls.templateOpts.every((o) => JSON.stringify(o) === '{"templateKwargs":{"enable_thinking":false}}')).toBe(true)
+    expect(thinking.rec?.reasons).toContain('Quality measured with thinking disabled (chat template enable_thinking=false)')
+    const plain = await run(() => ({}), { runQuality: true, ladder: [2048] })
+    expect(plain.backend.calls.templateOpts.every((o) => o === undefined)).toBe(true)
   })
 
   it('emits events in order', async () => {
