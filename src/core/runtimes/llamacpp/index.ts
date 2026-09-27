@@ -100,13 +100,16 @@ const defaultProcessTree: ProcessTree = {
     const raw = await runPowerShell("$all = @(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,@{n='CreationDate';e={$_.CreationDate.ToUniversalTime().ToString('o')}}); $all | ConvertTo-Json -Compress", 10_000)
     const parsed = JSON.parse(raw || '[]') as { ProcessId: number; ParentProcessId: number; Name: string; CreationDate: string } | { ProcessId: number; ParentProcessId: number; Name: string; CreationDate: string }[]
     const all = Array.isArray(parsed) ? parsed : [parsed]
-    const seen = new Set([pid]), out: ProcessIdentity[] = []
+    const root = await defaultProcessTree.inspect!(pid)
+    const seen = new Map<number, ProcessIdentity | null>([[pid, root]]), out: ProcessIdentity[] = []
     for (let i = 0; i < all.length; i++) {
       let added = false
       for (const p of all) if (!seen.has(p.ProcessId) && seen.has(p.ParentProcessId)) {
+        const parent = seen.get(p.ParentProcessId)
+        if (parent && (await defaultProcessTree.inspect!(parent.pid))?.startedAt !== parent.startedAt) continue
         const identity = await defaultProcessTree.inspect!(p.ProcessId)
         if (!identity || identity.parentPid !== p.ParentProcessId || identity.startedAt !== p.CreationDate) continue
-        seen.add(p.ProcessId)
+        seen.set(p.ProcessId, identity)
         out.push(identity)
         added = true
       }
@@ -490,6 +493,16 @@ export class LlamaCppBackend implements InferenceBackend {
       (a.parentPid === undefined || b.parentPid === undefined || a.parentPid === b.parentPid)
     const children = new Map(this.ownedChildren)
     const scan = () => this.processTree.descendants(root)
+    const reconcile = (found: ProcessIdentity[], rootWasLive: boolean) => {
+      for (const child of found) {
+        const known = children.get(child.pid)
+        if (known && same(child, known)) continue
+        if (known && !same(child, known) && !rootWasLive) continue // the recorded child exited; its PID is now foreign
+        const born = Date.parse(child.startedAt)
+        if (!rootWasLive && Number.isFinite(born) && this.ownedExitAt !== null && born > this.ownedExitAt) continue
+        throw new ServerStuckError(`llama-server pid ${root} has unverified descendant ${child.pid}`)
+      }
+    }
     const stillOwned = async (record: ProcessIdentity) => {
       if (this.processTree.inspect) return same(await this.processTree.inspect(record.pid), record)
       if (!await this.processTree.isAlive(record.pid)) return false
@@ -497,7 +510,15 @@ export class LlamaCppBackend implements InferenceBackend {
       // may itself race a PID reuse. Production uses inspect + killVerified.
       return (await scan()).some((current) => same(current, record))
     }
+    const ancestryValid = async (record: ProcessIdentity, seen = new Set<number>()): Promise<boolean> => {
+      if (record.parentPid === undefined || record.parentPid === root) return true
+      if (seen.has(record.pid)) return false
+      seen.add(record.pid)
+      const parent = children.get(record.parentPid)
+      return !!parent && await stillOwned(parent) && await ancestryValid(parent, seen)
+    }
     const killChild = async (record: ProcessIdentity) => {
+      if (!await ancestryValid(record)) throw new ServerStuckError(`descendant pid ${record.pid} lost its verified parent identity`)
       if (!await stillOwned(record)) return
       if (this.processTree.killVerified) await this.processTree.killVerified(record)
       else if ((await scan()).some((current) => same(current, record))) await this.processTree.kill(record.pid, { tree: true, force: true })
@@ -508,20 +529,7 @@ export class LlamaCppBackend implements InferenceBackend {
         throw new ServerStuckError(`llama-server pid ${root} identity changed before unload`)
       }
       const initial = await scan() // enumeration failure is a fatal inability to verify cleanup
-      if (rootLive) for (const child of initial) {
-        if (!Number.isFinite(Date.parse(child.startedAt))) throw new ServerStuckError(`descendant pid ${child.pid} has no creation identity`)
-        children.set(child.pid, child)
-        this.ownedChildren.set(child.pid, child)
-      }
-      if (!rootLive) for (const child of initial) if (!children.has(child.pid)) {
-        const born = Date.parse(child.startedAt)
-        // Creation after the recorded parent exit disproves ancestry. An
-        // earlier unobserved child cannot be attributed safely, so retain the
-        // cleanup identity and stop the session instead of killing it.
-        if (!Number.isFinite(born) || this.ownedExitAt === null || born <= this.ownedExitAt) {
-          throw new ServerStuckError(`llama-server pid ${root} has unverified descendant ${child.pid}`)
-        }
-      }
+      reconcile(initial, rootLive)
       // After the parent exits, only children captured while it was alive are
       // owned. A new child of the same numeric parent PID is foreign.
       for (const child of children.values()) await killChild(child)
@@ -532,7 +540,7 @@ export class LlamaCppBackend implements InferenceBackend {
       }
       const deadline = Date.now() + 3_000
       while (true) {
-        await scan() // keep the ownership query healthy through verification
+        reconcile(await scan(), false) // every scan is evidence; unknown survivors cannot be discarded
         const remaining: ProcessIdentity[] = []
         for (const child of children.values()) if (await stillOwned(child)) remaining.push(child)
         if (!remaining.length) break

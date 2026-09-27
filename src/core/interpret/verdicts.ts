@@ -10,6 +10,7 @@ import { fmtCtx, val } from '../scoring/cliff'
 import { includesZero, pairedDifference, type UncertaintyRow } from '../scoring/uncertainty'
 import { DEFAULT_SCORING_CONFIG, effectiveProfile, withProfile, type ScoringConfig } from '../scoring/workloads'
 import { BASELINE_GEN, genLabel, proofRowId, templateKwargsFor, type GenRow } from '../benchmark/gen'
+import { validateQualityOrigin } from '../quality/origin'
 import { cite, P, rule, RULES, RULES_VERSION, tag } from './catalog'
 
 export type StoredRun = BenchmarkRunResult & { runId?: string; supersededBy?: string; startedAt?: number; endedAt?: number }
@@ -160,19 +161,11 @@ function contractCheck(rows: ContractRow[], base: ContractRow[], gen: GenQuality
         : typeof requested === 'string' ? typeof alternate === 'string' && !!alternate && alternate !== requested
           : typeof requested === 'boolean' && alternate === !requested
   for (const r of rows) {
+    const origin = validateQualityOrigin(r)
+    if (!origin.ok) errors.push(`origin provenance incoherent: ${origin.reason}`)
+    else if (origin.classification !== 'original') missing.push(`generation origin not verified: ${origin.reason}`)
     const p = r.renderProof
     if (!p || !r.promptSha256) { missing.push('row-bound render proof or prompt hash not recorded on every row'); continue }
-    const provenance = r.proofProvenance
-    if (provenance) {
-      const origin = provenance.origin
-      const reconstructed = provenance.status === 'reconstructed' || !provenance.originalPromptHashPresent || origin?.generationPromptHashPresent === false
-      const incoherent = (provenance.status === 'original' && !provenance.originalPromptHashPresent) ||
-        (provenance.status === 'reconstructed' && provenance.originalPromptHashPresent) ||
-        (origin !== undefined && (origin.generationPromptHashPresent !== provenance.originalPromptHashPresent ||
-          !Array.isArray(origin.lineage) || (provenance.mode === 'live-template-replay' && (!origin.firstReplayAt || !origin.lineage.length)))) ||
-        (provenance.mode === 'live-template-replay' && origin === undefined)
-      if (reconstructed || incoherent) missing.push('reconstructed or incoherent prompt provenance is not row-bound to the original generation request')
-    }
     if (p.status === 'contradicted' || p.rowId !== proofRowId(r) || !hash(r.promptSha256) ||
       p.promptSha256 !== r.promptSha256 || p.renderedSha256 !== r.promptSha256 ||
       !Array.isArray(p.keys) || p.keys.some((k) => typeof k !== 'string')) {

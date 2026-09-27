@@ -11,6 +11,7 @@ import type { LoadConfig, LoadResult, PromptRequest, PromptResult } from '../run
 import type { Field, TelemetrySample } from '../telemetry/sampler'
 import { peaks } from '../telemetry/sampler'
 import { buildQualityPrompts, evaluateAsync, needlePrompt, suiteFor, type QualityTest } from '../quality'
+import { validateQualityOrigin } from '../quality/origin'
 import { detectCliffs, fmtCtx, isUsable, val } from '../scoring/cliff'
 import { recommend } from '../scoring/recommend'
 import { DEFAULT_SCORING_CONFIG, effectiveProfile, withProfile } from '../scoring/workloads'
@@ -394,7 +395,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       const exactSuite = suiteRows.length === expectedKeys.size && new Set(actualKeys).size === expectedKeys.size && actualKeys.every((k) => expectedKeys.has(k))
       const scopedSuite = suiteRows.every((r) => r.suite === suite.suite && (r.suiteSeed ?? null) === suite.suiteSeed &&
         r.configId === best.config.id && rowBackend(r) === expectedBackend && normalizeRuntime(r.runtimeVersion) === normalizeRuntime(expectedRuntime))
-      const complete = suiteRows.length > 0 && exactSuite && scopedSuite
+      const complete = suiteRows.length > 0 && exactSuite && scopedSuite &&
+        suiteRows.every((r) => validateQualityOrigin(r).classification === 'original')
       const rowsOf = (g: GenConfig) => stored.filter((r) => {
         const row = r as typeof suiteRows[number]
         return (r.genId ?? BASELINE_GEN.id) === g.id && row.configId === best.config.id && rowBackend(row) === expectedBackend && normalizeRuntime(r.runtimeVersion) === normalizeRuntime(expectedRuntime)

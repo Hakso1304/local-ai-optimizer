@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync, statSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { buildQualityPrompts, suiteFor } from '../src/core/quality'
+import { validateQualityOrigin } from '../src/core/quality/origin'
 import { proofRowId, templateAlternate, templateKwargsFor, type GenRow } from '../src/core/benchmark/gen'
 import { DEFAULT_SESSION_CONFIG } from '../src/core/benchmark/session'
 import { TEMPLATE_DATE } from '../src/core/runtimes/llamacpp'
@@ -36,25 +37,10 @@ if (previousReplay && (typeof previousReplay.runId !== 'string' || !/^[0-9a-f]{6
 // The root generation record is immutable. Validate it before any template
 // request: a partial import must never be repaired into apparent proof.
 for (const q of artifact.qualityResults) {
-  const row = q.payload, prior = row.proofProvenance, origin = prior?.origin
-  if (previousReplay && (!origin || prior?.mode !== 'live-template-replay' ||
-      !Array.isArray(origin.lineage) || origin.lineage.at(-1) !== previousReplay.runId)) {
-    throw new Error(`row ${q.id}: incoherent replay lineage or origin provenance`)
+  const checked = validateQualityOrigin(q.payload, { replay: true, ...(previousReplay?.runId ? { expectedLineageTail: previousReplay.runId } : {}) })
+  if (!checked.ok || (previousReplay && q.payload.proofProvenance?.mode !== 'live-template-replay')) {
+    throw new Error(`row ${q.id}: incoherent origin provenance: ${checked.reason ?? 'replay lineage missing'}`)
   }
-  if (!origin) {
-    if (prior?.mode === 'live-template-replay') throw new Error(`row ${q.id}: replay provenance without origin`)
-    continue // legacy: missing root record can only be reconstructed
-  }
-  const validTime = (x: unknown) => typeof x === 'string' && !Number.isNaN(Date.parse(x)) && new Date(x).toISOString() === x
-  const coherent = typeof origin.generationPromptHashPresent === 'boolean' &&
-    prior?.originalPromptHashPresent === origin.generationPromptHashPresent &&
-    prior.status === (origin.generationPromptHashPresent ? 'original' : 'reconstructed') &&
-    Array.isArray(origin.lineage) && origin.lineage.every((x) => typeof x === 'string' && /^[0-9a-f]{64}$/.test(x)) &&
-    (prior.mode === 'runtime'
-      ? origin.generationPromptHashPresent && origin.firstReplayAt === null && origin.lineage.length === 0 && !previousReplay
-      : prior.mode === 'live-template-replay' && validTime(origin.firstReplayAt) && origin.lineage.length > 0 && !!previousReplay) &&
-    (!origin.generationPromptHashPresent || typeof row.promptSha256 === 'string' && /^[0-9a-f]{64}$/.test(row.promptSha256))
-  if (!coherent) throw new Error(`row ${q.id}: incoherent or partial origin provenance`)
 }
 const expectedSession = flag('--session')
 if (expectedSession && Number(expectedSession) !== artifact.sessionId) throw new Error(`session mismatch: export is ${artifact.sessionId}`)
@@ -105,6 +91,7 @@ const applyTemplate = async (messages: { role: string; content: string }[], kwar
   return body.prompt
 }
 let proved = 0, unproved = 0, contradicted = 0, reconstructed = 0
+const replayedAt = new Date().toISOString()
 for (const q of modelRows) {
   const row = q.payload
   const gen = request.genConfigs?.find((g) => g.id === row.genId)
@@ -118,19 +105,9 @@ for (const q of modelRows) {
   if (!Number.isInteger(sample) || sample! < 1) throw new Error(`row ${q.id}: sample is missing`)
   const requestedSampling = { temperature: gen.temperature, topP: gen.topP ?? null, topK: gen.topK ?? null, minP: gen.minP ?? null, seed: sample! }
   const prior = row.proofProvenance
-  if (previousReplay && (!prior?.origin || !Array.isArray(prior.origin.lineage) ||
-      prior.origin.lineage.length === 0 || previousReplay.runId !== prior.origin.lineage.at(-1))) {
-    throw new Error(`row ${q.id}: replay lineage is missing or does not match the input artifact`)
-  }
-  if (!previousReplay && prior?.mode === 'live-template-replay') throw new Error(`row ${q.id}: replay provenance without artifact lineage`)
   const origin = prior?.origin ?? {
     generationPromptHashPresent: false,
     firstReplayAt: null, lineage: [] as string[]
-  }
-  if (typeof origin.generationPromptHashPresent !== 'boolean' || !Array.isArray(origin.lineage) ||
-      (previousReplay && origin.firstReplayAt === null) ||
-      (origin.generationPromptHashPresent && prior?.status === 'reconstructed')) {
-    throw new Error(`row ${q.id}: incoherent origin provenance`)
   }
   const originalPromptHash = origin.generationPromptHashPresent ? row.promptSha256 : null
   Object.assign(row, { original: (row as typeof row & { original?: unknown }).original ?? {
@@ -160,13 +137,20 @@ for (const q of modelRows) {
   }
   const keys = Object.keys(kwargs).filter((key) => proof[key]?.status === 'proved')
   const allProved = keys.length === Object.keys(kwargs).length
-  const status: NonNullable<GenRow['renderProof']>['status'] = promptSha256 !== renderedSha256 ? 'contradicted'
+  const status = promptSha256 !== renderedSha256 ? 'contradicted'
     : !originalPromptHash ? 'reconstructed' : allProved ? 'proved' : 'unproved'
-  row.promptSha256 = promptSha256
-  row.renderProof = { rowId: proofRowId(row), promptSha256, renderedSha256,
+  const lineage = [...origin.lineage, replayId]
+  const replayProof = { rowId: proofRowId(row), promptSha256: renderedSha256, renderedSha256,
     counterfactualSha256: Object.keys(kwargs).length ? proof[Object.keys(kwargs)[0]]?.counterfactualSha256 ?? null : null,
     counterfactuals: Object.fromEntries(Object.keys(kwargs).map((key) => [key, proof[key]?.counterfactualSha256 ?? null])),
-    keys, status }
+    keys, status, lineage, at: replayedAt }
+  Object.assign(row, { replayProof })
+  if (originalPromptHash) {
+    row.promptSha256 = originalPromptHash
+  } else {
+    delete row.promptSha256
+  }
+  delete row.renderProof // a replay confirms a template, never the original generation request
   row.templateKwargProof = proof
   row.requestedSampling = requestedSampling
   if (status === 'proved' && Object.keys(kwargs).length) row.appliedTemplateKwargs = kwargs
@@ -175,7 +159,7 @@ for (const q of modelRows) {
     originalPromptHashPresent: !!originalPromptHash, status: originalPromptHash ? 'original' : 'reconstructed',
     originalGenerationPromptMatch: originalPromptHash ? promptSha256 === renderedSha256 : null,
     origin: { generationPromptHashPresent: origin.generationPromptHashPresent,
-      firstReplayAt: origin.firstReplayAt ?? new Date().toISOString(), lineage: [...origin.lineage, replayId] } } })
+      firstReplayAt: origin.firstReplayAt ?? replayedAt, lineage } } })
   if (status === 'proved') proved++
   else if (status === 'contradicted') contradicted++
   else unproved++
