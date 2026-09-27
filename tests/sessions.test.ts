@@ -9,6 +9,7 @@ import { sessionInputs, getSession, getSessionResume, latestRecommendation, list
 import { insertTelemetrySamples } from '../src/core/storage/db'
 import type { BenchmarkRunResult, CandidateConfig, ModelMeta, Recommendation } from '../src/shared/bench-types'
 import type { SystemProfile } from '../src/shared/types'
+import { suiteFor } from '../src/core/quality'
 
 const dir = mkdtempSync(join(tmpdir(), 'lao-sess-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
@@ -80,6 +81,63 @@ describe('session storage', () => {
     expect(latestRecommendation(db, 'fast_assistant')).toBeNull() // failed session: not a real recommendation (F14)
     await st.setSessionStatus(id, 'done')
     expect(latestRecommendation(db, 'fast_assistant')?.sessionId).toBe(Number(id))
+    db.close()
+  })
+
+  it.each(['b1-first', 'b2-first'] as const)('getSession and resume reject incomplete quality subsets from mixed runtime builds (%s)', async (order) => {
+    const db = openDb(join(dir, `quality-build-${order}.db`))
+    const model = { id: 'E:/m/quality.gguf', name: 'quality' } as ModelMeta
+    const config = { id: `${model.id}|ngl=all|kv=f16|t=8`, modelId: model.id, backend: 'vulkan' } as CandidateConfig
+    const st = makeSessionStorage(db, () => ({ vramBytes: null, candidates: [{ config, model }] }))
+    const id = await st.createSession({ workload: 'coding', request: { workload: 'coding', modelIds: [model.id], qualityMode: 'quick' }, startedAt: 0 })
+    const run = { configId: config.id, ctx: 2048, status: 'pass', versions: { runtime: 'vulkan:b1' } } as unknown as BenchmarkRunResult
+    await st.saveRun(id, run, { samples: [], reason: null, stderrTail: [], load: null, startedAt: 0, endedAt: 1 })
+    const tests = suiteFor('quick', 0).tests
+    const rows = tests.map((t, i) => ({ testId: t.id, category: t.category, weight: t.weight, pass: true, score: 1, detail: '',
+      genId: 'off', sample: 1, suite: 'qb-1.1.0', suiteSeed: null, backend: 'vulkan', runtimeVersion: `vulkan:${(i + (order === 'b1-first' ? 0 : 1)) % 2 ? 'b2' : 'b1'}` }))
+    await st.saveQuality(id, model.id, config.id, 2048, rows)
+    expect(await st.listQuality(id, model.id)).toEqual([])
+    expect(getSession(db, Number(id))!.candidates[0].quality).toEqual([])
+    expect(sessionInputs(db, Number(id))!.inputs[0].quality).toEqual([])
+    db.close()
+  })
+
+  it('getSession and resume retain a complete quick suite from one runtime build', async () => {
+    const db = openDb(join(dir, 'quality-build-complete.db'))
+    const model = { id: 'E:/m/quality-complete.gguf', name: 'quality' } as ModelMeta
+    const config = { id: `${model.id}|ngl=all|kv=f16|t=8`, modelId: model.id, backend: 'vulkan' } as CandidateConfig
+    const st = makeSessionStorage(db, () => ({ vramBytes: null, candidates: [{ config, model }] }))
+    const id = await st.createSession({ workload: 'coding', request: { workload: 'coding', modelIds: [model.id], qualityMode: 'quick' }, startedAt: 0 })
+    await st.saveRun(id, { configId: config.id, ctx: 2048, status: 'pass', versions: { runtime: 'vulkan:b1' } } as unknown as BenchmarkRunResult,
+      { samples: [], reason: null, stderrTail: [], load: null, startedAt: 0, endedAt: 1 })
+    const rows = suiteFor('quick', 0).tests.map((t) => ({ testId: t.id, category: t.category, weight: t.weight, pass: true, score: 1, detail: '',
+      genId: 'off', sample: 1, suite: 'qb-1.1.0', suiteSeed: null, backend: 'vulkan', runtimeVersion: 'vulkan:b1' }))
+    await st.saveQuality(id, model.id, config.id, 2048, rows)
+    expect(await st.listQuality(id, model.id)).toHaveLength(rows.length)
+    expect(getSession(db, Number(id))!.candidates[0].quality).toHaveLength(rows.length)
+    expect(sessionInputs(db, Number(id))!.inputs[0].quality).toHaveLength(rows.length)
+    db.close()
+  })
+
+  it('stored T1 rows with duplicate item/sample do not stand in for samples 2 and 3', async () => {
+    const db = openDb(join(dir, 'quality-duplicate-sample.db'))
+    const model = { id: 'E:/m/t1.gguf', name: 't1', supportsThinking: true, genKnobs: { supportsThinking: true } } as ModelMeta
+    const config = { id: `${model.id}|ngl=all|kv=f16|t=8`, modelId: model.id, backend: 'vulkan' } as CandidateConfig
+    const st = makeSessionStorage(db, () => ({ vramBytes: null, candidates: [{ config, model }] }))
+    const id = await st.createSession({ workload: 'coding', request: { workload: 'coding', modelIds: [model.id], qualitySeed: 7 }, startedAt: 0 })
+    await st.saveRun(id, { configId: config.id, ctx: 2048, status: 'pass', versions: { runtime: 'vulkan:b1' } } as unknown as BenchmarkRunResult,
+      { samples: [], reason: null, stderrTail: [], load: null, startedAt: 0, endedAt: 1 })
+    const suite = suiteFor(undefined, 7)
+    const rows = suite.tests.flatMap((t) => [
+      { testId: t.id, category: t.category, weight: t.weight, pass: true, score: 1, detail: '', genId: 'off', sample: 1,
+        suite: suite.suite, suiteSeed: suite.suiteSeed, backend: 'vulkan', runtimeVersion: 'vulkan:b1' },
+      ...[1, 2, 3].map((sample) => ({ testId: t.id, category: t.category, weight: t.weight, pass: true, score: 1, detail: '',
+        genId: 'think-t1', sample: t.id === suite.tests[0].id ? 1 : sample, suite: suite.suite, suiteSeed: suite.suiteSeed,
+        backend: 'vulkan', runtimeVersion: 'vulkan:b1' }))
+    ])
+    await st.saveQuality(id, model.id, config.id, 2048, rows)
+    expect(await st.listQuality(id, model.id)).toEqual([])
+    expect(getSession(db, Number(id))!.candidates[0].quality).toEqual([])
     db.close()
   })
 

@@ -750,6 +750,39 @@ describe('runSession', () => {
     expect(legacy.backend.calls.templates).toBe(N) // no suite version → re-run
   })
 
+  it.each(['b1-first', 'b2-first'] as const)('quality resume quarantines a complete quick suite split across runtime builds (%s)', async (order) => {
+    const req = { ladder: [2048], runQuality: true, qualityMode: 'quick' as const }
+    const first = await run(() => ({}), req, { runtimeVersion: 'b1' })
+    const stored = first.s.quality[0]
+    const mixed = stored.results.map((r, i) => ({ ...r, runtimeVersion: `vulkan:${(i + (order === 'b1-first' ? 0 : 1)) % 2 ? 'b2' : 'b1'}` }))
+    const resumed = await run(() => ({}), { ...req, resumeSessionId: 's1' }, { runtimeVersion: 'b1' }, first.s.runs, [{ ...stored, results: mixed }])
+    expect(resumed.backend.calls.templates).toBe(stored.results.length)
+    expect(resumed.s.quality.at(-1)?.results.every((r) => (r as typeof mixed[number]).runtimeVersion === 'vulkan:b1')).toBe(true)
+  })
+
+  it('quality resume checks every generation config against the current runtime build', async () => {
+    const m = { ...model, supportsThinking: true, genKnobs: { supportsThinking: true } }
+    const req = { ladder: [2048], runQuality: true, qualityMode: 'quick' as const }
+    const first = await run(() => ({}), req, { models: [m], runtimeVersion: 'b1' })
+    const stored = first.s.quality[0]
+    const mixed = stored.results.map((r) => ({ ...r, runtimeVersion: (r as { genId?: string }).genId === 'off' ? 'vulkan:b1' : 'vulkan:b2' }))
+    const resumed = await run(() => ({}), { ...req, resumeSessionId: 's1' }, { models: [m], runtimeVersion: 'b1' }, first.s.runs, [{ ...stored, results: mixed }])
+    expect(resumed.backend.calls.templates).toBe(stored.results.length)
+  })
+
+  it('quality resume requires distinct T1 sample numbers 1, 2, 3 for each item', async () => {
+    const m = { ...model, supportsThinking: true, genKnobs: { supportsThinking: true } }
+    const req = { ladder: [2048], runQuality: true }
+    const first = await run(() => ({}), req, { models: [m], runtimeVersion: 'b1' })
+    const stored = first.s.quality[0]
+    const t1 = stored.results.filter((r) => (r as { genId?: string }).genId === 'think-t1') as (QualityResult & { sample: number })[]
+    expect(t1.filter((r) => r.testId === t1[0].testId).map((r) => r.sample).sort()).toEqual([1, 2, 3])
+    const mixed = stored.results.map((r) => (r === t1.find((x) => x.testId === t1[0].testId && x.sample === 2) || r === t1.find((x) => x.testId === t1[0].testId && x.sample === 3))
+      ? { ...r, sample: 1 } : r)
+    const resumed = await run(() => ({}), { ...req, resumeSessionId: 's1' }, { models: [m], runtimeVersion: 'b1' }, first.s.runs, [{ ...stored, results: mixed }])
+    expect(resumed.backend.calls.templates).toBe(stored.results.length)
+  })
+
   it('F12: without llama timings, TPS are estimated from the streamed-token count and the prompt size', async () => {
     const { s } = await run(() => ({ noTimings: true }), { ladder: [2048] })
     expect(s.runs[0].decodeTps).toMatchObject({ value: 50, kind: 'estimated' }) // 100 tokens / (3000 − 1000) ms
