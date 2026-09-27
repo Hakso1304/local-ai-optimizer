@@ -58,4 +58,23 @@ describe('request validation (renderer → main trust boundary)', () => {
     expect(sanitizeRequest({ ...base, minDecodeTps: 5000 }, roots)).toMatchObject({ ok: false })
     expect(sanitizeRequest({ ...base, minDecodeTps: -1 }, roots)).toMatchObject({ ok: false })
   })
+
+  it('an existing model reached through a junction that points outside the root is rejected (W4 F11)', async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const base = mkdtempSync(join(tmpdir(), 'lao-root-'))
+    try {
+      const root = join(base, 'models'), outside = join(base, 'secret')
+      mkdirSync(root); mkdirSync(outside)
+      writeFileSync(join(outside, 'x.gguf'), 'x')
+      writeFileSync(join(root, 'ok.gguf'), 'x')
+      symlinkSync(outside, join(root, 'link'), 'junction') // no admin needed on Windows
+      expect(sanitizeRequest({ workload: 'coding', modelIds: [join(root, 'link', 'x.gguf')] }, [root])).toMatchObject({ ok: false })
+      expect(sanitizeRequest({ workload: 'coding', modelIds: [join(root, 'ok.gguf')] }, [root])).toMatchObject({ ok: true })
+      expect(sanitizeRequest({ workload: 'toString', modelIds: [join(root, 'ok.gguf')] }, [root])).toMatchObject({ ok: false }) // F8
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
 })

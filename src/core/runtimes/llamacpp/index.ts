@@ -39,6 +39,11 @@ export function pickVulkanAsset(releases: GhRelease[]): { tag: string; name: str
 /** Fixed date for chat templates (determinism across days). */
 export const TEMPLATE_DATE = '01 Jan 2025'
 
+/** The server could not be killed (kill + taskkill /F): stop the session, don't start another server. */
+export class ServerStuckError extends Error {
+  readonly fatal = true
+}
+
 export class ConfigDriftError extends Error {
   readonly failureKind = 'config_drift' as const
 }
@@ -99,6 +104,7 @@ export class LlamaCppBackend implements InferenceBackend {
   private proc: ChildProcess | null = null
   private port = 0
   private abort: AbortController | null = null
+  private unloading: ChildProcess | null = null
   private exeOverride?: string
   private pidFile?: string
   private spawnFn: SpawnFn
@@ -234,7 +240,7 @@ export class LlamaCppBackend implements InferenceBackend {
     let exited: string | null = null
     // 'close' (not 'exit') so the last stderr lines are in the tail before we classify.
     p.on('close', (code) => {
-      if (this.proc !== p) return // killed by unloadModel
+      if (this.proc !== p || this.unloading === p) return // being unloaded: unloadModel finishes the cleanup
       this.proc = null
       this.clearPid()
       this.lastExit = { code, reason: classifyExit(this.log), tail: [...this.log] }
@@ -279,15 +285,26 @@ export class LlamaCppBackend implements InferenceBackend {
   }
 
   /** Kill the server; escalate to taskkill /T /F after 5s. Throws if it is still alive afterwards. */
+  /** Kill the server; escalate to taskkill /T /F after 5s. The handle and pid file are only dropped once the exit
+   *  is confirmed; if the process survives, ServerStuckError is thrown and both are kept (W4 F4), so a later unload
+   *  or the next app start (killStaleServer) can still reach it. The runner must treat it as a session stop. */
   async unloadModel(): Promise<void> {
     const p = this.proc
-    this.proc = null
-    if (!p || p.pid === undefined || !alive(p)) return this.clearPid()
-    p.kill()
-    if (!(await waitExit(p, 5_000))) {
-      await runProcess('taskkill', ['/PID', String(p.pid), '/T', '/F'], 10_000).catch(() => {})
-      if (!(await waitExit(p, 3_000))) throw new Error(`llama-server pid ${p.pid} still alive after taskkill /F`)
+    if (!p || p.pid === undefined || !alive(p)) {
+      if (this.proc === p) this.proc = null
+      return this.clearPid()
     }
+    this.unloading = p
+    try {
+      p.kill()
+      if (!(await waitExit(p, 5_000))) {
+        await runProcess('taskkill', ['/PID', String(p.pid), '/T', '/F'], 10_000).catch(() => {})
+        if (!(await waitExit(p, 3_000))) throw new ServerStuckError(`llama-server pid ${p.pid} still alive after taskkill /F`)
+      }
+    } finally {
+      this.unloading = null
+    }
+    if (this.proc === p) this.proc = null
     this.clearPid()
   }
 
@@ -328,6 +345,7 @@ export class LlamaCppBackend implements InferenceBackend {
     this.abort = ctl
     const t0 = performance.now()
     let ttftMs: number | null = null
+    let streamed = 0
     let text = ''
     let final: CompletionChunk | null = null
     let error: string | null = null
@@ -352,6 +370,7 @@ export class LlamaCppBackend implements InferenceBackend {
         for (const ev of events as CompletionChunk[]) {
           if (ev.error) throw new Error(typeof ev.error === 'string' ? ev.error : (ev.error.message ?? JSON.stringify(ev.error)))
           if (ev.content) {
+            streamed++
             ttftMs ??= performance.now() - t0
             text += ev.content
             onToken?.(ev.content)
@@ -367,7 +386,11 @@ export class LlamaCppBackend implements InferenceBackend {
       clearTimeout(timer)
       if (this.abort === ctl) this.abort = null
     }
-    return toPromptResult(final, { ttftMs, totalMs: performance.now() - t0, text, timedOut, error })
+    const totalMs = performance.now() - t0
+    const f = final as CompletionChunk | null
+    const needPrompt = !error && f !== null && f.timings?.prompt_n == null && f.tokens_evaluated == null
+    const promptTokens = needPrompt ? await this.tokenize(req.prompt).catch(() => null) : null
+    return toPromptResult(final, { ttftMs, totalMs, text, timedOut, error, streamedTokens: streamed, promptTokens })
   }
 
   /** One short discarded request so the measured run doesn't pay first-dispatch costs. Pass the measured

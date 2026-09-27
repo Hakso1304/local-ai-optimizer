@@ -9,7 +9,7 @@ import { LlamaCppBackend, killStaleServer } from '../core/runtimes/llamacpp'
 import { pickDiscreteDevice } from '../core/runtimes/llamacpp/parse'
 import { openDb } from '../core/storage/db'
 import { sessionInputs, getSession, getSessionResume, latestRecommendation, listSessions, makeSessionStorage, markInterrupted, seedDemoSession, telemetryForRun, type PlanFor } from '../core/storage/sessions'
-import { REQUIRED_CTX, isInside, sanitizeRequest } from './validate'
+import { REQUIRED_CTX, insideSomeRoot, isWorkloadId, sanitizeRequest } from './validate'
 import { registerHubIpc } from './hub'
 import { WORKLOADS } from '../core/scoring/workloads'
 import { val } from '../core/scoring/cliff'
@@ -89,7 +89,7 @@ ipcMain.handle('models:list', () => listAllModels())
 /** Per model: null if normal mode yields candidates for this workload, else the planner's reason (e.g. "full GPU
  *  offload does not fit — enable heavy-model mode"). Same generateCandidates call as a real session. */
 ipcMain.handle('models:fit', async (_e, w: WorkloadId): Promise<Record<string, string | null>> => {
-  if (!(w in WORKLOADS)) throw new Error(`unknown workload ${String(w)}`)
+  if (!isWorkloadId(w)) throw new Error(`unknown workload ${String(w)}`)
   profileCache ??= await scanSystem()
   const infos = await listAllModels()
   const devices = await llama.listDevices().catch(() => null)
@@ -120,7 +120,7 @@ ipcMain.handle('runtime:install', async () => {
 registerHubIpc(ipcMain, () => BrowserWindow.getAllWindows()[0] ?? null, { userDataDir: app.getPath('userData'), modelDirs })
 ipcMain.handle('settings:get', () => readSettings())
 ipcMain.handle('settings:setWorkload', (_e, w: WorkloadId) => {
-  if (!(w in WORKLOADS)) throw new Error(`unknown workload ${String(w)}`)
+  if (!isWorkloadId(w)) throw new Error(`unknown workload ${String(w)}`)
   return writeSettings({ workload: w })
 })
 ipcMain.handle('settings:setRequiredContext', (_e, ctx: unknown) => {
@@ -143,7 +143,7 @@ ipcMain.handle('file:save', async (e, name: string, content: string) => {
 ipcMain.handle('telemetry:run', (_e, runId: number) => telemetryForRun(needDb(), Number(runId)))
 /** Same measurements, other workload: never written back as the session's own recommendation. */
 ipcMain.handle('recommendation:compute', async (_e, id: number, w: WorkloadId): Promise<ComputedRecommendation | null> => {
-  if (!(w in WORKLOADS)) throw new Error(`unknown workload ${String(w)}`)
+  if (!isWorkloadId(w)) throw new Error(`unknown workload ${String(w)}`)
   const s = sessionInputs(needDb(), Number(id))
   if (!s) return null
   const device = s.inputs.find((i) => i.config.device)?.config.device ?? null
@@ -176,7 +176,7 @@ ipcMain.handle('bench:pause', () => {
   return { ok: true }
 })
 ipcMain.handle('bench:smoke', async (_e, modelPath: string): Promise<SmokeResult> => {
-  if (typeof modelPath !== 'string' || !modelRoots().some((d) => isInside(d, modelPath))) throw new Error('model path not in a configured model dir')
+  if (typeof modelPath !== 'string' || !insideSomeRoot(modelPath, modelRoots())) throw new Error('model path not in a configured model dir')
   if (smokeBusy || active) throw new Error('a smoke run or benchmark is already in progress')
   smokeBusy = true
   try {

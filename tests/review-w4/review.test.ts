@@ -31,7 +31,7 @@ const machine = (inUse: number | null): MachineLimits => ({
 })
 
 describe('W4 adversarial review', () => {
-  it.fails('rejects inherited names as workload IDs at the renderer boundary', () => {
+  it('rejects inherited names as workload IDs at the renderer boundary', () => {
     const got = sanitizeRequest({ workload: '__proto__', modelIds: ['C:\\models\\m.gguf'] }, ['C:\\models'])
     expect(got.ok).toBe(false)
   })
@@ -49,7 +49,7 @@ describe('W4 adversarial review', () => {
     expect(withKv.vramBytes - withoutKv.vramBytes).toBeCloseTo(withKv.kvBytes * 16 / 18, 0)
   })
 
-  it.fails('recognizes Vulkan VK_ERROR_DEVICE_LOST as device loss', () => {
+  it('recognizes Vulkan VK_ERROR_DEVICE_LOST as device loss', () => {
     expect(classifyExit(['ggml_vulkan: VK_ERROR_DEVICE_LOST'])).toBe('device_lost')
   })
 
@@ -57,7 +57,7 @@ describe('W4 adversarial review', () => {
     expect(needle('The project name is not HELIOTROPE-5.', 'HELIOTROPE-5').pass).toBe(false)
   })
 
-  it.fails('stores a quality suite atomically if an insert fails midway', () => {
+  it('stores a quality suite atomically if an insert fails midway', () => {
     const db = openDb(':memory:')
     try {
       const id = saveSession(db, { workload: 'general_chat', candidates: [] } as any, 'running')

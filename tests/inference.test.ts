@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { ConfigDriftError, LlamaCppBackend } from '../src/core/runtimes/llamacpp'
+import { ConfigDriftError, LlamaCppBackend, ServerStuckError } from '../src/core/runtimes/llamacpp'
 import { classifyExit, emptyDeclared, parseDevices, parseLogLine, parseSse, pickDiscreteDevice, toPromptResult, type CompletionChunk } from '../src/core/runtimes/llamacpp/parse'
 
 // Shape of a real llama-server /completion stream (b11208), split at awkward byte boundaries.
@@ -61,6 +61,9 @@ describe('startup log + exit classification', () => {
     expect(classifyExit(['llama_model_load: failed to allocate buffer'])).toBe('oom')
     expect(classifyExit(['ggml_vulkan: vk::Queue::submit: ErrorDeviceLost'])).toBe('device_lost')
     expect(classifyExit(['GGML_ASSERT(n_tokens > 0) failed'])).toBe('crash')
+    // Vulkan C codes (W4 F9)
+    expect(classifyExit(['ggml_vulkan: VK_ERROR_DEVICE_LOST'])).toBe('device_lost')
+    expect(classifyExit(['vkAllocateMemory: VK_ERROR_OUT_OF_DEVICE_MEMORY'])).toBe('oom')
   })
 
   it('parses --list-devices and picks the discrete GPU over the iGPU', () => {
@@ -144,6 +147,36 @@ describe('LlamaCppBackend process handling (fake server, no GPU)', { timeout: 20
     const r = await b.runPrompt({ prompt: 'x', maxTokens: 1 })
     expect(r.error).toMatch(/HTTP 400: exceed_context_size_error: request \(40000 tokens\) exceeds/)
     expect(b.lastExit).toBeNull() // server still alive: runner classifies this as request_error, never crash
+  })
+
+  it('without timings, token counts fall back to streamed chunks and /tokenize (W4 F12)', async () => {
+    b = backend('notimings')
+    await b.loadModel(cfg)
+    const r = await b.runPrompt({ prompt: 'one two three four', maxTokens: 3 })
+    expect(r).toMatchObject({ decodeTokens: 3, promptTokens: 4, decodeTps: null, prefillTps: null, error: null })
+  })
+
+  it('unloadModel keeps the handle and pid file when the server survives kill + taskkill (W4 F4)', async () => {
+    const { createServer } = await import('node:http')
+    const { EventEmitter } = await import('node:events')
+    const srv = createServer((q, s) => s.end(q.url === '/health' ? '{"status":"ok"}' : JSON.stringify({ model_path: cfg.modelPath, default_generation_settings: { n_ctx: 2048 } })))
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()))
+    const port = (srv.address() as { port: number }).port
+    // A child that ignores kill(): pid that taskkill can't find, never exits.
+    const stuck = Object.assign(new EventEmitter(), { pid: 999_999_1, exitCode: null, signalCode: null, stdout: null, stderr: null, kill: () => true })
+    const sb = new LlamaCppBackend('unused', { pidFile, spawnFn: () => stuck as never })
+    try {
+      await sb.loadModel({ ...cfg, port })
+      await expect(sb.unloadModel()).rejects.toBeInstanceOf(ServerStuckError)
+      expect(sb.pid).toBe(999_999_1) // handle kept
+      expect(existsSync(pidFile)).toBe(true) // and the pid file, for killStaleServer
+    } finally {
+      stuck.exitCode = 0 as never
+      stuck.emit('exit', 0)
+      stuck.emit('close', 0)
+      await sb.unloadModel()
+      srv.close()
+    }
   })
 
   it('rejects a second concurrent prompt instead of clobbering the cancel slot', async () => {

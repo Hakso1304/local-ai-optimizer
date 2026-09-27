@@ -32,6 +32,8 @@ export interface CompletionChunk {
   stop?: boolean
   stop_type?: string
   timings?: LlamaTimings
+  tokens_predicted?: number
+  tokens_evaluated?: number
   error?: { message?: string } | string
 }
 
@@ -40,15 +42,23 @@ const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFi
 /** Map the final stream chunk (the one with `timings`) plus our wall-clock measurements. */
 export function toPromptResult(
   final: CompletionChunk | null,
-  m: { ttftMs: number | null; totalMs: number; text: string; timedOut: boolean; error: string | null }
+  m: {
+    ttftMs: number | null; totalMs: number; text: string; timedOut: boolean; error: string | null
+    /** Content chunks received (llama-server streams one token per chunk); fallback when timings are missing. */
+    streamedTokens?: number
+    /** Prompt token count from /tokenize; fallback when the server reports none. */
+    promptTokens?: number | null
+  }
 ): PromptResult {
   const t = final?.timings ?? {}
+  // Counts fall back so the runner can still derive ESTIMATED TPS from wall clock (W4 F12). Rates never fall back.
+  const streamed = m.streamedTokens ? m.streamedTokens : null
   return {
     ttftMs: m.ttftMs,
-    promptTokens: num(t.prompt_n),
+    promptTokens: num(t.prompt_n) ?? num(final?.tokens_evaluated) ?? m.promptTokens ?? null,
     prefillMs: num(t.prompt_ms),
     prefillTps: num(t.prompt_per_second),
-    decodeTokens: num(t.predicted_n),
+    decodeTokens: num(t.predicted_n) ?? num(final?.tokens_predicted) ?? streamed,
     decodeMs: num(t.predicted_ms),
     decodeTps: num(t.predicted_per_second),
     totalMs: m.totalMs,
@@ -109,7 +119,9 @@ export type ExitReason = 'oom' | 'device_lost' | 'crash'
 export function classifyExit(tail: string[]): ExitReason {
   const text = tail.join('\n')
   // OOM first: an allocation failure is usually the root cause of a later device loss.
-  if (/failed to allocate|out of memory|ErrorOutOfDeviceMemory/i.test(text)) return 'oom'
-  if (/DeviceLost|ErrorDeviceLost/i.test(text)) return 'device_lost'
+  // Vulkan reports both the C++ enum names (vk::Result::eErrorDeviceLost → "ErrorDeviceLost") and the C codes
+  // (VK_ERROR_DEVICE_LOST); match both spellings (W4 F9).
+  if (/failed to allocate|out of memory|ErrorOutOf(Device|Host)Memory|VK_ERROR_OUT_OF_(DEVICE|HOST)_MEMORY/i.test(text)) return 'oom'
+  if (/DeviceLost|VK_ERROR_DEVICE_LOST/i.test(text)) return 'device_lost'
   return 'crash'
 }

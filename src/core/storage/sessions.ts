@@ -9,6 +9,7 @@ import type { SessionRequest } from '../../shared/bench-events'
 import type { RunDetail, SessionStorage } from '../benchmark/session'
 import type { TelemetrySample } from '../telemetry/sampler'
 import { insertTelemetrySamples } from './db'
+import { defaultTestSet } from '../quality'
 import { detectCliffs } from '../scoring/cliff'
 import { recommend } from '../scoring/recommend'
 
@@ -46,9 +47,17 @@ export function saveRun(db: DatabaseSync, sessionId: number, modelId: string, ru
     .run(sessionId, run.status, modelId, run.ctx, JSON.stringify(run)).lastInsertRowid)
 }
 
+/** One suite = one transaction: a failure midway leaves no partial suite behind (W4 F5). */
 export function saveQualityResults(db: DatabaseSync, sessionId: number, modelId: string, results: QualityResult[]): void {
   const stmt = db.prepare('INSERT INTO quality_result (session_id, model_id, payload) VALUES (?, ?, ?)')
-  for (const r of results) stmt.run(sessionId, modelId, JSON.stringify(r))
+  db.exec('BEGIN')
+  try {
+    for (const r of results) stmt.run(sessionId, modelId, JSON.stringify(r))
+    db.exec('COMMIT')
+  } catch (e) {
+    db.exec('ROLLBACK')
+    throw e
+  }
 }
 
 export function saveRecommendation(db: DatabaseSync, sessionId: number, rec: Recommendation, modelId: string | null): number {
@@ -125,7 +134,7 @@ export function sessionInputs(db: DatabaseSync, id: number): { inputs: Candidate
 export function latestRecommendation(db: DatabaseSync, workload: WorkloadId): { sessionId: number; recommendation: Recommendation } | null {
   const row = db.prepare(`
     SELECT r.session_id, r.payload FROM recommendation r JOIN benchmark_session s ON s.id = r.session_id
-    WHERE s.status <> 'demo' AND json_extract(s.payload, '$.demo') IS NOT 1 AND json_extract(r.payload, '$.workload') = ?
+    WHERE s.status = 'done' AND json_extract(s.payload, '$.demo') IS NOT 1 AND json_extract(r.payload, '$.workload') = ?
     ORDER BY r.id DESC LIMIT 1`).get(workload) as { session_id: number; payload: string } | undefined
   return row ? { sessionId: row.session_id, recommendation: json<Recommendation>(row.payload) } : null
 }
@@ -164,10 +173,15 @@ export function makeSessionStorage(db: DatabaseSync, planFor: PlanFor): SessionS
         .run(sid(id), run.status, modelOf(id, run.configId), run.ctx, JSON.stringify({ ...run, detail })).lastInsertRowid)
       if (samples.length) insertTelemetrySamples(db, sid(id), runId, samples)
     },
-    listQuality: (id, modelId) =>
-      (db.prepare('SELECT payload FROM quality_result WHERE session_id = ? AND model_id = ? ORDER BY id').all(sid(id), modelId) as { payload: string }[])
-        .map((r) => json<QualityResult>(r.payload)),
-    saveQuality: (id, modelId, configId, ctx, results) => saveQualityResults(db, sid(id), modelId, results.map((r) => ({ ...r, configId, ctx }))),
+    // Resume re-uses a stored suite only if it is this build's suite version and complete; otherwise it re-runs.
+    listQuality: (id, modelId) => {
+      const rows = (db.prepare('SELECT payload FROM quality_result WHERE session_id = ? AND model_id = ? ORDER BY id').all(sid(id), modelId) as { payload: string }[])
+        .map((r) => json<QualityResult & { suite?: string; expected?: number }>(r.payload))
+      const ok = rows.length > 0 && rows.every((r) => r.suite === defaultTestSet.suite && r.expected === rows.length)
+      return ok ? rows : []
+    },
+    saveQuality: (id, modelId, configId, ctx, results) =>
+      saveQualityResults(db, sid(id), modelId, results.map((r) => ({ ...r, configId, ctx, suite: defaultTestSet.suite, expected: results.length }))),
     saveRecommendation: (id, rec) => { saveRecommendation(db, sid(id), rec, rec.best ? modelOf(id, rec.best.configId) : null) }
   }
 }

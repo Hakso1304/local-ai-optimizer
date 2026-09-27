@@ -1,4 +1,5 @@
 // Trust boundary: everything the renderer sends to bench:* is re-validated here. Pure (no electron import) for tests.
+import { existsSync, realpathSync } from 'node:fs'
 import { isAbsolute, relative, resolve } from 'node:path'
 import { DEFAULT_CANDIDATE_RULES, type CandidateRules } from '../core/benchmark/candidates'
 import { WORKLOADS } from '../core/scoring/workloads'
@@ -9,6 +10,20 @@ import type { WorkloadId } from '../shared/bench-types'
 export function isInside(dir: string, p: string): boolean {
   const rel = relative(resolve(dir), resolve(p))
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+}
+
+/** Own keys only: `in` would accept inherited names like "__proto__" or "toString" (W4 F8). */
+export const isWorkloadId = (w: unknown): w is WorkloadId => typeof w === 'string' && Object.hasOwn(WORKLOADS, w)
+
+const real = (p: string): string | null => { try { return realpathSync.native(p) } catch { return null } }
+
+/** Lexical containment, and for an existing file also by real path: a symlink/junction inside a model root that
+ *  points elsewhere must not pass (W4 F11). A missing file keeps the lexical check (it can't be loaded anyway). */
+export function insideSomeRoot(p: string, roots: string[]): boolean {
+  if (!roots.some((d) => isInside(d, p))) return false
+  const rp = existsSync(p) ? real(p) : null
+  if (!rp) return true
+  return roots.some((d) => { const rd = real(d); return rd !== null && isInside(rd, rp) })
 }
 
 const D = DEFAULT_CANDIDATE_RULES
@@ -38,10 +53,10 @@ const strings = (v: unknown) => (Array.isArray(v) && v.every((x) => typeof x ===
 export function sanitizeRequest(raw: unknown, modelRoots: string[]): { ok: true; req: SessionRequest } | { ok: false; error: string } {
   if (!raw || typeof raw !== 'object') return { ok: false, error: 'bad request' }
   const r = raw as Record<string, unknown>
-  if (typeof r.workload !== 'string' || !(r.workload in WORKLOADS)) return { ok: false, error: 'unknown workload' }
+  if (!isWorkloadId(r.workload)) return { ok: false, error: 'unknown workload' }
   const modelIds = strings(r.modelIds)
   if (!modelIds?.length || modelIds.length > 20) return { ok: false, error: 'pick 1–20 models' }
-  const outside = modelIds.find((p) => !modelRoots.some((d) => isInside(d, p)))
+  const outside = modelIds.find((p) => !insideSomeRoot(p, modelRoots))
   if (outside) return { ok: false, error: `model path not in a configured model dir: ${outside}` }
   const ladder = Array.isArray(r.ladder)
     ? [...new Set((r.ladder as unknown[]).filter((c): c is number => typeof c === 'number' && D.ctxLadder.includes(c)))].sort((a, b) => a - b)

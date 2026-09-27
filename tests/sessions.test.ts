@@ -75,6 +75,8 @@ describe('session storage', () => {
     expect(runId.model_id).toBe(model.id)
     expect(telemetryForRun(db, runId.id)).toHaveLength(1)
     expect(getSessionResume(db, Number(id))).toEqual({ request: req, machine, plan: [config] }) // resume re-uses the stored plan + scan (d)
+    expect(latestRecommendation(db, 'fast_assistant')).toBeNull() // failed session: not a real recommendation (F14)
+    await st.setSessionStatus(id, 'done')
     expect(latestRecommendation(db, 'fast_assistant')?.sessionId).toBe(Number(id))
     db.close()
   })
@@ -119,6 +121,22 @@ describe('session storage', () => {
     expect(rec.workload).toBe('coding')
     expect(getSession(db, id)!.recommendation!.workload).toBe('long_context_coding') // stored one unchanged
     expect(sessionInputs(db, 999)).toBeNull()
+    db.close()
+  })
+
+  it('latestRecommendation only comes from sessions that finished (W4 F14) and quality needs a complete current suite (F5)', async () => {
+    const db = openDb(join(dir, 'h.db'))
+    const sid = saveSession(db, { workload: 'coding', vramBytes: null, candidates: [] }, 'running')
+    saveRecommendation(db, sid, { workload: 'coding', best: null, reasons: ['partial'] } as unknown as Recommendation, null)
+    markInterrupted(db)
+    expect(latestRecommendation(db, 'coding')).toBeNull()
+    const st = makeSessionStorage(db, () => ({ vramBytes: null, candidates: [] }))
+    const id = await st.createSession({ workload: 'coding', request: { workload: 'coding', modelIds: ['m'] }, startedAt: 0 })
+    const q = (t: string) => ({ testId: t, category: 'coding' as const, weight: 1, pass: true, score: 1, detail: '' })
+    await st.saveQuality(id, 'm', 'c', 2048, [q('a'), q('b')])
+    expect(await st.listQuality(id, 'm')).toHaveLength(2)
+    db.prepare('DELETE FROM quality_result WHERE id = (SELECT max(id) FROM quality_result)').run() // now incomplete
+    expect(await st.listQuality(id, 'm')).toEqual([]) // resume re-runs the suite
     db.close()
   })
 })

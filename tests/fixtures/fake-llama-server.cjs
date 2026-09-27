@@ -23,6 +23,11 @@ http
     if (req.url === '/completion' && mode === 'http400') {
       return res.writeHead(400).end(JSON.stringify({ error: { code: 400, type: 'exceed_context_size_error', message: 'request (40000 tokens) exceeds the available context size (32768 tokens)' } }))
     }
+    if (req.url === '/completion' && mode === 'notimings') {
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      res.write('data: {"content":"a","stop":false}\n\ndata: {"content":"b","stop":false}\n\ndata: {"content":"c","stop":false}\n\n')
+      return res.end('data: {"content":"","stop":true,"stop_type":"limit"}\n\n')
+    }
     if (req.url === '/completion') {
       res.writeHead(200, { 'content-type': 'text/event-stream' })
       res.write('data: {"content":"Hi","stop":false}\n\n')
