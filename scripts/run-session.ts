@@ -95,9 +95,18 @@ async function main(): Promise<void> {
     ? { value: vr.bytes, status: 'available', source: `typeperf GPU Adapter Memory(luid_${vr.luid}_phys_0)\Dedicated Usage` }
     : { value: null, status: 'unavailable', source: 'typeperf GPU Adapter Memory', error: 'reading failed' } }
   const dev = pickDiscreteDevice(devs)
+  const dbPath = flag('--db')
+  const appDb = dbPath ? openDb(dbPath) : null
+  // --resume <id> (needs --db): continue a stored session exactly like the app's Resume — stored request, scan and
+  // candidate plan; already measured (configId, ctx) steps are reused, cancelled/skipped ones re-run.
+  const resumeId = flag('--resume')
+  const stored = resumeId && appDb ? getSessionResume(appDb, Number(resumeId)) : null
+  if (resumeId && !stored) throw new Error(`session ${resumeId} not found in ${dbPath ?? '(no --db)'}`)
+  // Resume selects the stored session's models by id (= absolute path), never the --models default: a missing model
+  // must fail here, not run an empty session that re-saves an empty recommendation over the stored one.
   const models: ModelMeta[] = []
-  for (const name of WANT) {
-    const info = infos.find((i) => i.name === name)
+  for (const name of stored ? stored.request.modelIds : WANT) {
+    const info = infos.find((i) => (stored ? i.path === name : i.name === name))
     if (!info) throw new Error(`${name} not found in ${MODELS_DIR}`)
     const m = toMeta(info)
     if (typeof m === 'string') throw new Error(`${name}: ${m}`)
@@ -124,7 +133,6 @@ async function main(): Promise<void> {
   const pidFile = join(tmpdir(), `lao-session-${scenario}.pid`)
   // --db <optimizer.db>: persist through the app's own storage (makeSessionStorage + planFor, as main.ts does), so the
   // session shows up in the app (Results / Dashboard) and resume/read-time reinterpretation work on it.
-  const dbPath = flag('--db')
   const git = (args: string[]) => { try { return execFileSync('git', args, { encoding: 'utf8' }).trim() } catch { return null } }
   const gitState = { head: git(['rev-parse', 'HEAD']), dirty: (git(['status', '--porcelain']) ?? '').split('\n').filter(Boolean) }
   const planFor: PlanFor = (r) => {
@@ -134,13 +142,7 @@ async function main(): Promise<void> {
       candidates: models.flatMap((model) => generateCandidates(mach, model, { backend: 'vulkan' }, WORKLOADS[r.workload], rulesForRequest(r)).candidates.map((config) => ({ config, model })))
     }
   }
-  const appDb = dbPath ? openDb(dbPath) : null
   const appStorage = appDb ? makeSessionStorage(appDb, planFor) : null
-  // --resume <id> (needs --db): continue a stored session exactly like the app's Resume — stored request, scan and
-  // candidate plan; already measured (configId, ctx) steps are reused, cancelled/skipped ones re-run.
-  const resumeId = flag('--resume')
-  const stored = resumeId && appDb ? getSessionResume(appDb, Number(resumeId)) : null
-  if (resumeId && !stored) throw new Error(`session ${resumeId} not found in ${dbPath ?? '(no --db)'}`)
   if (stored) {
     Object.assign(req, stored.request, { resumeSessionId: resumeId })
     console.log(`${el()} resuming session ${resumeId}: ${stored.request.workload}, ${stored.plan.length} planned configs`)
