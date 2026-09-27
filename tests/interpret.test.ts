@@ -51,7 +51,11 @@ const pair = (rateA: number, rateB: number): CandidateInput[] => {
 // Generation configs: thinking at two efforts (applied template kwargs verified) vs the deterministic baseline.
 const genRows = (g: GenConfig, rate: number, reasoning: number, ms: number, applied = true): GenRow[] =>
   q5('m', rate).map((r) => ({ ...r, genId: g.id, sample: 1, answerTokens: 100, reasoningTokens: reasoning, totalMs: ms, tokenSource: 'runtime',
-    ...(applied ? { appliedTemplateKwargs: templateKwargsFor(THINK_MODEL, g), templateHash: 'tpl-1', runtimeVersion: 'b11208', modelFingerprint: 'llama8b#1', acceptedSampling: { temperature: g.temperature } } : {}) }))
+    ...(applied ? { appliedTemplateKwargs: templateKwargsFor(THINK_MODEL, g), templateHash: 'tpl-1', runtimeVersion: 'b11208', modelFingerprint: 'llama8b#1', acceptedSampling: { temperature: g.temperature },
+      templateKwargProof: Object.fromEntries(Object.entries(templateKwargsFor(THINK_MODEL, g) ?? {}).map(([key, requested]) => [key, {
+        requested, counterfactual: key === 'enable_thinking' ? !requested : requested === 'low' ? 'medium' : 'low',
+        requestedSha256: 'a'.repeat(64), counterfactualSha256: 'b'.repeat(64), status: 'proved'
+      }])) } : {}) }))
 const THINK_MODEL = { genKnobs: { supportsThinking: true, effortValues: ['low', 'medium'] } } as CandidateInput['model']
 const OFF: GenConfig = { id: 'off', thinking: false, temperature: 0, source: 'default' }
 const LOW: GenConfig = { id: 'think-low-t1', thinking: true, effort: 'low', temperature: 1, source: 'default' }

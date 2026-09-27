@@ -38,7 +38,7 @@ interface Step { noTimings?: boolean; hostMiB?: number; load?: 'oom' | 'drift' |
 function fakeBackend(script: (ctx: number, cfg: LoadConfig) => Step) {
   let ctx = 0
   let cfg: LoadConfig | null = null
-  const calls = { loads: [] as LoadConfig[], templates: 0, templateOpts: [] as unknown[], cancels: 0, unloads: 0, order: [] as string[] }
+  const calls = { loads: [] as LoadConfig[], templates: 0, templateOpts: [] as unknown[], prompts: [] as PromptRequest[], cancels: 0, unloads: 0, order: [] as string[] }
   let onCancel: (() => void) | null = null
   const b: { -readonly [K in keyof SessionBackend]: SessionBackend[K] } & { calls: typeof calls } = {
     calls,
@@ -67,6 +67,7 @@ function fakeBackend(script: (ctx: number, cfg: LoadConfig) => Step) {
       if (cancelled) throw new Error('warmup failed: cancelled')
     },
     async runPrompt(req): Promise<PromptResult> {
+      calls.prompts.push(req)
       const s = script(ctx, cfg!)
       const base = { promptTokens: 100, prefillMs: 10, decodeTokens: req.maxTokens, decodeMs: 1000, text: 'BANANA', stopType: 'eos' }
       const isMeasured = req.prompt === ladderPrompt(ctx)
@@ -311,8 +312,13 @@ describe('runSession', () => {
     const m = { ...model, supportsThinking: true, genKnobs }
     const r = await run(() => ({}), { workload: 'coding', runQuality: true, ladder: [2048] }, { models: [m], backend })
     const kw = ref!.calls.templateOpts.map((o) => JSON.stringify((o as { templateKwargs?: unknown } | undefined)?.templateKwargs))
-    expect(kw.length).toBe(N + N * 3 * 2)
-    expect([...new Set(kw)]).toEqual(['{"enable_thinking":false}', '{"enable_thinking":true,"reasoning_effort":"low"}', '{"enable_thinking":true,"reasoning_effort":"medium"}'])
+    const generationCount = N + N * 3 * 2
+    expect(seen.filter((q) => q.prompt !== ladderPrompt(2048))).toHaveLength(generationCount)
+    expect(kw.length).toBeGreaterThanOrEqual(generationCount)
+    expect(kw.length).toBeLessThanOrEqual(generationCount + 5) // one first-item probe per requested kwarg
+    for (const requested of ['{"enable_thinking":false}', '{"enable_thinking":true,"reasoning_effort":"low"}', '{"enable_thinking":true,"reasoning_effort":"medium"}']) {
+      expect(kw.filter((x) => x === requested).length).toBeGreaterThanOrEqual(N)
+    }
     expect(ref!.calls.loads).toHaveLength(2) // one ladder step + ONE quality load for all three gen configs
     const stoch = seen.filter((q) => q.temperature === 0.6) as (PromptRequest & { topP?: number })[]
     expect(stoch.every((q) => q.topP === 0.95 && q.maxTokens >= 1024)).toBe(true)
@@ -323,8 +329,11 @@ describe('runSession', () => {
     // The fake template ignores kwargs (identical renders) → nothing counts as applied (I-8.0)
     expect(rows.some((x) => x.appliedTemplateKwargs)).toBe(false)
     const quick = await run(() => ({}), { workload: 'coding', runQuality: true, ladder: [2048], qualityMode: 'quick' }, { models: [m] })
-    expect(quick.backend.calls.templates).toBe(17 * 3)
+    expect(quick.backend.calls.prompts.filter((q) => q.prompt !== ladderPrompt(2048))).toHaveLength(17 * 3)
+    expect(quick.backend.calls.templates).toBeGreaterThanOrEqual(17 * 3)
+    expect(quick.backend.calls.templates).toBeLessThanOrEqual(17 * 3 + 5)
     const off = await run(() => ({}), { workload: 'coding', runQuality: true, ladder: [2048], genSearch: false }, { models: [m] })
+    expect(off.backend.calls.prompts.filter((q) => q.prompt !== ladderPrompt(2048))).toHaveLength(N)
     expect(off.backend.calls.templates).toBe(N)
   })
 
@@ -537,18 +546,25 @@ describe('runSession', () => {
     const low = { id: 'low', thinking: true, effort: 'low', temperature: 0, source: 'default' as const }
     const medium = { id: 'medium', thinking: true, effort: 'medium', temperature: 0, source: 'default' as const }
     const xhigh = { id: 'xhigh', thinking: true, effort: 'xhigh', temperature: 0, source: 'default' as const }
-    const suite = async (gens: SessionRequest['genConfigs'], render: (kw: Record<string, unknown>) => string, effortValues = ['low', 'medium', 'xhigh']) => {
+    const suite = async (gens: SessionRequest['genConfigs'], render: (kw: Record<string, unknown>) => string, effortValues = ['low', 'medium', 'xhigh'], failFirst = false) => {
       const m = { ...model, supportsThinking: true, genKnobs: { supportsThinking: true, effortValues } }
-      return run(() => ({}), { workload: 'coding', runQuality: true, qualityMode: 'quick', ladder: [2048], genConfigs: gens }, {
+      let qualityRequest = 0
+      let usedBackend!: ReturnType<typeof fakeBackend>
+      const result = await run(() => ({}), { workload: 'coding', runQuality: true, qualityMode: 'quick', ladder: [2048], genConfigs: gens }, {
         models: [m], runtimeVersion: 'b1', backend: () => {
-          const b = fakeBackend(() => ({}))
+          const b = (usedBackend = fakeBackend(() => ({})))
           b.templateHash = 'tpl'
           b.applyTemplate = async (msgs, opts) => `${msgs.map((x) => x.content).join('\n')}|${render(opts?.templateKwargs ?? {})}`
           const rp = b.runPrompt.bind(b)
-          b.runPrompt = async (q) => ({ ...(await rp(q)), acceptedSampling: { temperature: q.temperature ?? 0 } })
+          b.runPrompt = async (q) => {
+            const r = await rp(q)
+            const first = q.prompt !== ladderPrompt(2048) && qualityRequest++ % 17 === 0
+            return { ...r, ...(failFirst && first ? { error: 'HTTP 500 on first item' } : {}), acceptedSampling: { temperature: q.temperature ?? 0 } }
+          }
           return b
         }
       })
+      return { ...result, usedBackend }
     }
     const rowsOf = (r: Awaited<ReturnType<typeof suite>>, id: string) => r.s.quality[0].results.filter((x) => (x as GenRow).genId === id) as GenRow[]
 
@@ -588,6 +604,19 @@ describe('runSession', () => {
       const unknown = await suite([off, xhigh], (kw) => `think=${kw.enable_thinking}|effort=${kw.reasoning_effort ?? 'none'}`, ['xhigh'])
       expect(rowsOf(unknown, 'xhigh')).toHaveLength(17)
       expect(rowsOf(unknown, 'xhigh').every((x) => x.evaluationStatus === 'valid' && !x.appliedTemplateKwargs)).toBe(true)
+    })
+    it('defers proof after first-item request error and compares counterfactuals on the same second item', async () => {
+      const r = await suite([off, low, medium], () => 'ignored', ['low', 'medium', 'xhigh'], true)
+      expect(r.usedBackend.calls.prompts.filter((q) => q.prompt !== ladderPrompt(2048))).toHaveLength(17 * 3)
+      for (const id of ['off', 'low', 'medium']) {
+        const rows = rowsOf(r, id)
+        expect(rows).toHaveLength(17)
+        expect(rows[0].evaluationStatus).toBe('infra_error')
+        expect(rows.slice(1).every((x) => x.evaluationStatus === 'valid')).toBe(true)
+        expect(rows.every((x) => !x.appliedTemplateKwargs)).toBe(true)
+        expect(Object.keys(rows[0].templateKwargProof ?? {})).toHaveLength(id === 'off' ? 1 : 2)
+        expect(rows.every((x) => Object.values(x.templateKwargProof ?? {}).every((p) => p.status === 'unchanged'))).toBe(true)
+      }
     })
   })
 
@@ -896,7 +925,9 @@ describe('runSession', () => {
     const stored = first.s.quality[0]
     const mixed = stored.results.map((r) => ({ ...r, runtimeVersion: (r as { genId?: string }).genId === 'off' ? 'vulkan:b1' : 'vulkan:b2' }))
     const resumed = await run(() => ({}), { ...req, resumeSessionId: 's1' }, { models: [m], runtimeVersion: 'b1' }, first.s.runs, [{ ...stored, results: mixed }])
-    expect(resumed.backend.calls.templates).toBe(stored.results.length)
+    expect(resumed.backend.calls.prompts.filter((q) => q.prompt !== ladderPrompt(2048))).toHaveLength(stored.results.length)
+    expect(resumed.backend.calls.templates).toBeGreaterThanOrEqual(stored.results.length)
+    expect(resumed.backend.calls.templates).toBeLessThanOrEqual(stored.results.length + 2)
   })
 
   it('quality resume requires distinct T1 sample numbers 1, 2, 3 for each item', async () => {
@@ -909,7 +940,9 @@ describe('runSession', () => {
     const mixed = stored.results.map((r) => (r === t1.find((x) => x.testId === t1[0].testId && x.sample === 2) || r === t1.find((x) => x.testId === t1[0].testId && x.sample === 3))
       ? { ...r, sample: 1 } : r)
     const resumed = await run(() => ({}), { ...req, resumeSessionId: 's1' }, { models: [m], runtimeVersion: 'b1' }, first.s.runs, [{ ...stored, results: mixed }])
-    expect(resumed.backend.calls.templates).toBe(stored.results.length)
+    expect(resumed.backend.calls.prompts.filter((q) => q.prompt !== ladderPrompt(2048))).toHaveLength(stored.results.length)
+    expect(resumed.backend.calls.templates).toBeGreaterThanOrEqual(stored.results.length)
+    expect(resumed.backend.calls.templates).toBeLessThanOrEqual(stored.results.length + 2)
   })
 
   it('v2 runner emits skill and instance provenance that yields skill-clustered uncertainty', async () => {

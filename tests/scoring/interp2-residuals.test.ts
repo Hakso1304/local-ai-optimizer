@@ -244,6 +244,32 @@ describe('A/B/C (review-w4l): generation contract strictness', () => {
     expect(o.comparable).toBe(false)
     expect(o.why).toMatch(/applied template kwargs .* differ from the config's \{"enable_thinking":true,"reasoning_effort":"low"\}/)
   })
+  it('I-8.0 historical applied-kwargs claim without per-key proof is not comparable; proved rows are', () => {
+    const p = (requested: unknown, counterfactual: unknown) => ({ requested, counterfactual,
+      requestedSha256: 'a'.repeat(64), counterfactualSha256: 'b'.repeat(64), status: 'proved' as const })
+    const c = thinkModel(candidate('a'))
+    c.quality = rowsFor('off', { appliedTemplateKwargs: { enable_thinking: false }, templateKwargProof: { enable_thinking: p(false, true) } })
+    const claimed = rowsFor('think-low', { appliedTemplateKwargs: { enable_thinking: true, reasoning_effort: 'low' } })
+    c.genQuality = [gq('off', false, c.quality), gq('think-low', true, claimed)]
+    const old = V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')!
+    expect(old).toMatchObject({ comparable: false, why: expect.stringMatching(/template.*proof|per-key.*proof/) })
+    const proved = claimed.map((r) => ({ ...r, templateKwargProof: { enable_thinking: p(true, false), reasoning_effort: p('low', 'high') } } as QualityResult))
+    c.genQuality[1] = gq('think-low', true, proved)
+    expect(V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think-low')).toMatchObject({ comparable: true })
+  })
+  it('I-8.0 legacy single-toggle applied proof remains comparable; explicit contradictory proof rejects it', () => {
+    const c = candidate('a')
+    c.model = { ...c.model, genKnobs: { supportsThinking: true } }
+    c.quality = rowsFor('off', { appliedTemplateKwargs: { enable_thinking: false } })
+    const legacy = rowsFor('think', { appliedTemplateKwargs: { enable_thinking: true } })
+    const on = { ...gq('think', true, legacy), gen: { id: 'think', thinking: true, temperature: 0, source: 'default' as const } }
+    c.genQuality = [gq('off', false, c.quality), on]
+    expect(V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think')).toMatchObject({ comparable: true })
+    const contradicted = legacy.map((r) => ({ ...r, templateKwargProof: { enable_thinking: { requested: true, counterfactual: false,
+      requestedSha256: 'a'.repeat(64), counterfactualSha256: 'a'.repeat(64), status: 'unchanged' } } } as QualityResult))
+    c.genQuality[1] = { ...on, results: contradicted }
+    expect(V([c]).ranked[0].genOptions.find((g) => g.gq.gen.id === 'think')).toMatchObject({ comparable: false, why: expect.stringMatching(/template.*proof|per-key.*proof/) })
+  })
   it('C: one row with ctx 2048 among rows without ctx is a partial scope, not a single measured rung', () => {
     const c = candidate('a'); c.quality = c.quality.map((r, i) => (i === 0 ? { ...r, ctx: 2048 } as QualityResult : r))
     const b = V([c]).trace.candidates[0].basis.find((x) => x.component === 'quality')!
@@ -268,7 +294,11 @@ describe('I-8.0 off/think comparator proof on both sides', () => {
     c.quality = rowsFor('off', offProof)
     if (missingOneAccepted) c.quality[0] = { ...c.quality[0], acceptedSampling: null } as QualityResult
     c.genQuality = [gq('off', c.quality), gq('think-low', rowsFor('think-low', {
-      appliedTemplateKwargs: { enable_thinking: true, reasoning_effort: 'low' }, acceptedSampling: { temperature: 1 }
+      appliedTemplateKwargs: { enable_thinking: true, reasoning_effort: 'low' }, acceptedSampling: { temperature: 1 },
+      templateKwargProof: {
+        enable_thinking: { requested: true, counterfactual: false, requestedSha256: 'a'.repeat(64), counterfactualSha256: 'b'.repeat(64), status: 'proved' },
+        reasoning_effort: { requested: 'low', counterfactual: 'high', requestedSha256: 'a'.repeat(64), counterfactualSha256: 'b'.repeat(64), status: 'proved' }
+      }
     }))]
     const verdict = V([c])
     return { options: verdict.ranked[0].genOptions, chosen: verdict.ranked[0].gen?.gq.gen.id ?? null, verdict }
