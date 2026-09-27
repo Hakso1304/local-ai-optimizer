@@ -70,3 +70,25 @@ describe('heavy-mode candidates on the real heavy models (16 GB VRAM)', () => {
     expect(rejected.some((r) => r.id.includes('|ngl=0|'))).toBe(true)
   })
 })
+
+describe('partial-offload VRAM on the real Qwen3.8-27B (heavy run: ngl 55 clean, ngl 62 spilled 2.31 GiB)', () => {
+  const q = { ...qwen35, paramCount: 27.32e9, fullAttentionInterval: 4 }
+  const budget = 17095983104 - 1024 ** 3 // machine(): 0 in use, 1 GiB margin
+  it('ngl 62 @8K is now estimated over the VRAM budget; ngl 55 fits', () => {
+    expect(estimateMemory(q, 62, 8192, 'f16').vramBytes).toBeGreaterThan(budget)
+    expect(estimateMemory(q, 55, 8192, 'f16').vramBytes).toBeLessThanOrEqual(budget)
+  })
+  it('the output tensor + vocab-sized logits are counted for partial offload only', () => {
+    const e = (n: number) => estimateMemory(q, n, 2048, 'f16').vramBytes
+    const perLayer = q.fileBytes / q.layers
+    expect(e(10) - (10 * perLayer)).toBeGreaterThan(q.nVocab * q.nEmbd * 0.5) // output projection counted
+    expect(estimateMemory(q, 65, 2048, 'f16').vramBytes).toBeLessThan(e(64) + perLayer) // full offload: no extra
+  })
+  it('heavy mode emits two target-ctx rungs 4 layers apart (the clean one survives an edge spill)', () => {
+    const [a, b] = generateCandidates(machine(), q, { backend: 'vulkan' }, WORKLOADS.max_quality, heavy).candidates
+    expect(a.gpuLayers - b.gpuLayers).toBe(4)
+    expect(a.ctxSteps.at(-1)).toBe(8192)
+    expect(a.gpuLayers).toBeLessThan(62)
+  })
+})
+

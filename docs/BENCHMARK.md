@@ -195,10 +195,10 @@ Estimates are `kind:'estimated'`, prune only, and never rank.
   1. ngl=all f16.
   2. ngl=all q8_0 KV, when targetContext ≥ 32K and declared ≥ 32K.
   3. If (1) is rejected: **normal mode generates nothing more.** The rejection says "full GPU offload does not fit — enable heavy-model mode". **Heavy mode** (`SessionRequest.heavyMode`) generates up to 4 partial configs, all `expectDegraded` with a `degradedReason`:
-     - the max ngl that fits at the smallest rung;
-     - the max ngl that fits at the target ctx;
+     - the max ngl that fits at the target ctx, and that ngl − 4 (so an edge spill still leaves a clean config);
      - the max ngl with KV in RAM (`kvOffload:false` → `-nkvo`, verified in b11208 `--help`);
      - a CPU baseline (ngl 0, `-dev none`).
+     Heavy configs load **without mmap** (`-lm none`): with mmap the whole GGUF stayed resident (16.4 GB file → ≈17 GiB less available RAM at 55/65 layers). Their VRAM estimate adds the output projection (n_vocab × n_embd at the file's bits/weight) and vocab-sized logits: ngl 62 of Qwen3.8 spilled 2.31 GiB, which the old estimate had called a fit. A shared spill > 2 GiB on a heavy config is recorded (degraded + spill reason) and the ladder moves to the next config instead of aborting. The RAM floor still aborts.
      The RAM check uses `ramResidentBytes` (non-GPU weights + CPU KV + 0.5 GiB, **+1.5 GiB more at ngl 0**) vs available − 4 GiB. There is no keep-over step.
      The **CPU baseline is skipped when the file is > 50 % of total RAM** ("CPU baseline skipped: model is >50% of system RAM"). In the real 27B run it drove available RAM to 1.0 GiB.
   4. ngl=0 only when there is no GPU (`cpuOnlyMaxParams` = 0 = off).

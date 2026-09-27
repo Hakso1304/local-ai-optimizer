@@ -100,10 +100,18 @@ export function estimateMemory(m: ModelMeta, gpuLayers: number, ctx: number, kv:
   // 32 MiB + ubatch·n_embd·32 B + 1 KiB/ctx token. The unexplained residual (0.2–0.9 GiB) is covered by
   // rules.vramMarginBytes in the budget, not here, so small models aren't over-estimated.
   const compute = 32 * MiB + ubatch * m.nEmbd * 32 + ctx * 1024
+  // Partial offload (heavy run, Qwen3.8-27B ngl 62: 2.31 GiB shared spill where this estimate said it fits): the
+  // output projection (n_vocab × n_embd at the file's bits/weight) stays GPU-resident, and the logits / graph-split
+  // buffers scale with the vocab (248K here). Counted in full on top of the layer share — conservative; full offload
+  // keeps the calibrated −2…+3 % formula.
+  const partial = onGpu > 0 && onGpu < m.layers
+  const bpw = m.paramCount ? (m.fileBytes * 8) / m.paramCount : 4.5
+  const outputBytes = partial ? (m.nVocab * m.nEmbd * bpw) / 8 : 0
+  const logits = partial ? ubatch * m.nVocab * 4 : 0
   const kvGpu = kvOnGpu ? (kvBytes * onGpu) / m.layers : 0
   const kvCpu = kvBytes - kvGpu
   return {
-    vramBytes: onGpu > 0 ? wGpu + kvGpu + compute : 0,
+    vramBytes: onGpu > 0 ? wGpu + kvGpu + compute + outputBytes + logits : 0,
     // Resident RAM: weights NOT on the GPU + CPU-side KV + 0.5 GiB. mmap'd pages of offloaded weights are clean and
     // reclaimable (they lower "available" while loaded — the in-step guard credits them), so they are not counted.
     // ngl 0: + 1.5 GiB CPU compute buffers / working set (a 27B CPU baseline exceeded file + KV + 0.5 GiB).
@@ -215,7 +223,9 @@ export function generateCandidates(
     // KV size unknown → only the conservative probes: max ngl at the smallest ctx, KV in RAM, CPU baseline.
     const plans: [number, boolean][] = kvUnknown
       ? [[maxNgl(ladder[0], true), true], [maxNgl(ladder[0], false), false], [0, true]]
-      : [[maxNgl(ladder[0], true), true], [maxNgl(target, true), true], [maxNgl(target, false), false], [0, true]]
+      // Two rungs at the target ctx (max ngl and max ngl − 4, so a spill at the edge still leaves a clean config the
+      // scores can pick), KV-in-RAM, CPU baseline. The old max-ngl@2K probe is dropped to keep ≤ 4 configs.
+      : [[maxNgl(target, true), true], [Math.max(1, maxNgl(target, true) - 4), true], [maxNgl(target, false), false], [0, true]]
     const seen = new Set<string>()
     const ramTotal = num(machine.ramTotalBytes)
     plans.forEach(([n, kvOnGpu], i) => {

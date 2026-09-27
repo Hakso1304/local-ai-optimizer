@@ -214,6 +214,11 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         const verdict = detectCliffs(runs, vramTotal).steps.find((s) => s.ctx === ctx)!.verdict
         send({ type: 'step:done', configId: cand.id, ctx, result: run, verdict })
         if (verdict === 'fail') { stopReason = `stopped after ${run.status}${run.failureKind ? ` (${run.failureKind})` : ''} at ${ctx}`; break }
+        const sh = val(run.peakSharedGpuBytes)
+        if (cand.expectDegraded && sh !== null && sh > cfg.sharedSpillAbortBytes) {
+          stopReason = `spilled ${(sh / GiB).toFixed(2)} GiB into shared GPU memory at ${ctx}; next configuration`
+          break
+        }
         degradedRun = verdict === 'degraded' ? degradedRun + 1 : 0
         if (degradedRun >= cfg.maxConsecutiveDegraded) { stopReason = `stopped after ${degradedRun} consecutive degraded steps`; break }
       }
@@ -338,7 +343,10 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       for (; emitted < xs.length; emitted++) {
         const s = xs[emitted]
         send({ type: 'telemetry', configId: cand.id, ctx, sample: s })
-        const trip = !guard && ((s.ramAvailBytes != null && s.ramAvailBytes + mmapCredit < ramFloor) || (s.procVramSharedBytes != null && s.procVramSharedBytes > cfg.sharedSpillAbortBytes))
+        // Heavy (partial-offload) configs: a shared-memory spill is a measurement (degraded + spill reason, then the
+        // ladder moves on), not an abort. The RAM floor always aborts.
+        const spillAbort = !cand.expectDegraded && s.procVramSharedBytes != null && s.procVramSharedBytes > cfg.sharedSpillAbortBytes
+        const trip = !guard && ((s.ramAvailBytes != null && s.ramAvailBytes + mmapCredit < ramFloor) || spillAbort)
         if (!trip) continue
         guard = s.ramAvailBytes != null && s.ramAvailBytes + mmapCredit < ramFloor
           ? `RAM available ${(s.ramAvailBytes / GiB).toFixed(1)} GiB fell below the floor`

@@ -336,6 +336,19 @@ describe('runSession', () => {
     expect(r.rec?.reasons.find((x) => x.startsWith('Not benchmarked: Qwen3.8-27B — '))).toMatch(/enable heavy-model mode/)
   })
 
+  it('heavy configs: a >2 GiB shared spill is recorded (degraded + reason) and the ladder moves to the next config — no abort', async () => {
+    const m27 = { ...model, id: 'C:/models/q27b.gguf', fileBytes: Math.round(16.1 * GiB), layers: 64, nEmbd: 5120, heads: 40, headsKv: 8, keyLength: 128, valueLength: 128, nVocab: 152064 }
+    const spill = { ...sample(2048), procVramSharedBytes: Math.round(2.31 * GiB) }
+    const h = await run(() => ({}), { workload: 'max_quality', modelIds: [m27.id], ladder: [2048, 4096], heavyMode: true }, {
+      models: [m27], startSampler: () => ({ samples: [spill], unavailable: {}, stop: () => [spill] }), config: { guardPollMs: 5, heavyGuardPollMs: 5 }
+    })
+    expect(h.s.runs.every((r) => r.failureKind !== 'guard_abort')).toBe(true)
+    expect(h.s.runs.filter((r) => r.ctx === 4096)).toEqual([]) // each config stopped after its spilled 2K step
+    expect(new Set(h.s.runs.map((r) => r.configId)).size).toBeGreaterThan(1) // …and the next config still ran
+    const done = h.events.filter((e) => e.type === 'candidate:done') as { reason: string | null }[]
+    expect(done[0].reason).toBe('spilled 2.31 GiB into shared GPU memory at 2048; next configuration')
+  })
+
   it('emits events in order', async () => {
     const { events } = await run((ctx) => (ctx > 4096 ? { load: 'oom' } : {}), { ladder: [2048, 4096, 8192] })
     const types = events.map((e) => (e.type === 'phase' ? `phase:${e.phase}` : e.type)).filter((t) => t !== 'telemetry' && t !== 'log')
