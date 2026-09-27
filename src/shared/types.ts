@@ -143,6 +143,9 @@ export interface RendererApi {
   cancelBench(): Promise<{ ok: boolean; error?: string }>
   /** Continue a cancelled/failed session; already-measured steps are reused. */
   resumeBench(sessionId: number): Promise<StartResult>
+  /** Download + install the llama.cpp runtime (first run / packaged app). Progress via onRuntimeProgress. */
+  installRuntime(): Promise<RuntimeDetection>
+  onRuntimeProgress(cb: (msg: string) => void): () => void
   /** Subscribe to bench:event; returns an unsubscribe function. */
   onBenchEvent(cb: (e: SessionEvent) => void): () => void
   scanSystem(): Promise<SystemProfile>

@@ -18,6 +18,26 @@ function Row({ label, s, fmt }: { label: string; s: Sourced<unknown>; fmt: () =>
   )
 }
 
+function InstallRuntime({ onDone }: { onDone: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const [lines, setLines] = useState<string[]>([])
+  const [err, setErr] = useState<string | null>(null)
+  useEffect(() => window.api.onRuntimeProgress((m) => setLines((l) => [...l.slice(-20), m])), [])
+  const go = () => {
+    setBusy(true)
+    setErr(null)
+    window.api.installRuntime().then(onDone, (e: Error) => setErr(e.message)).finally(() => setBusy(false))
+  }
+  return (
+    <div className="card">
+      <p>llama.cpp is not installed. The app downloads the official Windows Vulkan build from github.com/ggml-org/llama.cpp (~30 MB).</p>
+      <div className="bar"><button onClick={go} disabled={busy}>{busy ? 'Installing…' : 'Install llama.cpp runtime'}</button></div>
+      {err && <p className="err">{err}</p>}
+      {lines.length > 0 && <pre className="log">{lines.join('\n')}</pre>}
+    </div>
+  )
+}
+
 export function SystemPage() {
   const [p, setP] = useState<SystemProfile | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -57,6 +77,7 @@ export function SystemPage() {
             </tbody>
           </table>
           <h2>Runtimes</h2>
+          {p.runtimes.find((r) => r.id === 'llamacpp')?.status !== 'available' && <InstallRuntime onDone={scan} />}
           <table>
             <thead><tr><th>Runtime</th><th>Status</th><th>Detail</th><th>Source</th></tr></thead>
             <tbody>

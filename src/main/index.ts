@@ -20,8 +20,10 @@ import type { SessionEvent, SessionRequest } from '../shared/bench-events'
 import type { ModelMeta, WorkloadId } from '../shared/bench-types'
 import type { AppSettings, SmokeResult, StartResult, SystemProfile } from '../shared/types'
 
-// ponytail: app.getAppPath() is the project root in dev/preview; revisit for packaged builds.
-const llamaDir = () => join(app.getAppPath(), 'vendor', 'llama.cpp')
+// Dev: runtime + sample models live in the project. Packaged: app dir is read-only (asar), so the runtime is
+// downloaded on first run into userData and models come from userData/models + settings.modelDirs.
+const llamaDir = () => (app.isPackaged ? join(app.getPath('userData'), 'runtime', 'llama.cpp') : join(app.getAppPath(), 'vendor', 'llama.cpp'))
+const bundledModelsDir = () => (app.isPackaged ? join(app.getPath('userData'), 'models') : join(app.getAppPath(), 'models'))
 
 // Large models live on D: (user decision); used when settings.json has no modelDirs key.
 const DEFAULT_MODEL_DIRS = ['D:\\llm-models']
@@ -40,7 +42,7 @@ function writeSettings(patch: Partial<AppSettings>): AppSettings {
 function modelDirs(): string[] {
   const s = readSettings()
   const extra = Array.isArray(s.modelDirs) ? s.modelDirs.filter((d): d is string => typeof d === 'string') : DEFAULT_MODEL_DIRS
-  return [join(app.getAppPath(), 'models'), ...extra]
+  return [bundledModelsDir(), ...extra]
 }
 
 const llama = new LlamaCppBackend(llamaDir(), { pidFile: join(app.getPath('userData'), 'llama-server.pid') })
@@ -60,6 +62,13 @@ ipcMain.handle('system:scan', async () => {
   return { ...profile, runtimes }
 })
 ipcMain.handle('models:list', () => llama.enumerateModels(modelDirs()))
+let installing: Promise<unknown> | null = null
+ipcMain.handle('runtime:install', async () => {
+  if (installing) throw new Error('runtime install already running')
+  const progress = (msg: string) => { for (const w of BrowserWindow.getAllWindows()) w.webContents.send('runtime:progress', msg) }
+  installing = llama.ensureRuntime(progress)
+  try { return await installing } finally { installing = null }
+})
 ipcMain.handle('settings:get', () => readSettings())
 ipcMain.handle('settings:setWorkload', (_e, w: WorkloadId) => {
   if (!(w in WORKLOADS)) throw new Error(`unknown workload ${String(w)}`)
@@ -165,7 +174,8 @@ function createWindow(): void {
 app.whenReady().then(async () => {
   // LAO_SEED_DEMO=1 uses a separate DB file so fixture data can never reach the real one.
   db = openDb(join(app.getPath('userData'), DEMO ? 'optimizer-demo.db' : 'optimizer.db'))
-  if (DEMO) seedDemoSession(db, join(app.getAppPath(), 'tests', 'fixtures', 'scoring'))
+  const fixtures = join(app.getAppPath(), 'tests', 'fixtures', 'scoring')
+  if (DEMO && existsSync(fixtures)) seedDemoSession(db, fixtures) // dev-only: fixtures are not packaged
   const stale = await killStaleServer(join(app.getPath('userData'), 'llama-server.pid')).catch((e: Error) => `stale-server check failed: ${e.message}`)
   if (stale) console.warn(stale)
   createWindow()

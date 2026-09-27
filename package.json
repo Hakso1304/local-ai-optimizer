@@ -10,7 +10,8 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "setup:runtime": "tsx scripts/ensure-runtime.ts"
+    "setup:runtime": "tsx scripts/ensure-runtime.ts",
+    "package": "npm run build && electron-builder --win portable nsis"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
@@ -18,6 +19,7 @@
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^5.2.0",
     "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
@@ -30,5 +32,33 @@
     "electron@44.4.5": true,
     "esbuild@0.25.12": true,
     "esbuild@0.28.2": true
+  },
+  "author": "Local AI Optimizer",
+  "build": {
+    "appId": "com.localaioptimizer.app",
+    "productName": "Local AI Optimizer",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "out/**",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "portable",
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "${productName}-${version}-setup.${ext}"
+    },
+    "npmRebuild": false,
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.${ext}"
+    }
   }
 }

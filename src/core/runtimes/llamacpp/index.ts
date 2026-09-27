@@ -148,7 +148,14 @@ export class LlamaCppBackend implements InferenceBackend {
       log(`downloading ${asset.name} (${(asset.size / 1e6).toFixed(1)} MB)`)
       const res = await fetch(asset.url, { signal: AbortSignal.timeout(15 * 60_000) })
       if (!res.ok || !res.body) throw new Error(`download ${asset.url} -> HTTP ${res.status}`)
-      await pipeline(Readable.fromWeb(res.body as WebReadableStream), createWriteStream(zip))
+      let received = 0
+      let shown = -1
+      const body = Readable.fromWeb(res.body as WebReadableStream).on('data', (c: Buffer) => {
+        received += c.length
+        const pct = Math.floor((received * 100) / asset.size / 5) * 5
+        if (pct !== shown) { shown = pct; log(`downloading ${pct}%`) }
+      })
+      await pipeline(body, createWriteStream(zip))
       const got = statSync(zip).size
       if (got !== asset.size) throw new Error(`download truncated: ${got} of ${asset.size} bytes`)
       log(`extracting to ${this.vendorDir}`)

@@ -16,6 +16,12 @@ const api: RendererApi = {
   startBench: (req) => ipcRenderer.invoke('bench:start', req),
   cancelBench: () => ipcRenderer.invoke('bench:cancel'),
   resumeBench: (id) => ipcRenderer.invoke('bench:resume', id),
+  installRuntime: () => ipcRenderer.invoke('runtime:install'),
+  onRuntimeProgress: (cb) => {
+    const h = (_e: IpcRendererEvent, msg: string) => cb(msg)
+    ipcRenderer.on('runtime:progress', h)
+    return () => { ipcRenderer.removeListener('runtime:progress', h) }
+  },
   onBenchEvent: (cb) => {
     const h = (_e: IpcRendererEvent, ev: SessionEvent) => cb(ev)
     ipcRenderer.on('bench:event', h)
