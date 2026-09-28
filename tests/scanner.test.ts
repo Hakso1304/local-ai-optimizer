@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { scanSystem, type ScanDeps } from '../src/core/system/scanner'
+import { INTEGRATED_GPU_NAME, scanSystem, type ScanDeps } from '../src/core/system/scanner'
 
 // Real output captured from the dev machine (RX 9070 XT + iGPU, stale RTX 3080 registry entry).
 const fixture = readFileSync(join(__dirname, 'fixtures/scan-rx9070.json'), 'utf8')
@@ -74,5 +74,13 @@ describe('scanSystem', () => {
       expect(p[k].status).toBe('unavailable')
       expect(p[k].error).toMatch(/timed out/)
     }
+  })
+})
+
+describe('INTEGRATED_GPU_NAME', () => {
+  it('matches the bare Core Ultra Arc iGPU name but not discrete Arc cards', () => {
+    expect(INTEGRATED_GPU_NAME.test('Intel(R) Arc(TM) Graphics')).toBe(true) // Meteor/Lunar Lake iGPU; registry reports no qwMemorySize
+    expect(INTEGRATED_GPU_NAME.test('Intel(R) Arc(TM) A770 Graphics')).toBe(false)
+    expect(INTEGRATED_GPU_NAME.test('Intel(R) Arc(TM) B580 Graphics')).toBe(false)
   })
 })

@@ -68,7 +68,7 @@ export function vendorFromPnp(pnp: string): GpuVendor {
 }
 
 /** Names of integrated / virtual adapters. Also used to pick the bench device from llama-server --list-devices. */
-export const INTEGRATED_GPU_NAME = /Radeon\(TM\) Graphics|Radeon Vega|Radeon \d{4}S|Intel.*(UHD|HD Graphics|Iris)|\d{3,4}M Graphics|Microsoft|Virtual|Parsec|Remote/i
+export const INTEGRATED_GPU_NAME = /Radeon\(TM\) Graphics|Radeon Vega|Radeon \d{4}S|Intel.*(UHD|HD Graphics|Iris)|Intel.*Arc\(TM\) Graphics$|\d{3,4}M Graphics|Microsoft|Virtual|Parsec|Remote/i
 
 // ponytail: name/size heuristic; upgrade to DXGI adapter flags if it misclassifies real hardware.
 function guessIntegrated(name: string, vram: number | null): boolean {
