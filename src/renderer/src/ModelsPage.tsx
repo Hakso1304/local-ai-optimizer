@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { exportConfigFrom, type ExportConfig } from '../../core/export/config'
 import type { KvType } from '../../shared/bench-types'
-import type { ModelInfo, SmokeResult } from '../../shared/types'
+import type { ModelInfo, ServeStatus, SmokeResult } from '../../shared/types'
+import { RunningModel } from './ui'
 
 const SOURCE = { llamacpp: 'folder', lmstudio: 'LM Studio', ollama: 'Ollama' } as const
 const gib = (b: number) => `${(b / 1024 ** 3).toFixed(2)} GiB`
@@ -37,7 +38,8 @@ export function ModelsPage() {
 
   // Run a model from the app: llama-server with the chosen launch config, chat in its built-in web UI.
   const [form, setForm] = useState<RunForm | null>(null)
-  const [serve, setServe] = useState<{ url: string | null; configId: string | null; busy?: boolean; error?: string }>({ url: null, configId: null })
+  const idle: ServeStatus = { url: null, configId: null, alias: null, ctx: null }
+  const [serve, setServe] = useState<ServeStatus & { busy?: boolean; error?: string }>(idle)
   useEffect(() => { window.api.serveStatus().then(setServe, () => {}) }, [])
   const openRun = async (m: ModelInfo) => {
     let base: ExportConfig | null = null
@@ -55,16 +57,16 @@ export function ModelsPage() {
       : { m, ctx: Math.min(8192, m.meta?.contextLength ?? 8192), all: true, ngl: m.meta?.blockCount ?? 0, kv: 'f16', fa: true, threads: 0, base: null, note: 'No recommendation for this model yet (run a benchmark for one). Defaults: all layers on the GPU, threads = physical cores.' })
   }
   const start = async (f: RunForm) => {
-    setServe({ url: null, configId: null, busy: true })
+    setServe({ ...idle, busy: true })
     const cfg: ExportConfig = {
       ...(f.base ?? { sessionId: '', modelName: f.m.name, layers: f.m.meta?.blockCount ?? 0, batch: 2048, ubatch: 512, device: 'auto', kvOffload: true, mmap: true, backend: 'vulkan', workload: 'fast_assistant' }),
       configId: f.base?.configId ?? `${f.m.id}|manual`, modelPath: f.m.path, ctx: f.ctx, gpuLayersAll: f.all, gpuLayers: f.all ? (f.m.meta?.blockCount ?? 0) : f.ngl, kvType: f.kv, flashAttn: f.fa, threads: f.threads
     }
     const r = await window.api.serveStart(cfg)
-    setServe(r.ok ? { url: r.url!, configId: cfg.configId } : { url: null, configId: null, error: r.error })
+    setServe(r.ok ? await window.api.serveStatus() : { ...idle, error: r.error })
     if (r.ok) setForm(null)
   }
-  const stop = async () => { await window.api.serveStop(); setServe({ url: null, configId: null }) }
+  const stop = async () => { await window.api.serveStop(); setServe(idle) }
 
   const run = (m: ModelInfo) => {
     setBusy(m.id)
@@ -79,7 +81,7 @@ export function ModelsPage() {
         <button onClick={load}>Rescan</button>
       </header>
       {err && <p className="err">{err}</p>}
-      {serve.url && <p className="bar"><span>Running <b>{serve.configId}</b> at <a href={serve.url} target="_blank" rel="noreferrer">{serve.url}</a> (llama-server web UI)</span><button onClick={() => void stop()}>Stop model</button></p>}
+      <RunningModel s={serve} onStop={() => void stop()} />
       {serve.error && <p className="err">{serve.error}</p>}
       {form && (
         <div className="export">

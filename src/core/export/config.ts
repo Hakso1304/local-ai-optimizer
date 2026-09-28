@@ -88,6 +88,7 @@ export function toLoadConfig(c: ExportConfig): LoadConfig {
     modelPath: c.modelPath, contextSize: c.ctx, gpuLayers: c.gpuLayersAll ? 999 : c.gpuLayers, device: c.device ?? 'none',
     threads: c.threads, batchSize: c.batch,
     extraArgs: [
+      '-a', modelAlias(c.modelName), // the API model id agents ask for (default would be the full file path)
       '-ub', String(c.ubatch), '-fa', c.flashAttn ? 'on' : 'off',
       ...(c.kvType === 'f16' ? [] : ['-ctk', c.kvType, '-ctv', c.kvType]),
       ...(c.kvOffload ? [] : ['-nkvo']), ...(c.mmap ? [] : ['-lm', 'none']),
@@ -98,6 +99,41 @@ export function toLoadConfig(c: ExportConfig): LoadConfig {
       ...(c.gen?.templateKwargs ? ['--chat-template-kwargs', JSON.stringify(c.gen.templateKwargs)] : [])
     ]
   }
+}
+
+/** llama-server --alias: the model id clients send. Safe subset of the display name, e.g. "Llama-3.2-3B-Instruct". */
+export function modelAlias(modelName: string): string {
+  return modelName.trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'local-model'
+}
+
+/** Copy-paste setup for agent tools talking to the served model. llama-server speaks the OpenAI chat API with tool
+ *  calling (/v1/chat/completions, jinja templates) and the Anthropic Messages API (/v1/messages); no API key is set. */
+export function agentSetupText(url: string, alias: string, ctx: number): string {
+  return [
+    `# Local AI Optimizer — model "${alias}" served by llama-server at ${url} (context ${ctx} tokens)`,
+    `# Any API key value is accepted (none is configured). Requests queue on one slot.`,
+    ``,
+    `## OpenAI-compatible clients (Cline, Continue, OpenCode, Aider, Open WebUI, SDKs)`,
+    `base_url: ${url}/v1`,
+    `model:    ${alias}`,
+    `api_key:  none`,
+    ``,
+    `## Claude Code (Anthropic Messages API)`,
+    `# PowerShell`,
+    `$env:ANTHROPIC_BASE_URL = "${url}"`,
+    `$env:ANTHROPIC_AUTH_TOKEN = "none"`,
+    `$env:ANTHROPIC_MODEL = "${alias}"`,
+    `$env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1"`,
+    `claude`,
+    `# bash/zsh`,
+    `ANTHROPIC_BASE_URL=${url} ANTHROPIC_AUTH_TOKEN=none ANTHROPIC_MODEL=${alias} CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 claude`,
+    `# or in ~/.claude/settings.json: { "env": { "ANTHROPIC_BASE_URL": "${url}", "ANTHROPIC_AUTH_TOKEN": "none", "ANTHROPIC_MODEL": "${alias}" } }`,
+    ``,
+    `## curl`,
+    `curl ${url}/v1/chat/completions -H "Content-Type: application/json" -d "{\"model\":\"${alias}\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}"`,
+    ``,
+    `# Agents send long system prompts and tool schemas: use a context of 32K or more for agent work (Run… form).`
+  ].join('\n')
 }
 
 /** Quote for cmd.exe / PowerShell / sh alike: double quotes around anything with spaces or shell metacharacters. */

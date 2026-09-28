@@ -10,7 +10,7 @@ import { pickBenchmarkDevice, pickDiscreteDevice } from '../core/runtimes/llamac
 import { openDb } from '../core/storage/db'
 import { sessionInputs, getSession, getSessionResume, latestRecommendation, listSessions, listVramBudget, makeSessionStorage, markInterrupted, seedDemoSession, telemetryForRun, type PlanFor } from '../core/storage/sessions'
 import { REQUIRED_CTX, insideSomeRoot, isWorkloadId, rowId, sanitizeRequest, sanitizeServeConfig } from './validate'
-import { toLoadConfig } from '../core/export/config'
+import { modelAlias, toLoadConfig } from '../core/export/config'
 import { registerHubIpc } from './hub'
 import { modelSuggestions } from './suggestions'
 import { WORKLOADS } from '../core/scoring/workloads'
@@ -27,7 +27,7 @@ import { evaluateAsync } from '../core/quality'
 import type { SessionEvent, SessionRequest } from '../shared/bench-events'
 import type { CandidateConfig, GpuBackendKind, ModelMeta, WorkloadId } from '../shared/bench-types'
 import { recommendForWorkload } from '../core/scoring/recommend'
-import type { AppSettings, InstalledRuntime, ComputedRecommendation, ModelFit, ModelInfo, SmokeResult, StartResult, SystemProfile } from '../shared/types'
+import type { AppSettings, InstalledRuntime, ComputedRecommendation, ModelFit, ModelInfo, ServeStatus, SmokeResult, StartResult, SystemProfile } from '../shared/types'
 
 // Dev/test runs get their own userData so they never write the installed app's database or settings.
 // Must run before anything calls app.getPath('userData') (the llama pid file below does).
@@ -286,7 +286,7 @@ ipcMain.handle('bench:smoke', async (_e, modelPath: string): Promise<SmokeResult
 })
 
 // ---- Serve the recommended config from the app (llama-server + its built-in web UI in the default browser) ----
-let serving: { backend: LlamaCppBackend; configId: string } | null = null
+let serving: { backend: LlamaCppBackend; configId: string; alias: string; ctx: number } | null = null
 ipcMain.handle('serve:start', async (_e, raw: unknown): Promise<{ ok: boolean; url?: string; error?: string }> => {
   // Models page "Run…" markers: device 'auto' → the device a benchmark would use; threads 0 → physical cores.
   if (raw && typeof raw === 'object') {
@@ -305,7 +305,7 @@ ipcMain.handle('serve:start', async (_e, raw: unknown): Promise<{ ok: boolean; u
   if (!v.ok) return { ok: false, error: v.error }
   if (smokeBusy || active || installing || serving) return { ok: false, error: 'a benchmark, smoke run, served model or runtime install is already in progress' }
   const backend = v.cfg.backend === 'hip' ? llamaHip : llama
-  serving = { backend, configId: v.cfg.configId } // claim before the first await
+  serving = { backend, configId: v.cfg.configId, alias: modelAlias(v.cfg.modelName), ctx: v.cfg.ctx } // claim before the first await
   try {
     await backend.loadModel(toLoadConfig(v.cfg))
     const url = backend.url!
@@ -323,7 +323,7 @@ ipcMain.handle('serve:stop', async () => {
   serving = null
   return { ok: true }
 })
-ipcMain.handle('serve:status', () => (serving?.backend.url ? { url: serving.backend.url, configId: serving.configId } : { url: null, configId: null }))
+ipcMain.handle('serve:status', (): ServeStatus => (serving?.backend.url ? { url: serving.backend.url, configId: serving.configId, alias: serving.alias, ctx: serving.ctx } : { url: null, configId: null, alias: null, ctx: null }))
 
 /** The scan plus a fresh reading of VRAM already in use (other apps), so planning budgets what is actually free. */
 async function withVramInUse(p: SystemProfile, signal?: AbortSignal): Promise<SystemProfile> {

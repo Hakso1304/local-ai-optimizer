@@ -1,5 +1,23 @@
+import { useState } from 'react'
 // Small shared view helpers. No logic beyond formatting.
 import type { Metric, ProvenanceKind } from '../../shared/bench-types'
+
+import { agentSetupText } from '../../core/export/config'
+import type { ServeStatus } from '../../shared/types'
+
+/** Status line for the model served from the app: web UI link, API details, agent setup to copy, stop. */
+export function RunningModel({ s, onStop }: { s: ServeStatus; onStop: () => void }) {
+  const [copied, setCopied] = useState(false)
+  if (!s.url) return null
+  const copy = async () => { await navigator.clipboard.writeText(agentSetupText(s.url!, s.alias ?? 'local-model', s.ctx ?? 0)); setCopied(true); setTimeout(() => setCopied(false), 2000) }
+  return (
+    <p className="bar">
+      <span>Running <b title={s.configId ?? ''}>{s.alias}</b> — chat: <a href={s.url} target="_blank" rel="noreferrer">{s.url}</a> · API: <code>{s.url}/v1</code> (OpenAI + Anthropic compatible, tool calling on) · model id <code>{s.alias}</code></span>
+      <button onClick={() => void copy()} title="Base URL, model id and env vars for Claude Code, Cline, Continue, OpenCode and other agent tools">{copied ? 'Copied' : 'Copy agent setup'}</button>
+      <button onClick={onStop}>Stop model</button>
+    </p>
+  )
+}
 
 export const fmtCtx = (n: number) => (n % 1024 === 0 ? `${n / 1024}K` : String(n))
 export const gib = (b: number) => `${(b / 1024 ** 3).toFixed(2)} GiB`

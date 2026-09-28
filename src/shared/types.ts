@@ -245,8 +245,11 @@ export interface RendererApi {
   /** Run the exported config from the app: starts llama-server as measured and opens its web UI in the browser. */
   serveStart(cfg: ExportConfig): Promise<{ ok: boolean; url?: string; error?: string }>
   serveStop(): Promise<{ ok: boolean; error?: string }>
-  serveStatus(): Promise<{ url: string | null; configId: string | null }>
+  serveStatus(): Promise<ServeStatus>
 }
+
+/** The model the app is serving (serve:start), if any. alias = the API model id (llama-server --alias). */
+export interface ServeStatus { url: string | null; configId: string | null; alias: string | null; ctx: number | null }
 
 // ---- Stored sessions (read side). Payload contract for benchmark_session / benchmark_run / recommendation rows. ----
 
