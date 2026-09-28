@@ -425,6 +425,9 @@ export class LlamaCppBackend implements InferenceBackend {
   }
 
   /** Start llama-server for one model on a free port; resolves once /health is OK and /props shows our model. */
+  /** Base URL of the running server (its built-in web UI is at /); null when nothing is loaded. */
+  get url(): string | null { return this.proc ? `http://127.0.0.1:${this.port}` : null }
+
   async loadModel(cfg: LoadConfig): Promise<LoadResult> {
     if (this.proc || this.ownedRootPid) await this.unloadModel()
     if (cfg.signal?.aborted) throw new Error('cancelled')

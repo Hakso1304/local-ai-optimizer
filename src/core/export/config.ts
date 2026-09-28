@@ -3,6 +3,7 @@
 // benchmarked setup; Ollama / LM Studio outputs are translations and say so.
 import type { CandidateConfig, GenConfig, GpuBackendKind, KvType, ModelMeta, Recommendation } from '../../shared/bench-types'
 import { genLabel, samplingFor, templateKwargsFor } from '../benchmark/gen'
+import type { LoadConfig } from '../runtimes/types'
 
 /** Batch sizes the runner benchmarks with (session.ts: batchSize 2048, ubatch = DEFAULT_CANDIDATE_RULES.ubatch). */
 export const BENCH_BATCH = 2048
@@ -76,6 +77,27 @@ export function toLlamaServerArgs(c: ExportConfig): string[] {
     '--parallel', '1',
     '--cache-ram', '0' // as benchmarked: the default 8 GiB host prompt cache is RAM the measurement never saw
   ]
+}
+
+/** Serve the exported config from the app itself: the same launch the runner measured (LlamaCppBackend.loadModel adds
+ *  -fit off / --parallel 1 / --cache-ram 0 / host+port), plus the chosen sampling as server defaults so llama-server's
+ *  built-in web UI needs no per-request settings. */
+export function toLoadConfig(c: ExportConfig): LoadConfig {
+  const s = c.gen?.sampling
+  return {
+    modelPath: c.modelPath, contextSize: c.ctx, gpuLayers: c.gpuLayersAll ? 999 : c.gpuLayers, device: c.device ?? 'none',
+    threads: c.threads, batchSize: c.batch,
+    extraArgs: [
+      '-ub', String(c.ubatch), '-fa', c.flashAttn ? 'on' : 'off',
+      ...(c.kvType === 'f16' ? [] : ['-ctk', c.kvType, '-ctv', c.kvType]),
+      ...(c.kvOffload ? [] : ['-nkvo']), ...(c.mmap ? [] : ['-lm', 'none']),
+      '--temp', String(s?.temperature ?? 0),
+      ...(s?.top_p !== undefined ? ['--top-p', String(s.top_p)] : []),
+      ...(s?.top_k !== undefined ? ['--top-k', String(s.top_k)] : []),
+      ...(s?.min_p !== undefined ? ['--min-p', String(s.min_p)] : []),
+      ...(c.gen?.templateKwargs ? ['--chat-template-kwargs', JSON.stringify(c.gen.templateKwargs)] : [])
+    ]
+  }
 }
 
 /** Quote for cmd.exe / PowerShell / sh alike: double quotes around anything with spaces or shell metacharacters. */

@@ -1,6 +1,7 @@
 // Types shared between main, preload and renderer. No runtime code here.
 import type { BenchmarkRunResult, CandidateConfig, CliffReport, GenKnobs, GpuBackendKind, QuantSuggestion, GenQuality, ModelMeta, QualityResult, Recommendation, WorkloadId, WorkloadProfile, WorkloadScore } from './bench-types'
 import type { SessionEvent, SessionRequest, TelemetrySample } from './bench-events'
+import type { ExportConfig } from '../core/export/config'
 
 export type Status = 'available' | 'unavailable' | 'unsupported'
 
@@ -241,6 +242,10 @@ export interface RendererApi {
   /** Link a local model to a Hugging Face repo and fetch its sampling defaults (generation_config.json). */
   linkModelRepo(path: string, repoId: string): Promise<{ ok: boolean; generation?: unknown; error?: string }>
   benchSmoke(modelPath: string): Promise<SmokeResult>
+  /** Run the exported config from the app: starts llama-server as measured and opens its web UI in the browser. */
+  serveStart(cfg: ExportConfig): Promise<{ ok: boolean; url?: string; error?: string }>
+  serveStop(): Promise<{ ok: boolean; error?: string }>
+  serveStatus(): Promise<{ url: string | null; configId: string | null }>
 }
 
 // ---- Stored sessions (read side). Payload contract for benchmark_session / benchmark_run / recommendation rows. ----

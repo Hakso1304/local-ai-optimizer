@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_CANDIDATE_RULES as D } from '../src/core/benchmark/candidates'
-import { isInside, sanitizeRequest } from '../src/main/validate'
+import { isInside, sanitizeRequest, sanitizeServeConfig } from '../src/main/validate'
 
 const roots = ['D:\\llm-models', 'E:\\Product_1\\models']
 const ok = (raw: unknown) => {
@@ -77,5 +77,24 @@ describe('request validation (renderer → main trust boundary)', () => {
     } finally {
       rmSync(base, { recursive: true, force: true })
     }
+  })
+})
+
+describe('sanitizeServeConfig', () => {
+  const good = { sessionId: '1', configId: 'c', modelPath: 'D:\\llm-models\\m.gguf', modelName: 'm', ctx: 8192, gpuLayers: 32, gpuLayersAll: true, layers: 32, threads: 8,
+    batch: 2048, ubatch: 512, flashAttn: true, kvType: 'f16', device: 'Vulkan0', kvOffload: true, mmap: true, backend: 'vulkan', workload: 'coding' }
+  it('accepts a well-formed config and keeps only known sampling fields', () => {
+    const r = sanitizeServeConfig({ ...good, gen: { config: {}, sampling: { temperature: 0.7, top_p: 0.9, junk: 'x' }, templateKwargs: { enable_thinking: false } } }, roots)
+    expect(r).toMatchObject({ ok: true, cfg: { backend: 'vulkan', device: 'Vulkan0', ctx: 8192, gen: { sampling: { temperature: 0.7, top_p: 0.9 }, templateKwargs: { enable_thinking: false } } } })
+    expect((r as { cfg: { gen: { sampling: object } } }).cfg.gen.sampling).not.toHaveProperty('junk')
+  })
+  it('rejects paths outside the model roots, unknown backends/devices/kv types and non-integer numbers', () => {
+    expect(sanitizeServeConfig({ ...good, modelPath: 'C:\\elsewhere\\m.gguf' }, roots)).toMatchObject({ ok: false })
+    expect(sanitizeServeConfig({ ...good, backend: 'cuda' }, roots)).toMatchObject({ ok: false }) // no installed exe for it
+    expect(sanitizeServeConfig({ ...good, device: 'Vulkan0 --lora x' }, roots)).toMatchObject({ ok: false })
+    expect(sanitizeServeConfig({ ...good, kvType: 'q4_0' }, roots)).toMatchObject({ ok: false })
+    expect(sanitizeServeConfig({ ...good, threads: 7.5 }, roots)).toMatchObject({ ok: false })
+    expect(sanitizeServeConfig({ ...good, ctx: '8192' }, roots)).toMatchObject({ ok: false })
+    expect(sanitizeServeConfig(null, roots)).toMatchObject({ ok: false })
   })
 })
