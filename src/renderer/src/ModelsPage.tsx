@@ -1,10 +1,15 @@
 import { useEffect, useState } from 'react'
+import { exportConfigFrom, type ExportConfig } from '../../core/export/config'
+import type { KvType } from '../../shared/bench-types'
 import type { ModelInfo, SmokeResult } from '../../shared/types'
 
 const SOURCE = { llamacpp: 'folder', lmstudio: 'LM Studio', ollama: 'Ollama' } as const
 const gib = (b: number) => `${(b / 1024 ** 3).toFixed(2)} GiB`
 const params = (n: number | null) => (n == null ? '—' : n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : `${(n / 1e6).toFixed(0)}M`)
 const fmt = (v: unknown) => (v == null ? '—' : typeof v === 'number' ? String(Math.round(v * 100) / 100) : typeof v === 'object' ? JSON.stringify(v) : String(v))
+
+/** The Run… form. base = the latest recommendation's export config when it picked this model (prefill), else null. */
+type RunForm = { m: ModelInfo; ctx: number; all: boolean; ngl: number; kv: KvType; fa: boolean; threads: number; base: ExportConfig | null; note: string }
 
 /** Flatten a result into dotted key/value rows (raw view until the Results page exists). */
 function rows(o: object, prefix = ''): [string, unknown][] {
@@ -30,6 +35,37 @@ export function ModelsPage() {
   const load = () => { window.api.listModels().then(setModels, (e: Error) => setErr(e.message)) }
   useEffect(load, [])
 
+  // Run a model from the app: llama-server with the chosen launch config, chat in its built-in web UI.
+  const [form, setForm] = useState<RunForm | null>(null)
+  const [serve, setServe] = useState<{ url: string | null; configId: string | null; busy?: boolean; error?: string }>({ url: null, configId: null })
+  useEffect(() => { window.api.serveStatus().then(setServe, () => {}) }, [])
+  const openRun = async (m: ModelInfo) => {
+    let base: ExportConfig | null = null
+    try { // prefill from the latest recommendation for the current workload when it picked this model
+      const w = (await window.api.getSettings()).workload ?? 'fast_assistant'
+      const latest = await window.api.latestRecommendation(w)
+      const cid = latest?.recommendation.best?.configId
+      if (latest && cid) {
+        const cand = (await window.api.getSession(latest.sessionId))?.candidates.find((c) => c.config.id === cid)
+        if (cand?.model.id === m.id) base = exportConfigFrom(latest.recommendation, cand.config, cand.model, String(latest.sessionId))
+      }
+    } catch { /* no usable recommendation: defaults below */ }
+    setForm(base
+      ? { m, ctx: base.ctx, all: base.gpuLayersAll, ngl: base.gpuLayers, kv: base.kvType, fa: base.flashAttn, threads: base.threads, base, note: `Recommended configuration for ${base.workload} (benchmark ${base.sessionId}). Edit if you like.` }
+      : { m, ctx: Math.min(8192, m.meta?.contextLength ?? 8192), all: true, ngl: m.meta?.blockCount ?? 0, kv: 'f16', fa: true, threads: 0, base: null, note: 'No recommendation for this model yet (run a benchmark for one). Defaults: all layers on the GPU, threads = physical cores.' })
+  }
+  const start = async (f: RunForm) => {
+    setServe({ url: null, configId: null, busy: true })
+    const cfg: ExportConfig = {
+      ...(f.base ?? { sessionId: '', modelName: f.m.name, layers: f.m.meta?.blockCount ?? 0, batch: 2048, ubatch: 512, device: 'auto', kvOffload: true, mmap: true, backend: 'vulkan', workload: 'fast_assistant' }),
+      configId: f.base?.configId ?? `${f.m.id}|manual`, modelPath: f.m.path, ctx: f.ctx, gpuLayersAll: f.all, gpuLayers: f.all ? (f.m.meta?.blockCount ?? 0) : f.ngl, kvType: f.kv, flashAttn: f.fa, threads: f.threads
+    }
+    const r = await window.api.serveStart(cfg)
+    setServe(r.ok ? { url: r.url!, configId: cfg.configId } : { url: null, configId: null, error: r.error })
+    if (r.ok) setForm(null)
+  }
+  const stop = async () => { await window.api.serveStop(); setServe({ url: null, configId: null }) }
+
   const run = (m: ModelInfo) => {
     setBusy(m.id)
     setErr(null)
@@ -43,6 +79,25 @@ export function ModelsPage() {
         <button onClick={load}>Rescan</button>
       </header>
       {err && <p className="err">{err}</p>}
+      {serve.url && <p className="bar"><span>Running <b>{serve.configId}</b> at <a href={serve.url} target="_blank" rel="noreferrer">{serve.url}</a> (llama-server web UI)</span><button onClick={() => void stop()}>Stop model</button></p>}
+      {serve.error && <p className="err">{serve.error}</p>}
+      {form && (
+        <div className="export">
+          <h2>Run {form.m.name}</h2>
+          <p className="muted">{form.note}</p>
+          <div className="bar">
+            <label>Context <input type="number" min={512} step={512} value={form.ctx} style={{ width: 90 }} onChange={(e) => setForm({ ...form, ctx: Number(e.target.value) })} /></label>
+            <label><input type="checkbox" checked={form.all} onChange={(e) => setForm({ ...form, all: e.target.checked })} /> all layers on GPU</label>
+            {!form.all && <label>GPU layers <input type="number" min={0} max={form.m.meta?.blockCount ?? 999} value={form.ngl} style={{ width: 70 }} onChange={(e) => setForm({ ...form, ngl: Number(e.target.value) })} /></label>}
+            <label>KV cache <select value={form.kv} onChange={(e) => setForm({ ...form, kv: e.target.value as KvType })}><option value="f16">f16</option><option value="q8_0">q8_0</option></select></label>
+            <label><input type="checkbox" checked={form.fa} onChange={(e) => setForm({ ...form, fa: e.target.checked })} /> flash attention</label>
+            <label>Threads <input type="number" min={0} value={form.threads} title="0 = physical cores" style={{ width: 60 }} onChange={(e) => setForm({ ...form, threads: Number(e.target.value) })} /></label>
+            <button disabled={serve.busy || !!serve.url} onClick={() => void start(form)}>{serve.busy ? 'Starting…' : 'Start'}</button>
+            <button onClick={() => setForm(null)}>Cancel</button>
+          </div>
+          <p className="muted">Sampling (temperature, top-p, …) and the system prompt are set in the llama-server web UI that opens.</p>
+        </div>
+      )}
       <table>
         <thead><tr><th>Name</th><th>Source</th><th>Arch</th><th>Params</th><th>Quant</th><th>Ctx (train)</th><th>KV/token*</th><th>Size</th><th>Path</th><th /></tr></thead>
         <tbody>
@@ -64,6 +119,7 @@ export function ModelsPage() {
               <td>{gib(m.sizeBytes)}</td>
               <td className="muted">{m.path}</td>
               <td className="bar">
+                <button disabled={busy !== null || !!serve.url || !!serve.busy} title="Start llama-server with this model and chat with it" onClick={() => void openRun(m)}>Run…</button>
                 <button disabled={busy !== null} onClick={() => run(m)}>{busy === m.id ? 'Running…' : 'Smoke test'}</button>
                 {m.runtime === 'llamacpp' && (linking?.id === m.id ? (
                   <>

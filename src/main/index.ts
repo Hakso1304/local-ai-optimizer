@@ -288,6 +288,19 @@ ipcMain.handle('bench:smoke', async (_e, modelPath: string): Promise<SmokeResult
 // ---- Serve the recommended config from the app (llama-server + its built-in web UI in the default browser) ----
 let serving: { backend: LlamaCppBackend; configId: string } | null = null
 ipcMain.handle('serve:start', async (_e, raw: unknown): Promise<{ ok: boolean; url?: string; error?: string }> => {
+  // Models page "Run…" markers: device 'auto' → the device a benchmark would use; threads 0 → physical cores.
+  if (raw && typeof raw === 'object') {
+    const r = raw as Record<string, unknown>
+    if (r.device === 'auto' || r.threads === 0) {
+      const profile = profileCache ??= await scanSystem()
+      if (r.threads === 0) r.threads = profile.cpu.value?.physicalCores ?? 0
+      if (r.device === 'auto') {
+        r.device = (r.backend === 'hip'
+          ? pickDiscreteDevice(await llamaHip.listDevices())
+          : pickBenchmarkDevice(await llama.listDevices(), !!profile.gpus.value?.some((g) => g.isIntegrated)))?.id ?? null
+      }
+    }
+  }
   const v = sanitizeServeConfig(raw, modelRoots())
   if (!v.ok) return { ok: false, error: v.error }
   if (smokeBusy || active || installing || serving) return { ok: false, error: 'a benchmark, smoke run, served model or runtime install is already in progress' }
