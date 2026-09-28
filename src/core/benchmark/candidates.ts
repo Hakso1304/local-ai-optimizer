@@ -140,7 +140,7 @@ export function estimateMemory(m: ModelMeta, gpuLayers: number, ctx: number, kv:
   }
 }
 
-const pickGpu = (p: SystemProfile) => {
+export const pickGpu = (p: SystemProfile) => {
   const gpus = p.gpus.value ?? []
   return [...gpus.filter((g) => !g.isIntegrated)].sort((a, b) => (b.dedicatedVramBytes.value ?? 0) - (a.dedicatedVramBytes.value ?? 0))[0]
     ?? gpus.find((g) => g.isIntegrated)

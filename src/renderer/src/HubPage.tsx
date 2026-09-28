@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { HfGgufFile, HfModel, HubAccount, HubApi, HubProgress } from '../../shared/hub-types'
+import { budget, fitModels, type Fit, type FitModel } from '../../core/hub/fit'
 
 // Hub methods are spread into window.api by the preload (src/preload/hub.ts); listModels refreshes the Models list.
 const api = () => window.api as unknown as HubApi & { listModels?: () => Promise<unknown> }
@@ -8,6 +9,8 @@ const gib = (b: number) => (b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(2)} GiB`
 /** Immutable identity of one transfer: Resume and progress always refer to this, never to the repo being browsed. */
 interface Transfer { readonly repoId: string; readonly path: string; readonly destDir: string }
 const same = (a: Transfer | null, repoId: string, path: string) => !!a && a.repoId === repoId && a.path === path
+
+const FIT_LABEL: Record<Fit, string> = { gpu: 'full GPU', offload: 'partial offload', cpu: 'CPU / shared RAM' }
 
 const eta = (s: number | null) => (s === null ? '—' : s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m` : s >= 60 ? `${Math.floor(s / 60)}m ${Math.round(s % 60)}s` : `${Math.round(s)}s`)
 
@@ -26,8 +29,12 @@ export function HubPage() {
   const [state, setState] = useState<'idle' | 'downloading' | 'paused' | 'done'>('idle')
   const [err, setErr] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
+  const [fits, setFits] = useState<{ models: FitModel[]; vram: number; ram: number } | { error: string } | null>(null)
 
   useEffect(() => {
+    void Promise.all([window.api.scanSystem(), api().hubPopular()]).then(([p, r]) => {
+      setFits(r.ok ? { models: fitModels(r.models, p).slice(0, 15), ...budget(p) } : { error: r.error })
+    }, (e: Error) => setFits({ error: e.message }))
     void api().hubWhoami().then(setAccount)
     void api().hubDirs().then((d) => { setDirs(d); setDest((x) => x || d[d.length - 1] || '') })
     return api().onHubProgress(setProgress)
@@ -86,6 +93,30 @@ export function HubPage() {
           </div>
         )}
         {account?.error && <p className="muted">Saved token not valid: {account.error}</p>}
+      </div>
+
+      <div className="card">
+        <h2>Recommended for this PC <span className="muted">(estimated, Q4_K_M)</span></h2>
+        {!fits ? <p className="muted">Scanning system and loading popular models…</p> : 'error' in fits ? <p className="muted">Unavailable: {fits.error}</p> : (
+          <>
+            <p className="muted">Budget: {fits.vram ? `${gib(fits.vram)} VRAM + ` : ''}{gib(fits.ram)} RAM. Sizes are guessed from the repo name; benchmark to confirm.</p>
+            <table>
+              <thead><tr><th>Repository</th><th>Params</th><th>Est. size</th><th>Fit</th><th>Downloads</th><th /></tr></thead>
+              <tbody>
+                {fits.models.map((m) => (
+                  <tr key={m.id} className={m.id === repo ? 'active' : ''}>
+                    <td>{m.id}{m.gated ? <span className="pill warn-pill">gated</span> : null}</td>
+                    <td>{m.paramsB}B</td><td>~{gib(m.estBytes)}</td>
+                    <td><span className={`pill${m.fit === 'gpu' ? '' : ' warn-pill'}`}>{FIT_LABEL[m.fit]}</span></td>
+                    <td>{m.downloads.toLocaleString()}</td>
+                    <td><button className="mini" onClick={() => void open(m.id)}>Files</button></td>
+                  </tr>
+                ))}
+                {!fits.models.length && <tr><td colSpan={6} className="muted">No popular model fits the scanned memory.</td></tr>}
+              </tbody>
+            </table>
+          </>
+        )}
       </div>
 
       <div className="card">

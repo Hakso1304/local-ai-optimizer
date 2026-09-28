@@ -63,10 +63,12 @@ async function getJson<T>(url: string, token?: string, signal?: AbortSignal, bas
 
 export interface HfModel { id: string; downloads: number; likes: number; gated: boolean | 'auto' | 'manual'; lastModified: string | null }
 
-export async function searchModels(query: string, opts: Common & { limit?: number } = {}): Promise<HfModel[]> {
+/** Empty query = most-downloaded GGUF repos overall. */
+export async function searchModels(query: string, opts: Common & { limit?: number; pipelineTag?: string } = {}): Promise<HfModel[]> {
   const u = new URL('/api/models', opts.baseUrl ?? HF_BASE)
-  u.searchParams.set('search', query)
+  if (query) u.searchParams.set('search', query)
   u.searchParams.set('filter', 'gguf')
+  if (opts.pipelineTag) u.searchParams.set('pipeline_tag', opts.pipelineTag)
   u.searchParams.set('sort', 'downloads')
   u.searchParams.set('direction', '-1')
   u.searchParams.set('limit', String(Math.min(100, Math.max(1, opts.limit ?? 20))))

@@ -67,6 +67,10 @@ export function registerHubIpc(ipcMain: IpcMain, getWindow: () => BrowserWindow 
     try { return { ok: true, models: await searchModels(q.trim(), { token: loadToken() ?? undefined, limit: 30 }) } } catch (e) { return fail(e) }
   })
 
+  ipcMain.handle('hub:popular', async () => {
+    try { return { ok: true, models: await timeout(searchModels('', { token: loadToken() ?? undefined, limit: 100, pipelineTag: 'text-generation' })) } } catch (e) { return fail(e) }
+  })
+
   ipcMain.handle('hub:files', async (_e, repoId: unknown) => {
     if (typeof repoId !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(repoId)) return { ok: false, kind: 'not_found', error: 'bad repository id' }
     try { return { ok: true, files: await listGgufFiles(repoId, { token: loadToken() ?? undefined }) } } catch (e) { return fail(e) }
