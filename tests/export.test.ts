@@ -126,5 +126,6 @@ describe('export: agent setup for the served model', () => {
     expect(t).toContain('ANTHROPIC_BASE_URL = "http://127.0.0.1:14489"')
     expect(t).toContain('ANTHROPIC_MODEL = "Llama-3.2-3B-Instruct"')
     expect(t).not.toContain('\\n') // real newlines, not a literal backslash-n
+    expect(t).toContain('-d "{\\"model\\":\\"Llama-3.2-3B-Instruct\\"') // curl body quotes escaped for the shell
   })
 })

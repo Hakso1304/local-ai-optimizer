@@ -130,7 +130,7 @@ export function agentSetupText(url: string, alias: string, ctx: number): string 
     `# or in ~/.claude/settings.json: { "env": { "ANTHROPIC_BASE_URL": "${url}", "ANTHROPIC_AUTH_TOKEN": "none", "ANTHROPIC_MODEL": "${alias}" } }`,
     ``,
     `## curl`,
-    `curl ${url}/v1/chat/completions -H "Content-Type: application/json" -d "{\"model\":\"${alias}\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}"`,
+    `curl ${url}/v1/chat/completions -H "Content-Type: application/json" -d "{\\"model\\":\\"${alias}\\",\\"messages\\":[{\\"role\\":\\"user\\",\\"content\\":\\"hi\\"}]}"`,
     ``,
     `# Agents send long system prompts and tool schemas: use a context of 32K or more for agent work (Run… form).`
   ].join('\n')
