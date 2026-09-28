@@ -57,7 +57,7 @@ export function ModelsPage() {
   const start = async (f: RunForm) => {
     setServe({ ...SERVE_IDLE, busy: 'starting' })
     const cfg: ExportConfig = {
-      ...(f.base ?? { sessionId: '', modelName: f.m.name, layers: f.m.meta?.blockCount ?? 0, batch: 2048, ubatch: 512, device: 'auto', kvOffload: true, mmap: true, backend: 'vulkan', workload: 'fast_assistant' }),
+      ...(f.base ?? { sessionId: '', modelName: f.m.name, layers: f.m.meta?.blockCount ?? 0, batch: 2048, ubatch: 512, device: 'auto', kvOffload: true, mmap: true, backend: f.m.meta?.requiresBackend ?? 'vulkan', workload: 'fast_assistant' }),
       configId: f.base?.configId ?? `${f.m.id}|manual`, modelPath: f.m.path, ctx: f.ctx, gpuLayersAll: f.all, gpuLayers: f.all ? (f.m.meta?.blockCount ?? 0) : f.ngl, kvType: f.kv, flashAttn: f.fa, threads: f.threads
     }
     const r = await window.api.serveStart(cfg)
@@ -102,7 +102,7 @@ export function ModelsPage() {
         <tbody>
           {models?.map((m) => (
             <tr key={m.id}>
-              <td>{m.name}{m.meta?.incomplete && <span className="pill warn-pill" title={`${m.meta.fileSizeBytes} of ≥${m.meta.expectedMinBytes} bytes`}>incomplete download</span>}</td>
+              <td>{m.name}{m.meta?.incomplete && <span className="pill warn-pill" title={`${m.meta.fileSizeBytes} of ≥${m.meta.expectedMinBytes} bytes`}>incomplete download</span>}{m.meta?.requiresBackend === 'prism' && <span className="pill warn-pill" title={`ternary tensor types ${m.meta.tensorTypes.filter((t) => t >= 43).join(', ')} (PQ2_0 / PTQ1_0): mainline llama.cpp cannot load this file — install the PrismML build on the System page`}>needs PrismML build</span>}</td>
               <td className="muted" title={m.ollamaName}>{SOURCE[m.runtime]}</td>
               {m.meta ? (
                 <>

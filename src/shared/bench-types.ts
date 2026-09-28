@@ -123,6 +123,8 @@ export interface ModelMeta {
   /** MoE: `<arch>.expert_count` / `<arch>.expert_used_count` (gemma4: 128 / 8). Absent or 0 = dense. */
   expertCount?: number | null
   expertUsedCount?: number | null
+  /** Tensor types mainline ggml does not know (PrismML PQ2_0 / PTQ1_0 ternary): loads only on the 'prism' backend. */
+  requiresBackend?: 'prism'
   /** Generation knobs (filled by #2 from the chat template + optional HF generation_config.json). */
   genKnobs?: GenKnobs
   /** Same base model across quantizations (I-7.5): `<repoId>#<file stem without quant>`, from the HF sidecar. */
@@ -208,7 +210,8 @@ export interface GenQuality {
 export type KvType = 'f16' | 'q8_0'
 
 /** llama.cpp GPU backend build a config runs on (docs/HIP-BACKEND.md). */
-export type GpuBackendKind = 'vulkan' | 'hip' | 'cuda'
+export type GpuBackendKind = 'vulkan' | 'hip' | 'cuda' | 'prism'
+// 'prism' = the PrismML llama.cpp fork (Vulkan build): the only runtime for ternary PQ2_0 / PTQ1_0 files (Bonsai).
 
 export interface CandidateConfig {
   /** Deterministic: `${modelId}|ngl=<all|n>|kv=<type>|t=<threads>[|nkvo][|hip]`. Tie-breaks sort on it. */

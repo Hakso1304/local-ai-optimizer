@@ -31,6 +31,9 @@ const api: RendererApi & HubApi = {
   resumeBench: (id, opts) => ipcRenderer.invoke('bench:resume', id, opts),
   installRuntime: () => ipcRenderer.invoke('runtime:install'),
   installHipRuntime: () => ipcRenderer.invoke('runtime:installHip'),
+  installPrismRuntime: () => ipcRenderer.invoke('runtime:installPrism'),
+  addModelDir: () => ipcRenderer.invoke('settings:addModelDir'),
+  removeModelDir: (dir) => ipcRenderer.invoke('settings:removeModelDir', dir),
   installedBackends: () => ipcRenderer.invoke('runtime:backends'),
   onRuntimeProgress: (cb) => {
     const h = (_e: IpcRendererEvent, msg: string) => cb(msg)

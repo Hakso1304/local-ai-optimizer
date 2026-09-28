@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- Ternary models (PrismML Bonsai, PQ2_0 / PTQ1_0): the Models page flags files whose tensor types mainline llama.cpp rejects, and the System page can install the PrismML llama.cpp fork (Vulkan build) as an opt-in third backend. Such models run and benchmark on that backend only; verified on an Intel Arc iGPU (Bonsai 2 27B fully offloaded, ~4 tok/s).
+- Run a model from the app: "Run this model" (Results) and "Run…" (Models page, prefilled from the recommendation or defaults) start llama-server and open its chat UI; the running-model line shows the API base URL and model id, with a copy-paste setup for Claude Code, Cline, Continue and other agent tools.
+- Download page: "Add folder…" registers a model folder on another drive as a scan and download target (C: is often the small drive).
+- Classify the bare "Intel(R) Arc(TM) Graphics" adapter (Core Ultra iGPU) as integrated, so its shared-memory use is no longer aborted as VRAM spill.
 - Benchmark integrated-only laptops on Vulkan instead of forcing CPU-only: account for GPU allocations in shared system RAM, retain the live RAM floor, and avoid interpreting ordinary shared-GPU usage as dedicated-VRAM spill.
 - Create the writable `%APPDATA%\local-ai-optimizer\models` download folder during NSIS installation and on app startup (including portable builds); preserve downloads on uninstall.
 

@@ -87,6 +87,6 @@ export function CtxPick({ recommended, scored }: { recommended: number | null | 
 /** Backend a config runs on, for labels: device null = CPU; absent backend = Vulkan (pre-HIP sessions). */
 export function backendLabel(c: { backend?: string; device: string | null }): string {
   if (!c.device) return 'llama.cpp CPU'
-  const kind = c.backend === 'hip' ? 'ROCm (HIP)' : c.backend === 'cuda' ? 'CUDA' : 'Vulkan'
+  const kind = c.backend === 'hip' ? 'ROCm (HIP)' : c.backend === 'cuda' ? 'CUDA' : c.backend === 'prism' ? 'PrismML ternary (Vulkan)' : 'Vulkan'
   return `llama.cpp ${kind} (${c.device})`
 }

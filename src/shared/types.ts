@@ -84,6 +84,11 @@ export interface GgufMetadata {
   embeddingLength: number | null
   fileType: number | null
   quantName: string | null // from general.file_type, else parsed from the filename
+  /** Distinct ggml tensor types in the file, ascending. */
+  tensorTypes: number[]
+  /** A tensor type at/above MAINLINE_GGML_TYPE_COUNT (PrismML PQ2_0 = 142, PTQ1_0 = 141): mainline llama.cpp rejects
+   *  the file ("invalid ggml type"); only the PrismML build (backend 'prism') loads it. */
+  requiresBackend: 'prism' | null
   fileSizeBytes: number
   /** File shorter than the tensor data the header describes (partial download). Such models are not benchmarked. */
   incomplete: boolean
@@ -229,6 +234,11 @@ export interface RendererApi {
   installRuntime(): Promise<RuntimeDetection>
   /** Opt-in AMD ROCm/HIP build (~245 MiB) into its own dir, same release tag as the installed Vulkan build. */
   installHipRuntime(): Promise<RuntimeDetection>
+  /** Opt-in PrismML llama.cpp fork (Vulkan Windows build) for ternary PQ2_0 / PTQ1_0 models such as Bonsai. */
+  installPrismRuntime(): Promise<RuntimeDetection>
+  /** OS folder picker; the folder joins settings.modelDirs (scanned for models, allowed as a download target). */
+  addModelDir(): Promise<AppSettings>
+  removeModelDir(dir: string): Promise<AppSettings>
   /** llama.cpp backends installed side by side (each checked with its own llama-server --version). */
   installedBackends(): Promise<InstalledRuntime[]>
   onRuntimeProgress(cb: (msg: string) => void): () => void

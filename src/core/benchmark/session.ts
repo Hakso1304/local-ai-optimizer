@@ -214,7 +214,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   // generalised across them) and machine view. [0] = primary; compareBackends === false → primary only.
   const installed = deps.backends?.length ? deps.backends
     : [{ kind: deps.backendKind ?? 'vulkan', backend: deps.backend, runtimeVersion: deps.runtimeVersion ?? null, exePath: '', device: deps.gpuDevice }]
-  const states = await Promise.all((req.compareBackends === false ? installed.slice(0, 1) : installed).map(async (b) => {
+  // compareBackends=false keeps the primary only — plus 'prism', which is never a comparison but the sole runtime for its models.
+  const states = await Promise.all((req.compareBackends === false ? installed.filter((b, i) => i === 0 || b.kind === 'prism') : installed).map(async (b) => {
     const budgetKey = vramBudgetKey(deps.machine, b.kind, b.runtimeVersion)
     const observations = budgetKey ? applicableObservations(budgetKey, (await storage.listVramBudget?.(budgetKey.key)) ?? []) : []
     let inst: SessionBackend | null = null
@@ -388,8 +389,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       const suiteRows = stored.filter((r) => r.testId !== 'CR-04-long') as (GenRow & { backend?: string; configId?: string; suite?: string; suiteSeed?: number | null })[]
       const expectedBackend = best.config.backend ?? 'vulkan'
       const expectedRuntime = stateOf(best.config)?.runtime ?? null
-      const normalizeRuntime = (x: string | null | undefined) => !x ? null : /^(vulkan|cuda|hip|cpu):/.test(x) ? x : `vulkan:${x}`
-      const rowBackend = (r: typeof suiteRows[number]) => r.backend ?? (r.configId?.endsWith('|hip') ? 'hip' : 'vulkan')
+      const normalizeRuntime = (x: string | null | undefined) => !x ? null : /^(vulkan|cuda|hip|prism|cpu):/.test(x) ? x : `vulkan:${x}`
+      const rowBackend = (r: typeof suiteRows[number]) => r.backend ?? (r.configId?.endsWith('|hip') ? 'hip' : r.configId?.endsWith('|prism') ? 'prism' : 'vulkan')
       const expectedKeys = new Set(gens.flatMap((g) => suite.tests.flatMap((t) => Array.from({ length: samplesOf(g) }, (_, i) => `${g.id}|${t.id}|${i + 1}`))))
       const actualKeys = suiteRows.map((r) => `${r.genId ?? BASELINE_GEN.id}|${r.testId}|${r.sample ?? 1}`)
       const exactSuite = suiteRows.length === expectedKeys.size && new Set(actualKeys).size === expectedKeys.size && actualKeys.every((k) => expectedKeys.has(k))

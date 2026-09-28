@@ -120,6 +120,7 @@ export async function readGgufMetadata(path: string): Promise<GgufMetadata> {
     if (nTensors > MAX_TENSORS) throw new Error(`implausible tensor count ${nTensors}`)
     let params = 0
     let last = { offset: -1, bytes: 0 } // tensor with the highest data offset
+    const types = new Set<number>()
     for (let i = 0; i < nTensors; i++) {
       c.skip(await c.u64()) // name
       const nDims = await c.u32()
@@ -127,6 +128,7 @@ export async function readGgufMetadata(path: string): Promise<GgufMetadata> {
       for (let d = 0; d < nDims; d++) p *= await c.u64()
       params += p
       const type = await c.u32()
+      types.add(type)
       const offset = await c.u64()
       if (offset > last.offset) last = { offset, bytes: tensorBytes(type, p) }
     }
@@ -177,6 +179,8 @@ export async function readGgufMetadata(path: string): Promise<GgufMetadata> {
       embeddingLength,
       fileType,
       quantName: fileType != null ? (FTYPE[fileType] ?? `ftype_${fileType}`) : quantFromFilename(path),
+      tensorTypes: [...types].sort((a, b) => a - b),
+      requiresBackend: [...types].some((t) => t >= MAINLINE_GGML_TYPE_COUNT) ? 'prism' : null,
       fileSizeBytes: size,
       incomplete: size < expectedMinBytes, // split shards describe only their own tensors, so this holds per shard
       expectedMinBytes,
@@ -205,6 +209,11 @@ export async function readGgufMetadata(path: string): Promise<GgufMetadata> {
     await fh.close()
   }
 }
+
+/** GGML_TYPE_COUNT of the bundled mainline build: b11223 rejects Bonsai with "tensor 'output.weight' has invalid ggml
+ *  type 142. should be in [0, 43)". Types at or above it are fork-only (PrismML PQ2_0 = 142, PTQ1_0 = 141).
+ *  ponytail: bump when a mainline release adds types; the runtime does not report its count. */
+export const MAINLINE_GGML_TYPE_COUNT = 43
 
 // ggml_type → [block size in elements, bytes per block] (ggml.c type_traits). Unknown types count 0 (lower bound).
 const GGML_BLOCK: Record<number, [number, number]> = {
@@ -323,6 +332,7 @@ export function toModelMeta(info: ModelInfo): { meta: ModelMeta } | { meta: null
       headsKvPerLayer: g.headCountKvPerLayer, fullAttentionInterval: g.fullAttentionInterval, slidingWindowPattern: g.slidingWindowPattern,
       keyLengthSwa: g.keyLengthSwa, valueLengthSwa: g.valueLengthSwa, supportsThinking: g.supportsThinking,
       expertCount: g.expertCount, expertUsedCount: g.expertUsedCount,
+      ...(g.requiresBackend ? { requiresBackend: g.requiresBackend } : {}),
       genKnobs: g.genKnobs,
       ...repoFacts(g)
     }

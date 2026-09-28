@@ -91,6 +91,7 @@ describe('sanitizeServeConfig', () => {
   it('rejects paths outside the model roots, unknown backends/devices/kv types and non-integer numbers', () => {
     expect(sanitizeServeConfig({ ...good, modelPath: 'C:\\elsewhere\\m.gguf' }, roots)).toMatchObject({ ok: false })
     expect(sanitizeServeConfig({ ...good, backend: 'cuda' }, roots)).toMatchObject({ ok: false }) // no installed exe for it
+    expect(sanitizeServeConfig({ ...good, backend: 'prism' }, roots)).toMatchObject({ ok: true, cfg: { backend: 'prism' } })
     expect(sanitizeServeConfig({ ...good, device: 'Vulkan0 --lora x' }, roots)).toMatchObject({ ok: false })
     expect(sanitizeServeConfig({ ...good, kvType: 'q4_0' }, roots)).toMatchObject({ ok: false })
     expect(sanitizeServeConfig({ ...good, threads: 7.5 }, roots)).toMatchObject({ ok: false })

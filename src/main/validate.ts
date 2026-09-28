@@ -99,7 +99,7 @@ export function sanitizeServeConfig(raw: unknown, modelRoots: string[]): { ok: t
   if (!raw || typeof raw !== 'object') return { ok: false, error: 'bad config' }
   const r = raw as Record<string, unknown>
   if (typeof r.modelPath !== 'string' || !insideSomeRoot(r.modelPath, modelRoots)) return { ok: false, error: 'model path not in a configured model dir' }
-  const backend = r.backend === 'hip' ? 'hip' : r.backend === 'vulkan' ? 'vulkan' : null
+  const backend = r.backend === 'hip' ? 'hip' : r.backend === 'prism' ? 'prism' : r.backend === 'vulkan' ? 'vulkan' : null
   if (!backend) return { ok: false, error: `unsupported backend ${String(r.backend)}` }
   const kvType = r.kvType === 'q8_0' ? 'q8_0' : r.kvType === 'f16' ? 'f16' : null
   if (!kvType) return { ok: false, error: `bad kvType ${String(r.kvType)}` }

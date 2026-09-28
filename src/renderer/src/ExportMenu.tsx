@@ -28,7 +28,7 @@ export function ExportMenu({ rec, cand, sessionId, ctx }: { rec: Recommendation;
   const exe = exes[cfg.backend] ?? null
   const missing = !exe
   const command = () => [
-    ...(missing ? [`# measured on the llama.cpp ${cfg.backend === 'hip' ? 'ROCm (HIP)' : cfg.backend.toUpperCase()} build, which is not installed: install it on the System page (or use that build's llama-server)`] : []),
+    ...(missing ? [`# measured on the llama.cpp ${cfg.backend === 'hip' ? 'ROCm (HIP)' : cfg.backend === 'prism' ? 'PrismML ternary' : cfg.backend.toUpperCase()} build, which is not installed: install it on the System page (or use that build's llama-server)`] : []),
     [toLlamaServerCommand(cfg, exe ?? 'llama-server'), genArgs].filter(Boolean).join(' ')
   ].join('\n')
   const json = () => gen ? JSON.stringify({ ...JSON.parse(toJson(cfg, exe)), generation: { ...gen, templateKwargs: kwargs ?? null } }, null, 2) : toJson(cfg, exe)

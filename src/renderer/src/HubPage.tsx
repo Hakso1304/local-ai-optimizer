@@ -150,6 +150,10 @@ export function HubPage() {
             <select value={dest} onChange={(e) => setDest(e.target.value)} disabled={state === 'downloading'}>
               {dirs.map((d) => <option key={d} value={d}>{d}</option>)}
             </select>
+            <button className="mini" disabled={state === 'downloading'} title="Add a folder on another drive; it is scanned for models and offered as a download target"
+              onClick={() => void window.api.addModelDir().then(() => api().hubDirs()).then((d) => { setDirs(d); setDest(d[d.length - 1] ?? '') })}>Add folder…</button>
+            {dest && dest !== dirs[0] && <button className="mini" disabled={state === 'downloading'} title="Forget this folder (files are not deleted)"
+              onClick={() => void window.api.removeModelDir(dest).then(() => api().hubDirs()).then((d) => { setDirs(d); setDest(d[d.length - 1] ?? '') })}>Remove</button>}
           </div>
           {!files ? <p className="muted">Loading files…</p> : (
             <table>

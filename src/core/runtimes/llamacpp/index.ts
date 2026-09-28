@@ -11,11 +11,13 @@ import { pipeline } from 'node:stream/promises'
 import type { ReadableStream as WebReadableStream } from 'node:stream/web'
 import { runPowerShell, runProcess } from '../../exec'
 import type { GpuVendor, RuntimeDetection } from '../../../shared/types'
-import { expectedSha256, pickReleaseAsset, pickRocmAsset, type ReleaseAsset } from './assets'
+import { expectedSha256, pickPrismAsset, pickReleaseAsset, pickRocmAsset, type ReleaseAsset } from './assets'
 import { getJson, type HealthStatus, type InferenceBackend, type LoadConfig, type LoadResult, type ModelInfo, type PromptRequest, type PromptResult, type RuntimeStats } from '../types'
 import { acceptedSampling, classifyExit, emptyDeclared, parseDevices, parseLogLine, parseSse, toPromptResult, type CompletionChunk, type ExitReason, type LlamaDevice } from './parse'
 
 const RELEASES_URL = 'https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=20'
+// The fork publishes proper (non-prerelease) releases, so /latest is fine here.
+const PRISM_RELEASE_URL = 'https://api.github.com/repos/PrismML-Eng/llama.cpp/releases/latest'
 export const VULKAN_ASSET = /^llama-.+-bin-win-vulkan-x64\.zip$/
 
 interface GhRelease {
@@ -342,8 +344,17 @@ export class LlamaCppBackend implements InferenceBackend {
   /** Download + extract the newest official Windows build for this GPU into vendorDir if not installed.
    *  NVIDIA with a CUDA-capable driver → CUDA build + cudart (same dir); anything else, or any CUDA failure → Vulkan.
    *  Installed = release-tag.txt ("<tag> <build>") exists; it is written last, after an atomic rename. */
-  async ensureRuntime(log: (m: string) => void = () => {}, pref: { vendor: GpuVendor; cudaMajor?: number; hip?: boolean; tag?: string } = { vendor: 'other' }): Promise<RuntimeDetection> {
+  async ensureRuntime(log: (m: string) => void = () => {}, pref: { vendor: GpuVendor; cudaMajor?: number; hip?: boolean; prism?: boolean; tag?: string } = { vendor: 'other' }): Promise<RuntimeDetection> {
     if (existsSync(join(this.vendorDir, 'release-tag.txt'))) return this.detect()
+    // Opt-in PrismML fork (ternary models) into its own vendorDir. Marker "<tag> prism-vulkan".
+    if (pref.prism) {
+      const rel = await getJson<GhRelease>(PRISM_RELEASE_URL, 15_000)
+      const asset = pickPrismAsset(rel.assets)
+      if (!asset) throw new Error(`no win-vulkan-x64 build in PrismML release ${rel.tag_name}`)
+      log(`PrismML ternary build ${asset.name}`)
+      await this.installAssets(rel.tag_name, [asset], 'prism-vulkan', log)
+      return this.detect()
+    }
     // Opt-in ROCm/HIP build into this (separate) vendorDir, at the installed Vulkan build's tag when given so an A/B
     // compares backends of the same llama.cpp build. Marker "<tag> hip".
     if (pref.hip) {

@@ -250,7 +250,7 @@ export function generateCandidates(
     return gpuBudget === null ? null : eb === null ? gpuBudget : Math.min(gpuBudget, eb)
   }
 
-  const idOf = (ngl: number, kv: KvType, kvOnGpu = true) => `${model.id}|ngl=${ngl >= model.layers ? 'all' : ngl}|kv=${kv}|t=${threads}${kvOnGpu ? '' : '|nkvo'}${runtime.backend === 'hip' ? '|hip' : ''}`
+  const idOf = (ngl: number, kv: KvType, kvOnGpu = true) => `${model.id}|ngl=${ngl >= model.layers ? 'all' : ngl}|kv=${kv}|t=${threads}${kvOnGpu ? '' : '|nkvo'}${runtime.backend === 'hip' ? '|hip' : runtime.backend === 'prism' ? '|prism' : ''}`
 
   /** Returns the candidate, or null after recording the rejection. heavy: resident-RAM check, no keep-over step. */
   const build = (ngl: number, kv: KvType, heavy?: { kvOnGpu: boolean }): CandidateConfig | null => {
@@ -294,7 +294,7 @@ export function generateCandidates(
     if (machine.gpuSharedRam && ngl > 0) notes.push('integrated GPU: device allocations share system RAM; GPU and CPU estimates are added against available RAM')
     const src = `DESIGN §2.7 at ${ctxK(steps[0])}`
     return {
-      id, ...(runtime.backend === 'hip' || runtime.backend === 'cuda' ? { backend: runtime.backend } : {}), modelId: model.id, device: ngl > 0 ? machine.gpuDevice : null, gpuLayers: Math.min(ngl, model.layers), gpuLayersAll: ngl >= model.layers,
+      id, ...(runtime.backend === 'hip' || runtime.backend === 'cuda' || runtime.backend === 'prism' ? { backend: runtime.backend } : {}), modelId: model.id, device: ngl > 0 ? machine.gpuDevice : null, gpuLayers: Math.min(ngl, model.layers), gpuLayersAll: ngl >= model.layers,
       kvType: kv, flashAttn: true, threads, ctxSteps: steps, skippedSteps: skipped.sort((a, b) => a.ctx - b.ctx),
       estVramBytes: est(e0.vramBytes, src), estRamBytes: est(heavy ? e0.ramResidentBytes : e0.ramBytes, src), notes,
       ...(machine.gpuSharedRam && ngl > 0 ? { mmap: false } : {}),
