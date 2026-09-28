@@ -12,7 +12,7 @@ import type { ReadableStream as WebReadableStream } from 'node:stream/web'
 import { runPowerShell, runProcess } from '../../exec'
 import type { GpuVendor, RuntimeDetection } from '../../../shared/types'
 import { expectedSha256, pickPrismAsset, pickReleaseAsset, pickRocmAsset, type ReleaseAsset } from './assets'
-import { getJson, type HealthStatus, type InferenceBackend, type LoadConfig, type LoadResult, type ModelInfo, type PromptRequest, type PromptResult, type RuntimeStats } from '../types'
+import { fetchOrExplain, getJson, type HealthStatus, type InferenceBackend, type LoadConfig, type LoadResult, type ModelInfo, type PromptRequest, type PromptResult, type RuntimeStats } from '../types'
 import { acceptedSampling, classifyExit, emptyDeclared, parseDevices, parseLogLine, parseSse, toPromptResult, type CompletionChunk, type ExitReason, type LlamaDevice } from './parse'
 
 const RELEASES_URL = 'https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=20'
@@ -394,7 +394,7 @@ export class LlamaCppBackend implements InferenceBackend {
         const zip = join(tmpdir(), asset.name)
         zips.push(zip)
         log(`downloading ${asset.name} (${(asset.size / 1e6).toFixed(1)} MB)`)
-        const res = await fetch(asset.browser_download_url, { signal: AbortSignal.timeout(15 * 60_000) })
+        const res = await fetchOrExplain(asset.browser_download_url, { signal: AbortSignal.timeout(15 * 60_000) })
         if (!res.ok || !res.body) throw new Error(`download ${asset.browser_download_url} -> HTTP ${res.status}`)
         let received = 0
         let shown = -1
