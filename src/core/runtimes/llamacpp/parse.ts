@@ -123,6 +123,12 @@ export function parseDevices(out: string): LlamaDevice[] {
 export function pickDiscreteDevice(devs: LlamaDevice[]): LlamaDevice | null {
   return devs.find((d) => !INTEGRATED_GPU_NAME.test(d.name)) ?? null
 }
+/** Use an integrated Vulkan adapter only when there is no discrete device; never select virtual adapters. */
+export function pickBenchmarkDevice(devs: LlamaDevice[], allowIntegrated: boolean): LlamaDevice | null {
+  return pickDiscreteDevice(devs) ?? (allowIntegrated
+    ? devs.find((d) => INTEGRATED_GPU_NAME.test(d.name) && !/Microsoft|Virtual|Parsec|Remote/i.test(d.name)) ?? null
+    : null)
+}
 
 export type ExitReason = 'oom' | 'device_lost' | 'crash'
 

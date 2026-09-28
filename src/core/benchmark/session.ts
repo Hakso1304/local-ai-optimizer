@@ -532,7 +532,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
           const residentOf = (r: BenchmarkRunResult) => { const x = readingOf(r); return x.state === 'over' ? x.bytes : null }
           const sh0 = residentOf(out.run)
           let first: BenchmarkRunResult | null = null
-          if (isUsable(out.run) && sh0 !== null && !signal?.aborted) {
+          if (!machine.gpuSharedRam && isUsable(out.run) && sh0 !== null && !signal?.aborted) {
             await storage.saveRun(sessionId, out.run, out.detail)
             recordAttempt(out.run, out.detail)
             log('warn', `${cand.id} @${ctx}: ${(sh0 / GiB).toFixed(2)} GiB resident in shared memory — restarting the server and re-measuring once (I-2.8)`)
@@ -570,7 +570,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
           // N4: qualification needs MEASURED request timings (runtime timings, not wall-clock estimates) on every attempt.
           const timed = (r: BenchmarkRunResult) => r.decodeTps.kind === 'measured' && r.prefillTps.kind === 'measured' && r.ttftMs.kind === 'measured'
           const { budgetKey } = cur
-          if (budgetKey && kind && dedN !== null) {
+          if (!machine.gpuSharedRam && budgetKey && kind && dedN !== null) {
             const b = buffersOf(out.detail)
             const o: VramBudgetObservation = {
               kind, qualified: budgetKey.verified && timed(run) && (!first || timed(first)) && (kind === 'clean' || b.largestBytes !== null), ceilingBytes: dedN,
@@ -724,7 +724,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     checkStuck() // the previous server could not be confirmed dead: never start another one
     const avail = osRam() ?? val(machine.ramAvailableBytes)
     const e = estimateMemory(model, cand.gpuLayersAll ? model.layers : cand.gpuLayers, ctx, cand.kvType, rules.ubatch, cand.kvOffload !== false)
-    const need = req.heavyMode ? e.ramResidentBytes : e.ramBytes
+    const need = (req.heavyMode ? e.ramResidentBytes : e.ramBytes) + (machine.gpuSharedRam ? e.vramBytes : 0)
     // mmap'd weights already uploaded to the GPU are clean file pages the OS can drop: they lower 'available RAM'
     // (calibration: ≈ file size) without being memory pressure. Credit them in the in-step floor check.
     // Without mmap (heavy configs) there are no reclaimable file pages to credit.
@@ -791,7 +791,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         // ladder moves on), not an abort. The RAM floor always aborts.
         // Budget-independent pressure guard: observed residual (per-PID shared − pinned − baseline) above the limit on
         // `spillAbortSamples` consecutive measured samples. An unknown reading breaks the streak.
-        const adj = s.procVramSharedBytes != null ? adjustedSpill(s.procVramSharedBytes, s.procVramDedicatedBytes, pinned, spillBase).value : null
+        const adj = !machine.gpuSharedRam && s.procVramSharedBytes != null ? adjustedSpill(s.procVramSharedBytes, s.procVramDedicatedBytes, pinned, spillBase).value : null
         // While load declarations are arriving, protect against a new growth in
         // residual shared memory. The first observed load level can be host-pinned,
         // so raw shared by itself cannot justify an abort (I-4.0).
@@ -957,7 +957,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       decodeTps: tps(decode, estDecode, 'predicted'),
       totalMs: measured(median(reps.map((r) => r.totalMs)), 'client wall clock', 'no successful request'),
       peakVramBytes: tele(pk.max.procVramDedicatedBytes, 'procVramDedicatedBytes'),
-      peakSharedGpuBytes: spillMetric(),
+      peakSharedGpuBytes: machine.gpuSharedRam ? na('integrated GPU uses shared system RAM; shared usage is not VRAM spill') : spillMetric(),
       // I-2.8: same-window adapter free VRAM at the per-PID shared peak (placement vs capacity)
       adapterFreeAtSharedPeakBytes: (() => {
         const withShared = samples.filter((x) => x.procVramSharedBytes != null && x.vramDedicatedBytes != null)
@@ -965,7 +965,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         const peak = withShared.reduce((a, b) => (b.procVramSharedBytes! > a.procVramSharedBytes! ? b : a))
         return { value: Math.max(0, vramTotal - peak.vramDedicatedBytes!), kind: 'measured' as const, source: 'VRAM total − adapter dedicated at the per-PID shared peak (typeperf)' }
       })(),
-      peakSharedGpuRawBytes: tele(pk.max.procVramSharedBytes, 'procVramSharedBytes'),
+      peakSharedGpuRawBytes: machine.gpuSharedRam ? na('integrated GPU shared memory is normal, not a dedicated-VRAM spill signal') : tele(pk.max.procVramSharedBytes, 'procVramSharedBytes'),
       hostPinnedBytes: { value: pinned, kind: 'declared', source: 'llama-server load log: host-side model/KV/compute buffers' },
       peakRamBytes: tele(pk.max.procRamPrivateBytes, 'procRamPrivateBytes'),
       avgGpuUtil: tele(win.meanGpuUtilPct, 'gpuUtilPct', win.n),
@@ -991,7 +991,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     checkStuck()
     const ngl = cand.gpuLayersAll ? model.layers : cand.gpuLayers
     const e = estimateMemory(model, ngl, ctx, cand.kvType, rules.ubatch, cand.kvOffload !== false)
-    const need = req.heavyMode ? e.ramResidentBytes : e.ramBytes
+    const need = (req.heavyMode ? e.ramResidentBytes : e.ramBytes) + (machine.gpuSharedRam ? e.vramBytes : 0)
     const avail = osRam() ?? val(machine.ramAvailableBytes)
     if (avail !== null && need > avail - ramFloor) {
       return { ok: false, reason: `${what} skipped: est. RAM ${(need / GiB).toFixed(1)} GiB > available ${(avail / GiB).toFixed(1)} GiB − floor ${(ramFloor / GiB).toFixed(1)} GiB` }

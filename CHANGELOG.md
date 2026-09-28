@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+- Benchmark integrated-only laptops on Vulkan instead of forcing CPU-only: account for GPU allocations in shared system RAM, retain the live RAM floor, and avoid interpreting ordinary shared-GPU usage as dedicated-VRAM spill.
+- Create the writable `%APPDATA%\local-ai-optimizer\models` download folder during NSIS installation and on app startup (including portable builds); preserve downloads on uninstall.
 
 - Use CIM creation time for inspection and a tolerant creation-time match for kill, restoring session completion after `0a20d21`..`bbe12dc` (`127d96f`).
 - Keep standalone quality MEASURED and disclose an unverified thinking state (`127d96f`).

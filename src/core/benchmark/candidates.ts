@@ -10,7 +10,7 @@ const MiB = 1024 ** 2
 const GiB = 1024 ** 3
 
 /** Bumped whenever planning (estimates, budgets, ordering) changes behaviour. */
-export const CANDIDATE_RULES_VERSION = 'cand-1.5'
+export const CANDIDATE_RULES_VERSION = 'cand-1.6'
 
 export const DEFAULT_CANDIDATE_RULES = {
   /** 128K only runs where declared ctx and the VRAM estimate allow; otherwise it documents the memory bound. */
@@ -140,8 +140,11 @@ export function estimateMemory(m: ModelMeta, gpuLayers: number, ctx: number, kv:
   }
 }
 
-const pickGpu = (p: SystemProfile) => (p.gpus.value ?? []).filter((g) => !g.isIntegrated)
-  .sort((a, b) => (b.dedicatedVramBytes.value ?? 0) - (a.dedicatedVramBytes.value ?? 0))[0]
+const pickGpu = (p: SystemProfile) => {
+  const gpus = p.gpus.value ?? []
+  return [...gpus.filter((g) => !g.isIntegrated)].sort((a, b) => (b.dedicatedVramBytes.value ?? 0) - (a.dedicatedVramBytes.value ?? 0))[0]
+    ?? gpus.find((g) => g.isIntegrated)
+}
 
 /** The per-process VRAM ceiling is specific to GPU, driver, backend build and allocation pattern (13.25 GiB for a
  *  14B vs 11.6 GiB for 8B f16 64K on one card; a ROCm/HIP backend used the full 16 GB on another) — observations
@@ -149,7 +152,7 @@ const pickGpu = (p: SystemProfile) => (p.gpus.value ?? []).filter((g) => !g.isIn
 export function vramBudgetKey(p: SystemProfile, backend: string, runtimeVersion: string | null | undefined): { key: string; verified: boolean } | null {
   const discrete = (p.gpus.value ?? []).filter((g) => !g.isIntegrated)
   const g = pickGpu(p)
-  if (!g) return null
+  if (!g || g.isIntegrated) return null // shared RAM is not a dedicated-VRAM ceiling
   // Stable identity = the adapter's PNP device id (not its display name); unambiguous only with one discrete GPU.
   const verified = discrete.length === 1 && !!g.pnpDeviceId && !!g.driverVersion && !!runtimeVersion
   return { key: `pnp:${g.pnpDeviceId || '?'}|drv:${g.driverVersion ?? '?'}|${backend}:${runtimeVersion ?? '?'}`, verified }
@@ -186,7 +189,7 @@ export function budgetFor(machine: MachineLimits, largestBufferBytes: number | n
     : { value: total * VRAM_BUDGET_FALLBACK_SHARE, kind: 'estimated', source: `no measured budget on this machine yet; assuming ${Math.round(VRAM_BUDGET_FALLBACK_SHARE * 100)} % of the adapter total (some GPUs/backends allow 100 %)` }
 }
 
-/** Largest non-integrated GPU with the most VRAM. gpuDevice comes from `llama-server --list-devices` mapping. */
+/** Prefer the largest discrete GPU; use an integrated adapter only if no discrete GPU exists. */
 export function machineFromProfile(p: SystemProfile, gpuDevice: string | null, vramInUseBytes?: number, budgetObservations: VramBudgetObservation[] = []): MachineLimits {
   const NA = (reason: string): Metric => ({ value: null, kind: 'unavailable', reason })
   const gpu = pickGpu(p)
@@ -195,12 +198,13 @@ export function machineFromProfile(p: SystemProfile, gpuDevice: string | null, v
   // Explicit arg wins; else the profile's pre-launch reading. Runner and main's planFor both come through here.
   const inUse = vramInUseBytes ?? (p.vramInUse?.status === 'available' ? p.vramInUse.value ?? undefined : undefined)
   const m: MachineLimits = {
-    vramBytes: !gpu ? NA('no discrete GPU') : v?.status === 'available' && v.value ? { value: v.value, kind: 'declared', source: v.source } : NA(v?.error ?? 'VRAM size not reported'),
+    vramBytes: !gpu || gpu.isIntegrated ? NA(gpu?.isIntegrated ? 'integrated GPU uses shared system RAM, not dedicated VRAM' : 'no GPU') : v?.status === 'available' && v.value ? { value: v.value, kind: 'declared', source: v.source } : NA(v?.error ?? 'VRAM size not reported'),
     vramInUseBytes: inUse === undefined ? NA(p.vramInUse?.error ?? 'not measured before launch') : { value: inUse, kind: 'measured', source: p.vramInUse?.source ?? 'GPU Adapter Memory\\Dedicated Usage' },
     ramTotalBytes: ram ? { value: ram.totalBytes, kind: 'declared', source: p.ram.source } : NA(p.ram.error ?? 'RAM not reported'),
     ramAvailableBytes: ram ? { value: ram.availableBytes, kind: 'measured', source: p.ram.source } : NA(p.ram.error ?? 'RAM not reported'),
     physicalCores: p.cpu.value?.physicalCores ?? 1,
     gpuDevice: gpu ? gpuDevice : null,
+    gpuSharedRam: !!gpu?.isIntegrated && gpuDevice !== null,
     vramBudgetObservations: budgetObservations
   }
   return { ...m, vramEffectiveBudgetBytes: budgetFor(m, null) }
@@ -220,7 +224,7 @@ export function generateCandidates(
   const threads = machine.physicalCores
   const hasGpu = machine.gpuDevice !== null && runtime.backend !== 'cpu'
   const vram = num(machine.vramBytes)
-  const gpuBudget = vram === null ? null : vram - (num(machine.vramInUseBytes) ?? rules.vramInUseUnknownBytes) - rules.vramMarginBytes
+  const gpuBudget = machine.gpuSharedRam ? null : vram === null ? null : vram - (num(machine.vramInUseBytes) ?? rules.vramInUseUnknownBytes) - rules.vramMarginBytes
   const ramBase = num(machine.ramAvailableBytes) ?? num(machine.ramTotalBytes)
   const ramBudget = ramBase === null ? null : ramBase - rules.ramReserveBytes
   const heavyRamBudget = ramBase === null ? null : ramBase - Math.max(4 * GiB, rules.heavyRamReserveBytes)
@@ -228,9 +232,9 @@ export function generateCandidates(
   const inUse = num(machine.vramInUseBytes)
   const planning: PlanningSnapshot = {
     vramTotalBytes: vram,
-    vramInUse: inUse !== null ? machine.vramInUseBytes : { value: rules.vramInUseUnknownBytes, kind: 'estimated', source: `assumed default (${machine.vramInUseBytes.reason ?? 'reading unavailable'})` },
-    planningVramBudgetBytes: vram === null ? null : vram - (inUse ?? rules.vramInUseUnknownBytes),
-    planningReserveBytes: rules.vramMarginBytes,
+    vramInUse: machine.gpuSharedRam ? { value: null, kind: 'unavailable', reason: 'integrated GPU shares system RAM' } : inUse !== null ? machine.vramInUseBytes : { value: rules.vramInUseUnknownBytes, kind: 'estimated', source: `assumed default (${machine.vramInUseBytes.reason ?? 'reading unavailable'})` },
+    planningVramBudgetBytes: machine.gpuSharedRam ? null : vram === null ? null : vram - (inUse ?? rules.vramInUseUnknownBytes),
+    planningReserveBytes: machine.gpuSharedRam ? rules.ramReserveBytes : rules.vramMarginBytes,
     ramAvailableBytes: ramBase, ramReserveBytes: rules.ramReserveBytes, candidateRulesVersion: CANDIDATE_RULES_VERSION
   }
   const rejected: RejectedCandidate[] = []
@@ -261,7 +265,7 @@ export function generateCandidates(
       const e = estimateMemory(model, ngl, ctx, kv, rules.ubatch, kvOnGpu)
       const vramNeed = e.vramBytes
       const stepBudget = vramBudgetAt(e, ngl, ctx, kv)
-      const ramNeed = heavy ? e.ramResidentBytes : e.ramBytes
+      const ramNeed = (heavy ? e.ramResidentBytes : e.ramBytes) + (machine.gpuSharedRam ? e.vramBytes : 0)
       const rb = heavy ? heavyRamBudget : ramBudget
       if (rb !== null && ramNeed > rb) {
         skipped.push({ ctx, reason: `skipped_memory: est. RAM ${gib(ramNeed)} > available − reserve ${gib(rb)}`, skip: { resource: 'ram', estimateBytes: ramNeed, budgetBytes: rb, ruleId: 'I-2.3' } })
@@ -284,27 +288,33 @@ export function generateCandidates(
     const e0 = estimateMemory(model, ngl, steps[0], kv, rules.ubatch, kvOnGpu)
     if (e0.kvUnknown) notes.push('KV size unknown: pruned on weights only — runtime guards apply')
     else if (lowConf || e0.kvSource.startsWith('declared')) notes.push(`KV estimate: ${e0.kvSource}`)
-    if (ngl > 0 && gpuBudget === null) notes.push('VRAM size unknown; not pruned by VRAM, runtime guards apply')
+    if (ngl > 0 && gpuBudget === null && !machine.gpuSharedRam) notes.push('VRAM size unknown; not pruned by VRAM, runtime guards apply')
     if (ngl > 0 && gpuBudget !== null && machine.vramInUseBytes.value === null) notes.push(`VRAM in use by other apps unknown (${machine.vramInUseBytes.reason ?? 'unavailable'}); budget assumes ${gib(rules.vramInUseUnknownBytes)}`)
     if (ramBudget === null) notes.push('RAM size unknown; not pruned by RAM, runtime guards apply')
+    if (machine.gpuSharedRam && ngl > 0) notes.push('integrated GPU: device allocations share system RAM; GPU and CPU estimates are added against available RAM')
     const src = `DESIGN §2.7 at ${ctxK(steps[0])}`
     return {
       id, ...(runtime.backend === 'hip' || runtime.backend === 'cuda' ? { backend: runtime.backend } : {}), modelId: model.id, device: ngl > 0 ? machine.gpuDevice : null, gpuLayers: Math.min(ngl, model.layers), gpuLayersAll: ngl >= model.layers,
       kvType: kv, flashAttn: true, threads, ctxSteps: steps, skippedSteps: skipped.sort((a, b) => a.ctx - b.ctx),
       estVramBytes: est(e0.vramBytes, src), estRamBytes: est(heavy ? e0.ramResidentBytes : e0.ramBytes, src), notes,
-      ...(kvOnGpu ? {} : { kvOffload: false }), planning: ngl > 0 ? { ...planning, effectiveBudget: budgetFor(machine, largestOf(estimateMemory(model, ngl, steps[steps.length - 1], kv, rules.ubatch, kvOnGpu))) } : planning
+      ...(machine.gpuSharedRam && ngl > 0 ? { mmap: false } : {}),
+      ...(kvOnGpu ? {} : { kvOffload: false }), planning: ngl > 0 ? { ...planning, effectiveBudget: machine.gpuSharedRam ? { value: null, kind: 'unavailable', reason: 'integrated GPU uses shared RAM' } : budgetFor(machine, largestOf(estimateMemory(model, ngl, steps[steps.length - 1], kv, rules.ubatch, kvOnGpu))) } : planning
     }
   }
 
   /** Heavy mode: the largest ngl whose est. VRAM (weights share + KV share + compute) fits the budget at ctx. */
   const maxNgl = (ctx: number, kvOnGpu: boolean) => {
-    for (let n = model.layers - 1; n >= 1; n--) if (estimateMemory(model, n, ctx, 'f16', rules.ubatch, kvOnGpu).vramBytes <= gpuBudget!) return n
+    for (let n = model.layers - 1; n >= 1; n--) {
+      const e = estimateMemory(model, n, ctx, 'f16', rules.ubatch, kvOnGpu)
+      if (machine.gpuSharedRam ? heavyRamBudget !== null && e.ramResidentBytes + e.vramBytes <= heavyRamBudget : e.vramBytes <= gpuBudget!) return n
+    }
     return 0
   }
   const heavyLadder = () => {
-    if (gpuBudget === null || !ladder.length) { rejected.push({ id: idOf(0, 'f16'), modelId: model.id, reason: 'heavy mode needs a known VRAM size' }); return }
+    if ((!machine.gpuSharedRam && gpuBudget === null) || !ladder.length) { rejected.push({ id: idOf(0, 'f16'), modelId: model.id, reason: 'heavy mode needs a known memory budget' }); return }
     const target = ladder.filter((c) => c <= workload.targetContext).at(-1) ?? ladder[0]
-    const why = model.fileBytes > gpuBudget ? `weights ${gib(model.fileBytes)} > VRAM budget ${gib(gpuBudget)}` : `weights + KV > VRAM budget ${gib(gpuBudget)}`
+    const why = machine.gpuSharedRam ? 'full offload exceeds available shared system RAM'
+      : model.fileBytes > gpuBudget! ? `weights ${gib(model.fileBytes)} > VRAM budget ${gib(gpuBudget!)}` : `weights + KV > VRAM budget ${gib(gpuBudget!)}`
     // ponytail: 4 fixed probes (most layers at the smallest ctx, at the target ctx, KV in RAM, CPU baseline);
     // a finer ngl sweep only if measurements show it matters.
     const kvUnknown = estimateMemory(model, model.layers, target, 'f16', rules.ubatch).kvUnknown

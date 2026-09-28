@@ -158,6 +158,26 @@ describe('runSession', () => {
     expect(s.status).toEqual(['running', 'done'])
   })
 
+  it('runs integrated Vulkan against system RAM without treating shared GPU allocations as spill', async () => {
+    const integrated: SystemProfile = { ...machine,
+      gpus: { ...machine.gpus, value: [{ ...machine.gpus.value![0], name: 'Intel Iris Xe', isIntegrated: true,
+        dedicatedVramBytes: { value: 16 * GiB, status: 'available', source: 'shared aperture' } }] } }
+    const { s, backend, rec } = await run(() => ({}), { ladder: [2048, 4096] }, {
+      machine: integrated, readRamAvailableBytes: () => 20 * GiB,
+      startSampler: (pid) => {
+        const xs = [{ ...sample(pid - 1000), procVramSharedBytes: 4 * GiB }]
+        return { samples: xs, unavailable: {}, stop: () => xs }
+      }
+    })
+    expect(ctxOf(backend)).toEqual([2048, 4096])
+    expect(backend.calls.loads[0].extraArgs).toEqual(['-ub', '512', '-fa', 'on', '-lm', 'none'])
+    expect(s.runs.every((r) => r.status === 'pass' && r.peakSharedGpuBytes.kind === 'unavailable')).toBe(true)
+    expect(s.runs.every((r) => r.minRamAvailBytes?.value === 20 * GiB)).toBe(true)
+    expect(s.budget).toEqual([])
+    expect(rec?.provisionalBest?.headline).toContain('integrated GPU (shared RAM; RAM floor guarded)')
+    expect(rec?.ranked[0].breakdown.find((x) => x.component === 'memory')?.input.kind).toBe('measured')
+  })
+
   it('stops the ladder at OOM and records the step as fail/oom with the stderr tail', async () => {
     const { s, backend, events } = await run((ctx) => (ctx === 16384 ? { load: 'oom' } : {}))
     expect(ctxOf(backend)).toEqual([2048, 4096, 8192, 16384])

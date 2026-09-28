@@ -60,6 +60,8 @@ export interface MachineLimits {
   physicalCores: number
   /** Runtime device id, e.g. 'Vulkan0'. null = CPU only. */
   gpuDevice: string | null
+  /** Integrated GPU allocations use system RAM, not a separate dedicated-VRAM budget. */
+  gpuSharedRam?: boolean
   /** Per-process dedicated VRAM ceilings observed on this GPU + driver + backend build (spill began there). */
   vramBudgetObservations?: VramBudgetObservation[]
   /** The most conservative per-process budget (min of observations), or the 80 % fallback labelled estimated. */

@@ -72,7 +72,7 @@ export interface DecisionTrace {
     configId: string; confirmed: boolean; undecided: string[]; total: number; qualityContribution: number; gen: string | null
     referenceCtx: number | null; referenceWhy: string | null; recommendedCtx: number | null; recommendedWhy: string | null; failures: string[]
     basis: { component: string; rung: number | null; kind: string; scope?: string }[]
-    safety: { ramFloor: 'ok' | 'violated' | 'not verified'; spill: 'measured' | 'not verified' }
+    safety: { ramFloor: 'ok' | 'violated' | 'not verified'; spill: 'measured' | 'not verified' | 'not applicable' }
     qualityVsWinner: { difference: Difference | null; reason?: string } | null
   }[]
   steps: TraceStep[]
@@ -498,7 +498,7 @@ export function verdicts(data: InterpretData, workload: WorkloadId, request: Req
     // F1: unknown RAM safety is not met (I-1.1) — independent of score weights; it also cannot veto (hard).
     if (ram === 'not verified') fail(v, { ruleId: rule('mem.ram-floor').id, hard: true, notVerified: 'RAM safety floor', text: tag('mem.ram-floor', `RAM safety not verified up to ${fmtCtx(upTo)} (no recorded floor or measured minimum) — counts as not met`) })
     const recRun = v.scored.runs.find((r) => r.ctx === (v.cs.recommendedCtx ?? v.cs.referenceCtx))
-    safety.set(v, { ramFloor: ram, spill: recRun?.peakSharedGpuBytes.kind === 'measured' ? 'measured' : 'not verified' })
+    safety.set(v, { ramFloor: ram, spill: machine.gpuSharedRam ? 'not applicable' : recRun?.peakSharedGpuBytes.kind === 'measured' ? 'measured' : 'not verified' })
   }
   for (const v of all) {
     const { cs, coverage } = v

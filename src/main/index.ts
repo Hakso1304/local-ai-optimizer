@@ -1,12 +1,12 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { freemem } from 'node:os'
 import type { DatabaseSync } from 'node:sqlite'
 import { join } from 'node:path'
 import { scanSystem } from '../core/system/scanner'
 import { detectRuntimes } from '../core/runtimes'
 import { LlamaCppBackend, killStaleServer } from '../core/runtimes/llamacpp'
-import { pickDiscreteDevice } from '../core/runtimes/llamacpp/parse'
+import { pickBenchmarkDevice, pickDiscreteDevice } from '../core/runtimes/llamacpp/parse'
 import { openDb } from '../core/storage/db'
 import { sessionInputs, getSession, getSessionResume, latestRecommendation, listSessions, listVramBudget, makeSessionStorage, markInterrupted, seedDemoSession, telemetryForRun, type PlanFor } from '../core/storage/sessions'
 import { REQUIRED_CTX, insideSomeRoot, isWorkloadId, rowId, sanitizeRequest } from './validate'
@@ -57,7 +57,7 @@ function writeSettings(patch: Partial<AppSettings>): AppSettings {
   return next
 }
 
-/** Bundled models dir plus settings.modelDirs (user-added; none by default). Missing dirs are skipped. */
+/** Writable default models dir plus settings.modelDirs (user-added; none by default). */
 function modelDirs(): string[] {
   const s = readSettings()
   const extra = Array.isArray(s.modelDirs) ? s.modelDirs.filter((d): d is string => typeof d === 'string') : []
@@ -156,7 +156,7 @@ ipcMain.handle('models:fit', async (_e, w: WorkloadId): Promise<ModelFit> => {
   const infos = await listAllModels()
   const devices = await llama.listDevices().catch(() => null)
   if (!devices) return { reasons: Object.fromEntries(infos.map((m) => [m.id, 'llama.cpp runtime not installed (System page)'])), vramInUseBytes: null, vramTotalBytes: null }
-  const device = pickDiscreteDevice(devices)?.id ?? null
+  const device = pickBenchmarkDevice(devices, !!profileCache.gpus.value?.some((g) => g.isIntegrated))?.id ?? null
   const kind = device ? primaryBackendKind() : 'cpu'
   const bk = vramBudgetKey(profileCache, kind, (await llama.detect()).version)
   const machine = machineFromProfile(await withVramInUse(profileCache), device, undefined, bk ? applicableObservations(bk, listVramBudget(needDb(), bk.key)) : [])
@@ -270,8 +270,9 @@ ipcMain.handle('bench:smoke', async (_e, modelPath: string): Promise<SmokeResult
   smokeBusy = true
   try {
     // Deliberately tiny: ctx 2048, 32 tokens, one warmup + one measured request.
-    const dev = pickDiscreteDevice(await llama.listDevices())
-    if (!dev) throw new Error('no discrete Vulkan device reported by llama-server --list-devices')
+    const profile = profileCache ??= await scanSystem()
+    const dev = pickBenchmarkDevice(await llama.listDevices(), !!profile.gpus.value?.some((g) => g.isIntegrated))
+    if (!dev) throw new Error('no physical Vulkan device reported by llama-server --list-devices')
     const load = await llama.loadModel({ modelPath, contextSize: 2048, gpuLayers: 99, device: dev.id })
     const text = 'Explain in one sentence what a GPU does.'
     await llama.warmup(text)
@@ -285,6 +286,7 @@ ipcMain.handle('bench:smoke', async (_e, modelPath: string): Promise<SmokeResult
 
 /** The scan plus a fresh reading of VRAM already in use (other apps), so planning budgets what is actually free. */
 async function withVramInUse(p: SystemProfile, signal?: AbortSignal): Promise<SystemProfile> {
+  if (!(p.gpus.value ?? []).some((g) => !g.isIntegrated)) return { ...p, vramInUse: { value: null, status: 'unavailable', source: 'integrated GPU', error: 'no separate dedicated-VRAM budget' } }
   const r = await readVramInUse(20_000, signal)
   return {
     ...p,
@@ -312,7 +314,7 @@ async function startSession(req: SessionRequest, storedMachine?: SystemProfile, 
     const runtime = await llama.detect()
     if (runtime.status !== 'available') throw new Error('llama.cpp runtime is not installed: install it on the System page first')
     const [infos, devices] = await Promise.all([listAllModels(), llama.listDevices()])
-    const device = pickDiscreteDevice(devices)?.id ?? null
+    const device = pickBenchmarkDevice(devices, !!profile.gpus.value?.some((g) => g.isIntegrated))?.id ?? null
     const models: ModelMeta[] = []
     for (const id of req.modelIds) {
       const info = infos.find((m) => m.path === id)
@@ -385,6 +387,9 @@ function createWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  // The packaged app's default download destination is userData/models, not the read-only install/asar dir.
+  // Also covers portable builds and upgrades that did not run the NSIS install hook.
+  mkdirSync(bundledModelsDir(), { recursive: true })
   // LAO_SEED_DEMO=1 uses a separate DB file so fixture data can never reach the real one.
   db = openDb(join(app.getPath('userData'), DEMO ? 'optimizer-demo.db' : 'optimizer.db'))
   const n = markInterrupted(db) // a previous app run quit mid-session (before-quit can't await the runner)

@@ -312,12 +312,13 @@ describe('X15: the benchmark device is the dGPU', () => {
     expect(m.gpuDevice).toBe('Vulkan0')
   })
 
-  it('only an iGPU → no discrete GPU, gpuDevice null, VRAM unavailable (not 0)', async () => {
+  it('only an iGPU → Vulkan device retained, with no fictitious dedicated VRAM', async () => {
     const raw = JSON.parse(readFileSync(join(__dirname, '../fixtures/scan-rx9070.json'), 'utf8'))
     raw.video.data = raw.video.data.filter((v: { Name: string }) => v.Name.includes('(TM) Graphics'))
     const p = await scanSystem({ powershell: async () => JSON.stringify(raw), exec: async () => '' })
     const m = machineFromProfile(p, 'Vulkan1')
-    expect(m.gpuDevice).toBeNull()
+    expect(m.gpuDevice).toBe('Vulkan1')
+    expect(m.gpuSharedRam).toBe(true)
     expect(m.vramBytes).toMatchObject({ value: null, kind: 'unavailable' })
   })
 })

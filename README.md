@@ -19,6 +19,8 @@ nothing is guessed silently.
 1. System page: *Install llama.cpp runtime* (first run).
 2. Models page: check your models. **Download from Hugging Face** (Download page, or the button on the Benchmark
    page): search → pick a repository → pick a GGUF file → choose one of your configured model folders → Download.
+   Installed builds create a writable default folder at `%APPDATA%\local-ai-optimizer\models` (the install directory
+   and app.asar are not writable). Portable builds create it on first launch; downloaded GGUFs remain there after uninstall.
    Signing in is optional; public models work without it. Gated models need a read token (*Open token page*, paste
    it; it is stored encrypted on this PC) and the model's license accepted on huggingface.co. Downloads show
    progress, speed and ETA, can be paused and resumed (partial file kept) or cancelled, are checked against the
@@ -38,8 +40,10 @@ nothing is guessed silently.
 
 - Windows 11, x64 (developed and tested there; Windows 10 is untested). The scanner and telemetry use PowerShell 5.1,
   WMI/CIM, the registry and `typeperf`; no admin rights are needed
-- A GPU with a Vulkan driver (AMD / NVIDIA / Intel). NVIDIA gets the CUDA build when its driver supports it
-  (untested on real NVIDIA hardware). CPU-only works but is slow
+- A GPU with a Vulkan driver (AMD / NVIDIA / Intel). On integrated-only laptops the Vulkan iGPU is used and
+  allocations are planned against available system RAM minus 4 GiB; the live floor is at least 4 GiB or 8% of
+  total RAM, whichever is higher. The shared-memory aperture is not dedicated VRAM. NVIDIA gets the CUDA build
+  when supported (untested on real NVIDIA hardware). CPU-only works but is slow.
 - Disk: ~30 MB for the runtime (a CUDA build adds its runtime DLLs), plus the GGUF models you test (0.4–17+ GB each)
 - Internet for the runtime download (github.com/ggml-org/llama.cpp) and optional Hugging Face downloads
 - For development only: Node 24+ and npm. No compilers and no native Node modules (storage is the built-in `node:sqlite`)
