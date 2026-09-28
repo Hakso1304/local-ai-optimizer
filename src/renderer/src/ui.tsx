@@ -1,20 +1,40 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 // Small shared view helpers. No logic beyond formatting.
 import type { Metric, ProvenanceKind } from '../../shared/bench-types'
 
 import { agentSetupText } from '../../core/export/config'
 import type { ServeStatus } from '../../shared/types'
 
+export type ServeView = ServeStatus & { busy?: 'starting' | 'stopping'; error?: string }
+export const SERVE_IDLE: ServeView = { url: null, configId: null, alias: null, ctx: null, stopping: false }
+
+/** Served-model state shared by the Models and Results pages: main is the source of truth (serve:status), stop
+ *  shows progress and any teardown error instead of silently leaving the line on "Running". */
+export function useServe() {
+  const [serve, setServe] = useState<ServeView>(SERVE_IDLE)
+  const refresh = useCallback(() => window.api.serveStatus().then((s) => setServe({ ...s, ...(s.stopping ? { busy: 'stopping' as const } : {}) }), () => {}), [])
+  useEffect(() => { void refresh() }, [refresh])
+  const stop = async () => {
+    setServe((s) => ({ ...s, busy: 'stopping', error: undefined }))
+    const r = await window.api.serveStop().catch((e: Error) => ({ ok: false, error: e.message }))
+    const s = await window.api.serveStatus().catch(() => SERVE_IDLE)
+    setServe(r.ok ? SERVE_IDLE : { ...s, error: r.error })
+  }
+  return { serve, setServe, stop, refresh }
+}
+
 /** Status line for the model served from the app: web UI link, API details, agent setup to copy, stop. */
-export function RunningModel({ s, onStop }: { s: ServeStatus; onStop: () => void }) {
+export function RunningModel({ s, onStop }: { s: ServeView; onStop: () => void }) {
   const [copied, setCopied] = useState(false)
   if (!s.url) return null
+  const stopping = s.busy === 'stopping'
   const copy = async () => { await navigator.clipboard.writeText(agentSetupText(s.url!, s.alias ?? 'local-model', s.ctx ?? 0)); setCopied(true); setTimeout(() => setCopied(false), 2000) }
   return (
     <p className="bar">
       <span>Running <b title={s.configId ?? ''}>{s.alias}</b> — chat: <a href={s.url} target="_blank" rel="noreferrer">{s.url}</a> · API: <code>{s.url}/v1</code> (OpenAI + Anthropic compatible, tool calling on) · model id <code>{s.alias}</code></span>
-      <button onClick={() => void copy()} title="Base URL, model id and env vars for Claude Code, Cline, Continue, OpenCode and other agent tools">{copied ? 'Copied' : 'Copy agent setup'}</button>
-      <button onClick={onStop}>Stop model</button>
+      <button disabled={stopping} onClick={() => void copy()} title="Base URL, model id and env vars for Claude Code, Cline, Continue, OpenCode and other agent tools">{copied ? 'Copied' : 'Copy agent setup'}</button>
+      <button disabled={stopping} onClick={onStop} title="Kills llama-server and verifies its process tree is gone (a few seconds)">{stopping ? 'Stopping…' : 'Stop model'}</button>
+      {s.error && <span className="err">Stop failed: {s.error} — retry Stop; nothing else can start a server until the cleanup is verified.</span>}
     </p>
   )
 }

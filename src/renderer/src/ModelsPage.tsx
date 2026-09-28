@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { exportConfigFrom, type ExportConfig } from '../../core/export/config'
 import type { KvType } from '../../shared/bench-types'
-import type { ModelInfo, ServeStatus, SmokeResult } from '../../shared/types'
-import { RunningModel } from './ui'
+import type { ModelInfo, SmokeResult } from '../../shared/types'
+import { RunningModel, SERVE_IDLE, useServe } from './ui'
 
 const SOURCE = { llamacpp: 'folder', lmstudio: 'LM Studio', ollama: 'Ollama' } as const
 const gib = (b: number) => `${(b / 1024 ** 3).toFixed(2)} GiB`
@@ -38,9 +38,7 @@ export function ModelsPage() {
 
   // Run a model from the app: llama-server with the chosen launch config, chat in its built-in web UI.
   const [form, setForm] = useState<RunForm | null>(null)
-  const idle: ServeStatus = { url: null, configId: null, alias: null, ctx: null }
-  const [serve, setServe] = useState<ServeStatus & { busy?: boolean; error?: string }>(idle)
-  useEffect(() => { window.api.serveStatus().then(setServe, () => {}) }, [])
+  const { serve, setServe, stop } = useServe()
   const openRun = async (m: ModelInfo) => {
     let base: ExportConfig | null = null
     try { // prefill from the latest recommendation for the current workload when it picked this model
@@ -57,16 +55,15 @@ export function ModelsPage() {
       : { m, ctx: Math.min(8192, m.meta?.contextLength ?? 8192), all: true, ngl: m.meta?.blockCount ?? 0, kv: 'f16', fa: true, threads: 0, base: null, note: 'No recommendation for this model yet (run a benchmark for one). Defaults: all layers on the GPU, threads = physical cores.' })
   }
   const start = async (f: RunForm) => {
-    setServe({ ...idle, busy: true })
+    setServe({ ...SERVE_IDLE, busy: 'starting' })
     const cfg: ExportConfig = {
       ...(f.base ?? { sessionId: '', modelName: f.m.name, layers: f.m.meta?.blockCount ?? 0, batch: 2048, ubatch: 512, device: 'auto', kvOffload: true, mmap: true, backend: 'vulkan', workload: 'fast_assistant' }),
       configId: f.base?.configId ?? `${f.m.id}|manual`, modelPath: f.m.path, ctx: f.ctx, gpuLayersAll: f.all, gpuLayers: f.all ? (f.m.meta?.blockCount ?? 0) : f.ngl, kvType: f.kv, flashAttn: f.fa, threads: f.threads
     }
     const r = await window.api.serveStart(cfg)
-    setServe(r.ok ? await window.api.serveStatus() : { ...idle, error: r.error })
+    setServe(r.ok ? await window.api.serveStatus() : { ...SERVE_IDLE, error: r.error })
     if (r.ok) setForm(null)
   }
-  const stop = async () => { await window.api.serveStop(); setServe(idle) }
 
   const run = (m: ModelInfo) => {
     setBusy(m.id)
@@ -82,7 +79,7 @@ export function ModelsPage() {
       </header>
       {err && <p className="err">{err}</p>}
       <RunningModel s={serve} onStop={() => void stop()} />
-      {serve.error && <p className="err">{serve.error}</p>}
+      {serve.error && !serve.url && <p className="err">{serve.error}</p>}
       {form && (
         <div className="export">
           <h2>Run {form.m.name}</h2>
@@ -94,7 +91,7 @@ export function ModelsPage() {
             <label>KV cache <select value={form.kv} onChange={(e) => setForm({ ...form, kv: e.target.value as KvType })}><option value="f16">f16</option><option value="q8_0">q8_0</option></select></label>
             <label><input type="checkbox" checked={form.fa} onChange={(e) => setForm({ ...form, fa: e.target.checked })} /> flash attention</label>
             <label>Threads <input type="number" min={0} value={form.threads} title="0 = physical cores" style={{ width: 60 }} onChange={(e) => setForm({ ...form, threads: Number(e.target.value) })} /></label>
-            <button disabled={serve.busy || !!serve.url} onClick={() => void start(form)}>{serve.busy ? 'Starting…' : 'Start'}</button>
+            <button disabled={!!serve.busy || !!serve.url} onClick={() => void start(form)}>{serve.busy === 'starting' ? 'Starting…' : 'Start'}</button>
             <button onClick={() => setForm(null)}>Cancel</button>
           </div>
           <p className="muted">Sampling (temperature, top-p, …) and the system prompt are set in the llama-server web UI that opens.</p>

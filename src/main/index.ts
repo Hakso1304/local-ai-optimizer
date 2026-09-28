@@ -286,7 +286,10 @@ ipcMain.handle('bench:smoke', async (_e, modelPath: string): Promise<SmokeResult
 })
 
 // ---- Serve the recommended config from the app (llama-server + its built-in web UI in the default browser) ----
-let serving: { backend: LlamaCppBackend; configId: string; alias: string; ctx: number } | null = null
+let serving: { backend: LlamaCppBackend; configId: string; alias: string; ctx: number; url: string; stopping: boolean; error?: string } | null = null
+const serveStatus = (): ServeStatus => serving
+  ? { url: serving.url, configId: serving.configId, alias: serving.alias, ctx: serving.ctx, stopping: serving.stopping, ...(serving.error ? { error: serving.error } : {}) }
+  : { url: null, configId: null, alias: null, ctx: null, stopping: false }
 ipcMain.handle('serve:start', async (_e, raw: unknown): Promise<{ ok: boolean; url?: string; error?: string }> => {
   // Models page "Run…" markers: device 'auto' → the device a benchmark would use; threads 0 → physical cores.
   if (raw && typeof raw === 'object') {
@@ -305,10 +308,11 @@ ipcMain.handle('serve:start', async (_e, raw: unknown): Promise<{ ok: boolean; u
   if (!v.ok) return { ok: false, error: v.error }
   if (smokeBusy || active || installing || serving) return { ok: false, error: 'a benchmark, smoke run, served model or runtime install is already in progress' }
   const backend = v.cfg.backend === 'hip' ? llamaHip : llama
-  serving = { backend, configId: v.cfg.configId, alias: modelAlias(v.cfg.modelName), ctx: v.cfg.ctx } // claim before the first await
+  serving = { backend, configId: v.cfg.configId, alias: modelAlias(v.cfg.modelName), ctx: v.cfg.ctx, url: '', stopping: false } // claim before the first await
   try {
     await backend.loadModel(toLoadConfig(v.cfg))
     const url = backend.url!
+    serving.url = url
     await shell.openExternal(url)
     return { ok: true, url }
   } catch (e) {
@@ -317,13 +321,27 @@ ipcMain.handle('serve:start', async (_e, raw: unknown): Promise<{ ok: boolean; u
     return { ok: false, error: (e as Error).message }
   }
 })
-ipcMain.handle('serve:stop', async () => {
+/** Verified teardown (same path as the benchmark's unload: identity check, tree kill, descendant scans — a few
+ *  seconds). A failure keeps `serving` set with the error so the UI shows it and Stop can be retried; nothing else
+ *  may start a server until the cleanup is verified (fail-safe, like the runner's checkStuck). */
+ipcMain.handle('serve:stop', async (): Promise<{ ok: boolean; error?: string }> => {
   if (!serving) return { ok: false, error: 'nothing is being served' }
-  await serving.backend.unloadModel()
-  serving = null
-  return { ok: true }
+  if (serving.stopping) return { ok: false, error: 'already stopping' }
+  const me = serving
+  me.stopping = true
+  try {
+    await me.backend.unloadModel()
+    if (serving === me) serving = null
+    return { ok: true }
+  } catch (e) {
+    const error = (e as Error).message
+    console.warn(`serve:stop failed: ${error}`)
+    me.stopping = false
+    me.error = error
+    return { ok: false, error }
+  }
 })
-ipcMain.handle('serve:status', (): ServeStatus => (serving?.backend.url ? { url: serving.backend.url, configId: serving.configId, alias: serving.alias, ctx: serving.ctx } : { url: null, configId: null, alias: null, ctx: null }))
+ipcMain.handle('serve:status', serveStatus)
 
 /** The scan plus a fresh reading of VRAM already in use (other apps), so planning budgets what is actually free. */
 async function withVramInUse(p: SystemProfile, signal?: AbortSignal): Promise<SystemProfile> {

@@ -249,7 +249,7 @@ export interface RendererApi {
 }
 
 /** The model the app is serving (serve:start), if any. alias = the API model id (llama-server --alias). */
-export interface ServeStatus { url: string | null; configId: string | null; alias: string | null; ctx: number | null }
+export interface ServeStatus { url: string | null; configId: string | null; alias: string | null; ctx: number | null; stopping: boolean; error?: string }
 
 // ---- Stored sessions (read side). Payload contract for benchmark_session / benchmark_run / recommendation rows. ----
 

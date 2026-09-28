@@ -2,18 +2,16 @@ import { useEffect, useState } from 'react'
 import { exportConfigFrom, provenanceNote, toJson, toLlamaServerCommand, toLmStudioSettings, toOllamaModelfile } from '../../core/export/config'
 import { templateKwargsFor } from '../../core/benchmark/gen'
 import type { Recommendation } from '../../shared/bench-types'
-import type { ServeStatus, SessionCandidate } from '../../shared/types'
-import { RunningModel } from './ui'
+import type { SessionCandidate } from '../../shared/types'
+import { RunningModel, SERVE_IDLE, useServe } from './ui'
 
 /** Export of the recommended config. The llama-server command reproduces the measured launch exactly; Ollama and
  *  LM Studio outputs are translations (LM Studio keys unverified). */
 export function ExportMenu({ rec, cand, sessionId, ctx }: { rec: Recommendation; cand: SessionCandidate | undefined; sessionId: number; ctx?: number | null }) {
   const [done, setDone] = useState<string | null>(null)
   const [exes, setExes] = useState<Record<string, string | null>>({})
-  const idle: ServeStatus = { url: null, configId: null, alias: null, ctx: null }
-  const [serve, setServe] = useState<ServeStatus & { busy?: boolean; error?: string }>(idle)
+  const { serve, setServe, stop } = useServe()
   useEffect(() => { window.api.installedBackends().then((bs) => setExes(Object.fromEntries(bs.map((b) => [b.kind, b.status === 'available' ? b.exePath : null]))), () => {}) }, [])
-  useEffect(() => { window.api.serveStatus().then(setServe, () => {}) }, [])
   const base = cand ? exportConfigFrom(rec, cand.config, cand.model, String(sessionId)) : null
   // An interpretation "use-context" action can pin -c (e.g. the last clean rung); otherwise recommendedCtx.
   const cfg = base && ctx ? { ...base, ctx } : base
@@ -40,16 +38,15 @@ export function ExportMenu({ rec, cand, sessionId, ctx }: { rec: Recommendation;
     setDone(r.saved ? `${label} saved to ${r.saved}` : null)
   }
   const run = async () => {
-    setServe({ ...idle, busy: true })
+    setServe({ ...SERVE_IDLE, busy: 'starting' })
     const r = await window.api.serveStart(cfg)
-    setServe(r.ok ? await window.api.serveStatus() : { ...idle, error: r.error })
+    setServe(r.ok ? await window.api.serveStatus() : { ...SERVE_IDLE, error: r.error })
   }
-  const stop = async () => { await window.api.serveStop(); setServe(idle) }
   return (
     <div className="export">
       {serve.url
         ? <RunningModel s={serve} onStop={() => void stop()} />
-        : <div className="bar"><button disabled={missing || serve.busy} onClick={() => void run()} title="Start llama-server with this exact config and open its chat UI in your browser">{serve.busy ? 'Starting…' : 'Run this model'}</button>{serve.error && <span className="err">{serve.error}</span>}</div>}
+        : <div className="bar"><button disabled={missing || !!serve.busy} onClick={() => void run()} title="Start llama-server with this exact config and open its chat UI in your browser">{serve.busy === 'starting' ? 'Starting…' : 'Run this model'}</button>{serve.error && <span className="err">{serve.error}</span>}</div>}
       <div className="bar">
         <button disabled={missing} onClick={() => void copy('llama-server command', command())}>Copy llama-server command</button>
         <button onClick={() => void copy('Ollama Modelfile', modelfile())}>Copy Ollama Modelfile</button>
