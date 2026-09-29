@@ -17,6 +17,7 @@ table { width: 100%; border-collapse: collapse; margin-top: 12px; }
 th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
 th { color: var(--muted); font-weight: normal; }
 tr.group td { background: var(--line); padding-top: 8px; cursor: help; }
+.bar h2 { margin: 0; flex: 1; }
 .muted { color: var(--muted); } .err { color: var(--bad); }
 .badge { font-size: 11px; padding: 1px 6px; border-radius: 3px; border: 1px solid; }
 .badge.available { color: var(--ok); } .badge.unavailable { color: var(--bad); } .badge.unsupported { color: var(--warn); }

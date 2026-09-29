@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { SystemProfile } from '../../shared/types'
+import type { WorkloadId } from '../../shared/bench-types'
 import type { HfGgufFile, HfModel, HubAccount, HubApi, HubProgress } from '../../shared/hub-types'
-import { recommend, type Fit, type FitModel } from '../../core/hub/fit'
+import { recommend, type Fit } from '../../core/hub/fit'
 import { PRISM_NOTE, rowSummary, seriesGroups } from './hubView'
 import { WORKLOADS } from '../../core/scoring/workloads'
 import type { HfGgufFile as GgufFileRow } from '../../shared/hub-types'
@@ -35,30 +37,36 @@ export function HubPage() {
   const [state, setState] = useState<'idle' | 'downloading' | 'paused' | 'done'>('idle')
   const [err, setErr] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
-  const [fits, setFits] = useState<{ models: FitModel[]; gpu: number; shared: boolean; ram: number; ctx: number; workload: string; fetched: number; total: number } | { error: string } | null>(null)
+  // Recommendation inputs: the scan + popular repos once, file lists as they arrive (fetched = progress tick), and the
+  // use case chosen here (defaults to the Benchmark page's workload); the list is derived from them.
+  const [raw, setRaw] = useState<{ models: HfModel[]; profile: SystemProfile; requiredContext: number | null; total: number } | { error: string } | null>(null)
+  const [fetched, setFetched] = useState(0)
+  const [useCase, setUseCase] = useState<WorkloadId>('general_chat')
+  const fits = useMemo(() => {
+    if (!raw || 'error' in raw) return raw
+    const workload = WORKLOADS[useCase]
+    const ctx = raw.requiredContext ?? workload.targetContext
+    const out = recommend(raw.models, fileCache, raw.profile, workload, ctx)
+    return { models: out.models.slice(0, 20), gpu: out.budget.gpu, shared: out.budget.shared, ram: out.budget.ram, ctx, workload: workload.label, fetched, total: raw.total }
+  }, [raw, fetched, useCase])
 
   useEffect(() => {
     let alive = true
     void Promise.all([window.api.scanSystem(), api().hubPopular(), window.api.getSettings()]).then(async ([p, r, s]) => {
-      if (!r.ok) { setFits({ error: r.error }); return }
-      const workload = WORKLOADS[s.workload ?? 'general_chat']
-      const ctx = s.requiredContext ?? workload.targetContext
+      if (!r.ok) { setRaw({ error: r.error }); return }
+      if (s.workload) setUseCase(s.workload)
       // Name-based list first, then real file sizes for the most-downloaded repos as their file lists arrive.
       const targets = [...r.models].sort((a, b) => b.downloads - a.downloads).slice(0, FILES_TO_FETCH)
-      const show = (fetched: number) => {
-        if (!alive) return
-        const out = recommend(r.models, fileCache, p, workload, ctx)
-        setFits({ models: out.models.slice(0, 20), gpu: out.budget.gpu, shared: out.budget.shared, ram: out.budget.ram, ctx, workload: workload.label, fetched, total: targets.length })
-      }
-      show(targets.filter((t) => fileCache.has(t.id)).length)
+      setRaw({ models: r.models, profile: p, requiredContext: s.requiredContext ?? null, total: targets.length })
+      setFetched(targets.filter((t) => fileCache.has(t.id)).length)
       for (let i = 0; i < targets.length && alive; i += 5) {
         await Promise.all(targets.slice(i, i + 5).filter((t) => !fileCache.has(t.id)).map(async (t) => {
           const fr = await api().hubFiles(t.id).catch(() => null)
           if (fr?.ok) fileCache.set(t.id, fr.files)
         }))
-        show(Math.min(i + 5, targets.length))
+        if (alive) setFetched(Math.min(i + 5, targets.length))
       }
-    }, (e: Error) => setFits({ error: e.message }))
+    }, (e: Error) => setRaw({ error: e.message }))
     void api().hubWhoami().then(setAccount)
     void api().hubDirs().then((d) => { setDirs(d); setDest((x) => x || d[d.length - 1] || '') })
     const off = api().onHubProgress(setProgress)
@@ -121,7 +129,12 @@ export function HubPage() {
       </div>
 
       <div className="card">
-        <h2>Recommended for this PC <span className="muted">(estimated)</span></h2>
+        <div className="bar">
+          <h2>Recommended for this PC <span className="muted">(estimated)</span></h2>
+          <label>Use case <select value={useCase} onChange={(e) => setUseCase(e.target.value as WorkloadId)} title="Same use cases as the Benchmark page: context length, speed gate and coding boost follow it">
+            {Object.values(WORKLOADS).map((w) => <option key={w.id} value={w.id}>{w.label}</option>)}
+          </select></label>
+        </div>
         {!fits ? <p className="muted">Scanning system and loading popular models…</p> : 'error' in fits ? <p className="muted">Unavailable: {fits.error}</p> : (
           <>
             <p className="muted">
