@@ -113,7 +113,8 @@ export function estimateTps(activeBytes: number, kvBytes: number, gpuShare: numb
 }
 
 export type Trust = 'official' | 'community' | 'risky'
-const OFFICIAL_ORG = /^(qwen|google|meta-llama|microsoft|mistralai|deepseek-ai|liquidai|openai|ggml-org|unsloth|bartowski|lmstudio-community|prism-ml|nvidia|ibm-granite|allenai|tiiuae|internlm|zai-org|moonshotai|ornith-ai|cohereforai|stabilityai)$/i
+// Model vendors and the well-known quantizer accounts only; an org that cannot be vouched for stays 'community'.
+const OFFICIAL_ORG = /^(qwen|google|meta-llama|microsoft|mistralai|deepseek-ai|liquidai|openai|ggml-org|unsloth|bartowski|lmstudio-community|prism-ml|nvidia|ibm-granite|allenai|tiiuae|internlm|zai-org|moonshotai|cohereforai|stabilityai)$/i
 const RISKY_NAME = /abliterat|uncensor|heretic|obliterat|nsfw|jailbreak|erotic/i
 export function trustOf(repoId: string): Trust {
   const [org, name] = repoId.split('/')
