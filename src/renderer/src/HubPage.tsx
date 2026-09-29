@@ -68,7 +68,7 @@ export function HubPage() {
       }
     }, (e: Error) => setRaw({ error: e.message }))
     void api().hubWhoami().then(setAccount)
-    void api().hubDirs().then((d) => { setDirs(d); setDest((x) => x || d[d.length - 1] || '') })
+    void api().hubDirs().then((d) => { setDirs(d); setDest((x) => x || d[0] || '') }) // [0] = the model store
     const off = api().onHubProgress(setProgress)
     return () => { alive = false; off() }
   }, [])

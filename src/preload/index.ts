@@ -34,6 +34,9 @@ const api: RendererApi & HubApi = {
   installPrismRuntime: () => ipcRenderer.invoke('runtime:installPrism'),
   addModelDir: () => ipcRenderer.invoke('settings:addModelDir'),
   removeModelDir: (dir) => ipcRenderer.invoke('settings:removeModelDir', dir),
+  modelsStore: () => ipcRenderer.invoke('settings:modelsStore'),
+  chooseModelsDir: () => ipcRenderer.invoke('settings:chooseModelsDir'),
+  resetModelsDir: () => ipcRenderer.invoke('settings:resetModelsDir'),
   installedBackends: () => ipcRenderer.invoke('runtime:backends'),
   onRuntimeProgress: (cb) => {
     const h = (_e: IpcRendererEvent, msg: string) => cb(msg)

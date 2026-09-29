@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { exportConfigFrom, type ExportConfig } from '../../core/export/config'
 import type { KvType } from '../../shared/bench-types'
-import type { ModelInfo, SmokeResult } from '../../shared/types'
+import type { ModelInfo, ModelsStore, SmokeResult } from '../../shared/types'
 import { RunningModel, SERVE_IDLE, useServe } from './ui'
 
 const SOURCE = { llamacpp: 'folder', lmstudio: 'LM Studio', ollama: 'Ollama' } as const
@@ -35,6 +35,10 @@ export function ModelsPage() {
 
   const load = () => { window.api.listModels().then(setModels, (e: Error) => setErr(e.message)) }
   useEffect(load, [])
+  // The model store: default download target and first scanned folder. Browse… picks another (created if missing).
+  const [store, setStore] = useState<ModelsStore | null>(null)
+  useEffect(() => { window.api.modelsStore().then(setStore, () => {}) }, [])
+  const changeStore = (p: Promise<ModelsStore>) => { void p.then((s) => { setStore(s); load() }, (e: Error) => setErr(e.message)) }
 
   // Run a model from the app: llama-server with the chosen launch config, chat in its built-in web UI.
   const [form, setForm] = useState<RunForm | null>(null)
@@ -77,6 +81,14 @@ export function ModelsPage() {
         <h1>Models</h1>
         <button onClick={load}>Rescan</button>
       </header>
+      {store && (
+        <p className="bar">
+          <span className="muted">Model store</span><code title={'Default download target and the first folder scanned. Files already in another folder are not moved; keep that folder reachable with "Add folder…" on the Download page.'}>{store.dir}</code>
+          {store.dir === store.defaultDir && <span className="muted">(default)</span>}
+          <button className="mini" onClick={() => changeStore(window.api.chooseModelsDir())}>Browse…</button>
+          {store.dir !== store.defaultDir && <button className="mini" title={store.defaultDir} onClick={() => changeStore(window.api.resetModelsDir())}>Reset to default</button>}
+        </p>
+      )}
       {err && <p className="err">{err}</p>}
       <RunningModel s={serve} onStop={() => void stop()} />
       {serve.error && !serve.url && <p className="err">{serve.error}</p>}

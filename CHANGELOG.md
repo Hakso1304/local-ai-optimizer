@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Models page: "Browse…" picks the model store (default download target and first scanned folder; created if missing), "Reset to default" returns to the app's folder. Files are not moved; the old folder stays reachable via "Add folder…".
 - Download page: a Use case dropdown (same use cases as the Benchmark page, defaulting to its workload) drives the recommendation's context length, speed gate and coding boost.
 - Download page recommendations are grouped by model series (Qwen, Llama, Gemma, …) with a hover profile per series and per row (what the size, file, speed and rank are based on); repo creation date acts as a release proxy so newer models outrank older ones of the same size (1.0 → 0.5 over 6–30 months).
 - Download page recommendations rebuilt: budgets follow the benchmark planner (VRAM minus in-use and margin, RAM minus reserve, an integrated GPU's shared pool as one budget), sizes come from each repo's real GGUF files (best quant that fits, shards summed, ternary flagged) with the workload's context KV cache included, a bandwidth-based decode estimate marks slow picks, duplicate quantizer repos fold into one row, official sources rank first and abliterated/uncensored repos last.

@@ -27,7 +27,7 @@ import { evaluateAsync } from '../core/quality'
 import type { SessionEvent, SessionRequest } from '../shared/bench-events'
 import type { CandidateConfig, GpuBackendKind, ModelMeta, WorkloadId } from '../shared/bench-types'
 import { recommendForWorkload } from '../core/scoring/recommend'
-import type { AppSettings, InstalledRuntime, ComputedRecommendation, ModelFit, ModelInfo, ServeStatus, SmokeResult, StartResult, SystemProfile } from '../shared/types'
+import type { AppSettings, InstalledRuntime, ComputedRecommendation, ModelFit, ModelInfo, ModelsStore, ServeStatus, SmokeResult, StartResult, SystemProfile } from '../shared/types'
 
 // Dev/test runs get their own userData so they never write the installed app's database or settings.
 // Must run before anything calls app.getPath('userData') (the llama pid file below does).
@@ -48,6 +48,9 @@ const llamaDir = () => (app.isPackaged ? join(app.getPath('userData'), 'runtime'
 const hipDir = () => (app.isPackaged ? join(app.getPath('userData'), 'runtime', 'llama.cpp-hip') : join(app.getAppPath(), 'vendor', 'llama.cpp-hip'))
 const prismDir = () => (app.isPackaged ? join(app.getPath('userData'), 'runtime', 'llama.cpp-prism') : join(app.getAppPath(), 'vendor', 'llama.cpp-prism'))
 const bundledModelsDir = () => (app.isPackaged ? join(app.getPath('userData'), 'models') : join(app.getAppPath(), 'models'))
+/** The model store: settings.modelsDir when the user chose one (Models page "Browse…"), else the default folder. */
+const modelsDir = () => { const d = readSettings().modelsDir; return typeof d === 'string' && d.trim() ? d : bundledModelsDir() }
+const modelsStore = (): ModelsStore => ({ dir: modelsDir(), defaultDir: bundledModelsDir() })
 
 const settingsFile = () => join(app.getPath('userData'), 'settings.json')
 function readSettings(): AppSettings {
@@ -59,11 +62,12 @@ function writeSettings(patch: Partial<AppSettings>): AppSettings {
   return next
 }
 
-/** Writable default models dir plus settings.modelDirs (user-added; none by default). */
+/** The model store first, then settings.modelDirs (user-added extra folders; none by default). */
 function modelDirs(): string[] {
   const s = readSettings()
-  const extra = Array.isArray(s.modelDirs) ? s.modelDirs.filter((d): d is string => typeof d === 'string') : []
-  return [bundledModelsDir(), ...extra]
+  const store = modelsDir()
+  const extra = Array.isArray(s.modelDirs) ? s.modelDirs.filter((d): d is string => typeof d === 'string' && d !== store) : []
+  return [store, ...extra]
 }
 
 /** Folder GGUFs (configured dirs) + LM Studio dirs + Ollama blobs, deduplicated by path (first source wins). */
@@ -225,11 +229,23 @@ ipcMain.handle('settings:addModelDir', async (): Promise<AppSettings> => {
   const dir = r.filePaths[0]
   if (r.canceled || !dir) return readSettings()
   const dirs = (readSettings().modelDirs ?? []).filter((d): d is string => typeof d === 'string')
-  if (!dirs.includes(dir) && dir !== bundledModelsDir()) dirs.push(dir)
+  if (!dirs.includes(dir) && dir !== modelsDir()) dirs.push(dir)
   return writeSettings({ modelDirs: dirs })
 })
 ipcMain.handle('settings:removeModelDir', (_e, dir: unknown): AppSettings =>
   writeSettings({ modelDirs: (readSettings().modelDirs ?? []).filter((d) => typeof d === 'string' && d !== dir) }))
+/** Model store: where downloads go by default and the first folder scanned. Changing it does not move files; the
+ *  previous folder can stay reachable via "Add folder…". */
+ipcMain.handle('settings:modelsStore', modelsStore)
+ipcMain.handle('settings:chooseModelsDir', async (): Promise<ModelsStore> => {
+  const r = await dialog.showOpenDialog({ title: 'Choose the model store folder', defaultPath: modelsDir(), properties: ['openDirectory', 'createDirectory'] })
+  const dir = r.filePaths[0]
+  if (r.canceled || !dir) return modelsStore()
+  mkdirSync(dir, { recursive: true })
+  writeSettings({ modelsDir: dir === bundledModelsDir() ? undefined : dir })
+  return modelsStore()
+})
+ipcMain.handle('settings:resetModelsDir', (): ModelsStore => { writeSettings({ modelsDir: undefined }); return modelsStore() })
 ipcMain.handle('workloads:list', () => Object.values(WORKLOADS))
 ipcMain.handle('sessions:list', () => listSessions(needDb()))
 ipcMain.handle('sessions:get', (_e, id: unknown) => getSession(needDb(), rowId(id)))
@@ -485,6 +501,7 @@ app.whenReady().then(async () => {
   // The packaged app's default download destination is userData/models, not the read-only install/asar dir.
   // Also covers portable builds and upgrades that did not run the NSIS install hook.
   mkdirSync(bundledModelsDir(), { recursive: true })
+  try { mkdirSync(modelsDir(), { recursive: true }) } catch (e) { console.warn(`model store ${modelsDir()} not creatable: ${(e as Error).message}`) }
   // LAO_SEED_DEMO=1 uses a separate DB file so fixture data can never reach the real one.
   db = openDb(join(app.getPath('userData'), DEMO ? 'optimizer-demo.db' : 'optimizer.db'))
   const n = markInterrupted(db) // a previous app run quit mid-session (before-quit can't await the runner)

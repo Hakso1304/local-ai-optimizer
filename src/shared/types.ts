@@ -204,8 +204,14 @@ export interface AppSettings {
   workload?: WorkloadId
   /** Last Benchmark "Required context" choice; null/absent = Auto (workload default). */
   requiredContext?: number | null
+  /** Extra model folders (scanned, allowed as download targets). */
   modelDirs?: string[]
+  /** The model store: default download target and first scanned folder. Absent = the app's default folder. */
+  modelsDir?: string
 }
+
+/** The model store as resolved by main: the chosen folder or the default. */
+export interface ModelsStore { dir: string; defaultDir: string }
 
 export type StartResult = { ok: true; sessionId: string } | { ok: false; error: string }
 
@@ -239,6 +245,11 @@ export interface RendererApi {
   /** OS folder picker; the folder joins settings.modelDirs (scanned for models, allowed as a download target). */
   addModelDir(): Promise<AppSettings>
   removeModelDir(dir: string): Promise<AppSettings>
+  /** The model store (default download target, first scanned folder). */
+  modelsStore(): Promise<ModelsStore>
+  /** OS folder picker for the model store; created if missing. Existing files are not moved. */
+  chooseModelsDir(): Promise<ModelsStore>
+  resetModelsDir(): Promise<ModelsStore>
   /** llama.cpp backends installed side by side (each checked with its own llama-server --version). */
   installedBackends(): Promise<InstalledRuntime[]>
   onRuntimeProgress(cb: (msg: string) => void): () => void
