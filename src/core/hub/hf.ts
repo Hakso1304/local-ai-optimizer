@@ -88,7 +88,7 @@ export interface HfGgufFile {
 }
 
 export const quantFromName = (name: string): string | null =>
-  /(I?Q\d_[A-Z0-9]+(?:_[A-Z0-9]+)?|BF16|F16|F32|MXFP4)/i.exec(name.split('/').pop()!.replace(/-\d{5}-of-\d{5}\.gguf$/i, ''))?.[1]?.toUpperCase() ?? null
+  /(TQ\d_\d|I?Q\d_[A-Z0-9]+(?:_[A-Z0-9]+)?|BF16|F16|F32|MXFP4)/i.exec(name.split('/').pop()!.replace(/-\d{5}-of-\d{5}\.gguf$/i, ''))?.[1]?.toUpperCase() ?? null
 
 export async function listGgufFiles(repoId: string, opts: Common & { revision?: string } = {}): Promise<HfGgufFile[]> {
   const base = opts.baseUrl ?? HF_BASE

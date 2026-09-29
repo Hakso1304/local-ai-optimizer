@@ -56,8 +56,8 @@ export function budget(p: SystemProfile, ctx: number): Budget {
   return { gpu: v ? Math.max(0, v - inUse - R.vramMarginBytes) : 0, shared: false, ram, ctx }
 }
 
-/** Quality order for picking a file: the best quant that fits wins. F16/BF16/F32 are never picked (2× the size of
- *  Q8_0 for no practical gain); anything unlisted sorts last. */
+/** Quality order for picking a file: the best quant that fits wins. Only these are ever recommended: F16/BF16/F32
+ *  are 2× Q8_0 for no practical gain, and sub-2-bit quants (TQ1_0, IQ1_*, "UD-…" 1.58-bit) degrade too far. */
 export const QUANT_PREF = ['Q8_0', 'Q6_K', 'Q5_K_M', 'Q5_K_S', 'Q5_0', 'Q4_K_M', 'Q4_K_S', 'IQ4_XS', 'IQ4_NL', 'Q4_0', 'MXFP4', 'PQ2_0', 'PTQ1_0', 'Q3_K_M', 'Q3_K_L', 'IQ3_M', 'Q3_K_S', 'IQ3_XS', 'Q2_K', 'IQ2_M']
 const quantRank = (q: string) => { const i = QUANT_PREF.indexOf(q); return i < 0 ? QUANT_PREF.length : i }
 
@@ -168,7 +168,7 @@ export function recommend(models: HfModel[], files: ReadonlyMap<string, HfGgufFi
       // Best quant that fits; a ternary file only when nothing else does (it needs the PrismML build). A file under a
       // quarter of the name-based Q4 size cannot be the whole model (draft/speculative or partial uploads): ignored,
       // and a repo with no plausible whole-model file is not recommended at all.
-      const plausible = fileOptions(opts).filter((f) => f.sizeBytes >= q4WeightBytes(total) * 0.25)
+      const plausible = fileOptions(opts).filter((f) => QUANT_PREF.includes(f.quant) && f.sizeBytes >= q4WeightBytes(total) * 0.25)
         .sort((x, y) => Number(x.prism) - Number(y.prism) || quantRank(x.quant) - quantRank(y.quant))
       const fitting = plausible.map((f) => ({ f, pl: place(f.sizeBytes, kvBytes, b) })).filter((x): x is { f: FileChoice; pl: NonNullable<ReturnType<typeof place>> } => x.pl !== null)
       if (!fitting.length) continue
@@ -176,8 +176,9 @@ export function recommend(models: HfModel[], files: ReadonlyMap<string, HfGgufFi
       const atTier = fitting.filter((x) => FIT_RANK[x.pl.fit] === bestTier)
       const tps = (x: typeof atTier[number]) => estimateTps(x.f.sizeBytes * (active / total), kvBytes, x.pl.gpuShare, b.shared)
       // Highest quality that clears the workload's decode gate; on a bandwidth-bound machine none may, and then the
-      // smallest (fastest) file is the useful one rather than the best-looking quant.
-      const pick = atTier.find((x) => tps(x) >= (workload.minDecodeTps ?? 0)) ?? atTier.reduce((a, x) => (x.f.sizeBytes < a.f.sizeBytes ? x : a))
+      // best quant that is not outright too slow (≥ half the gate), else the smallest (fastest) file.
+      const gate = workload.minDecodeTps ?? 0
+      const pick = atTier.find((x) => tps(x) >= gate) ?? atTier.find((x) => tps(x) >= gate / 2) ?? atTier.reduce((a, x) => (x.f.sizeBytes < a.f.sizeBytes ? x : a))
       file = pick.f
       placed = pick.pl
     } else {

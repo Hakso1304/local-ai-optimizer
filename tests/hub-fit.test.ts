@@ -132,10 +132,14 @@ describe('hub fit: recommendation on three machines', () => {
     const ids = r.models.map((x) => x.id)
     expect(ids.indexOf('Qwen/Qwen3-32B-GGUF')).toBeGreaterThan(ids.indexOf('Qwen/Qwen3-0.6B-GGUF')) // ≈3 t/s < gate/2 = 5: sinks
     expect(ids.indexOf('Qwen/Qwen3-14B-GGUF')).toBeGreaterThan(ids.indexOf('Qwen/Qwen3-0.6B-GGUF')) // Q4 9 GB ≈ 4 t/s: sinks too
-    // 8B: no quant clears the 10 t/s gate on shared DDR, so the smallest file (Q4_K_M ≈ 7 t/s) is picked over Q8_0 (≈ 4 t/s);
-    // marked slow but above gate/2, it keeps its size rank ahead of the tiny models.
-    expect(row(r, 'Qwen/Qwen3-8B-GGUF')).toMatchObject({ file: { quant: 'Q4_K_M' }, usable: false, alsoIn: ['unsloth/Qwen3-8B-GGUF'] })
+    // 8B: no quant clears the 10 t/s gate on shared DDR; Q8_0 (≈ 4 t/s) is under half the gate, so the best quant that
+    // stays above it (Q6_K ≈ 5.5 t/s) is picked; marked slow, it keeps its size rank ahead of the tiny models.
+    expect(row(r, 'Qwen/Qwen3-8B-GGUF')).toMatchObject({ file: { quant: 'Q6_K' }, usable: false, alsoIn: ['unsloth/Qwen3-8B-GGUF'] })
     expect(ids.indexOf('Qwen/Qwen3-8B-GGUF')).toBeLessThan(ids.indexOf('Qwen/Qwen3-0.6B-GGUF'))
+  })
+  it('sub-2-bit files (TQ1_0 / IQ1) are never picked, even as the fastest fallback', () => {
+    const files = new Map([['unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF', [f('UD-TQ1_0/Qwen3-Coder-30B-A3B-Instruct-UD-TQ1_0.gguf', 8.0), f('Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf', 18.6), f('Qwen3-Coder-30B-A3B-Instruct-UD-IQ1_M.gguf', 7.5)]]])
+    expect(row(recommend(POPULAR, files, IGPU32, CODING), 'unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF')?.file?.quant).toBe('Q4_K_M')
   })
   it('a repo whose only files are far too small for the model (draft/partial uploads) is not recommended', () => {
     const files = new Map([['z-lab/Qwen3.8-27B-DFlash2-GGUF', [f('Qwen3.8-27B-DFlash2-Q8_0.gguf', 2.1)]], ['prism-ml/Ternary-Bonsai-2-27B-gguf', FILES.get('prism-ml/Ternary-Bonsai-2-27B-gguf')!]])
