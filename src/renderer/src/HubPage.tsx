@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { HfGgufFile, HfModel, HubAccount, HubApi, HubProgress } from '../../shared/hub-types'
-import { budget, fitModels, type Fit, type FitModel } from '../../core/hub/fit'
+import { recommend, type Fit, type FitModel } from '../../core/hub/fit'
+import { WORKLOADS } from '../../core/scoring/workloads'
+import type { HfGgufFile as GgufFileRow } from '../../shared/hub-types'
 
 // Hub methods are spread into window.api by the preload (src/preload/hub.ts); listModels refreshes the Models list.
 const api = () => window.api as unknown as HubApi & { listModels?: () => Promise<unknown> }
@@ -10,7 +12,10 @@ const gib = (b: number) => (b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(2)} GiB`
 interface Transfer { readonly repoId: string; readonly path: string; readonly destDir: string }
 const same = (a: Transfer | null, repoId: string, path: string) => !!a && a.repoId === repoId && a.path === path
 
-const FIT_LABEL: Record<Fit, string> = { gpu: 'full GPU', offload: 'partial offload', cpu: 'CPU / shared RAM' }
+const FIT_LABEL: Record<Fit, string> = { gpu: 'full GPU', shared: 'GPU (shared RAM)', offload: 'partial offload', cpu: 'CPU only' }
+/** Repo file lists fetched for the recommendation, kept across page visits (one HF request per repo). */
+const fileCache = new Map<string, GgufFileRow[]>()
+const FILES_TO_FETCH = 40
 
 const eta = (s: number | null) => (s === null ? '—' : s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m` : s >= 60 ? `${Math.floor(s / 60)}m ${Math.round(s % 60)}s` : `${Math.round(s)}s`)
 
@@ -29,15 +34,34 @@ export function HubPage() {
   const [state, setState] = useState<'idle' | 'downloading' | 'paused' | 'done'>('idle')
   const [err, setErr] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
-  const [fits, setFits] = useState<{ models: FitModel[]; vram: number; ram: number } | { error: string } | null>(null)
+  const [fits, setFits] = useState<{ models: FitModel[]; gpu: number; shared: boolean; ram: number; ctx: number; workload: string; fetched: number; total: number } | { error: string } | null>(null)
 
   useEffect(() => {
-    void Promise.all([window.api.scanSystem(), api().hubPopular()]).then(([p, r]) => {
-      setFits(r.ok ? { models: fitModels(r.models, p).slice(0, 15), ...budget(p) } : { error: r.error })
+    let alive = true
+    void Promise.all([window.api.scanSystem(), api().hubPopular(), window.api.getSettings()]).then(async ([p, r, s]) => {
+      if (!r.ok) { setFits({ error: r.error }); return }
+      const workload = WORKLOADS[s.workload ?? 'general_chat']
+      const ctx = s.requiredContext ?? workload.targetContext
+      // Name-based list first, then real file sizes for the most-downloaded repos as their file lists arrive.
+      const targets = [...r.models].sort((a, b) => b.downloads - a.downloads).slice(0, FILES_TO_FETCH)
+      const show = (fetched: number) => {
+        if (!alive) return
+        const out = recommend(r.models, fileCache, p, workload, ctx)
+        setFits({ models: out.models.slice(0, 20), gpu: out.budget.gpu, shared: out.budget.shared, ram: out.budget.ram, ctx, workload: workload.label, fetched, total: targets.length })
+      }
+      show(targets.filter((t) => fileCache.has(t.id)).length)
+      for (let i = 0; i < targets.length && alive; i += 5) {
+        await Promise.all(targets.slice(i, i + 5).filter((t) => !fileCache.has(t.id)).map(async (t) => {
+          const fr = await api().hubFiles(t.id).catch(() => null)
+          if (fr?.ok) fileCache.set(t.id, fr.files)
+        }))
+        show(Math.min(i + 5, targets.length))
+      }
     }, (e: Error) => setFits({ error: e.message }))
     void api().hubWhoami().then(setAccount)
     void api().hubDirs().then((d) => { setDirs(d); setDest((x) => x || d[d.length - 1] || '') })
-    return api().onHubProgress(setProgress)
+    const off = api().onHubProgress(setProgress)
+    return () => { alive = false; off() }
   }, [])
 
   const login = async () => {
@@ -96,23 +120,29 @@ export function HubPage() {
       </div>
 
       <div className="card">
-        <h2>Recommended for this PC <span className="muted">(estimated, Q4_K_M)</span></h2>
+        <h2>Recommended for this PC <span className="muted">(estimated)</span></h2>
         {!fits ? <p className="muted">Scanning system and loading popular models…</p> : 'error' in fits ? <p className="muted">Unavailable: {fits.error}</p> : (
           <>
-            <p className="muted">Budget: {fits.vram ? `${gib(fits.vram)} VRAM + ` : ''}{gib(fits.ram)} RAM. Sizes are guessed from the repo name; benchmark to confirm.</p>
+            <p className="muted">
+              {fits.shared ? `Integrated GPU: ${gib(fits.gpu)} shared RAM` : fits.gpu ? `${gib(fits.gpu)} VRAM free for the model + ${gib(fits.ram)} RAM` : `no GPU: ${gib(fits.ram)} RAM`} · {fits.workload} at {fits.ctx.toLocaleString()} context (KV cache included) · same rules as the benchmark planner.
+              {fits.fetched < fits.total ? ` Reading repo file lists ${fits.fetched}/${fits.total}…` : ' Sizes are the repos\' real files; speed is a bandwidth estimate. Benchmark to confirm.'}
+            </p>
             <table>
-              <thead><tr><th>Repository</th><th>Params</th><th>Est. size</th><th>Fit</th><th>Downloads</th><th /></tr></thead>
+              <thead><tr><th>Model</th><th>File</th><th>Fit</th><th>Est. decode</th><th>Source</th><th>Downloads</th><th /></tr></thead>
               <tbody>
                 {fits.models.map((m) => (
                   <tr key={m.id} className={m.id === repo ? 'active' : ''}>
-                    <td>{m.id}{m.gated ? <span className="pill warn-pill">gated</span> : null}</td>
-                    <td>{m.paramsB}B</td><td>~{gib(m.estBytes)}</td>
-                    <td><span className={`pill${m.fit === 'gpu' ? '' : ' warn-pill'}`}>{FIT_LABEL[m.fit]}</span></td>
+                    <td>{m.id}{m.gated ? <span className="pill warn-pill">gated</span> : null}{m.file?.prism && <span className="pill warn-pill" title="PQ2_0 / PTQ1_0 ternary: needs the PrismML build (System page)">PrismML</span>}
+                      {m.alsoIn.length > 0 && <span className="muted" title={m.alsoIn.join('\n')}> +{m.alsoIn.length} more repo{m.alsoIn.length > 1 ? 's' : ''}</span>}</td>
+                    <td title={m.file?.path ?? 'estimated from the name (Q4_K_M)'}>{m.file ? `${m.file.quant}${m.file.shards > 1 ? ` ×${m.file.shards}` : ''} ${gib(m.weightsBytes)}` : `~${gib(m.weightsBytes)} (est.)`}<span className="muted"> + KV {gib(m.kvBytes)}</span></td>
+                    <td><span className={`pill${m.fit === 'gpu' || m.fit === 'shared' ? '' : ' warn-pill'}`} title={m.fit === 'offload' ? `${Math.round(m.gpuShare * 100)} % of the weights on the GPU` : undefined}>{FIT_LABEL[m.fit]}</span></td>
+                    <td title={`active ${m.activeB}B of ${m.paramsB}B per token`}>≈{m.estTps >= 10 ? Math.round(m.estTps) : m.estTps.toFixed(1)} t/s{!m.usable && <span className="pill warn-pill" title="below the workload's decode gate">slow</span>}</td>
+                    <td><span className={`pill${m.trust === 'official' ? '' : ' warn-pill'}`}>{m.trust}</span></td>
                     <td>{m.downloads.toLocaleString()}</td>
                     <td><button className="mini" onClick={() => void open(m.id)}>Files</button></td>
                   </tr>
                 ))}
-                {!fits.models.length && <tr><td colSpan={6} className="muted">No popular model fits the scanned memory.</td></tr>}
+                {!fits.models.length && <tr><td colSpan={7} className="muted">No popular model fits the scanned memory.</td></tr>}
               </tbody>
             </table>
           </>
