@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Download page recommendations are grouped by model series (Qwen, Llama, Gemma, …) with a hover profile per series and per row (what the size, file, speed and rank are based on); repo creation date acts as a release proxy so newer models outrank older ones of the same size (1.0 → 0.5 over 6–30 months).
 - Download page recommendations rebuilt: budgets follow the benchmark planner (VRAM minus in-use and margin, RAM minus reserve, an integrated GPU's shared pool as one budget), sizes come from each repo's real GGUF files (best quant that fits, shards summed, ternary flagged) with the workload's context KV cache included, a bandwidth-based decode estimate marks slow picks, duplicate quantizer repos fold into one row, official sources rank first and abliterated/uncensored repos last.
 - Ternary models (PrismML Bonsai, PQ2_0 / PTQ1_0): the Models page flags files whose tensor types mainline llama.cpp rejects, and the System page can install the PrismML llama.cpp fork (Vulkan build) as an opt-in third backend. Such models run and benchmark on that backend only; verified on an Intel Arc iGPU (Bonsai 2 27B fully offloaded, ~4 tok/s).
 - Run a model from the app: "Run this model" (Results) and "Run…" (Models page, prefilled from the recommendation or defaults) start llama-server and open its chat UI; the running-model line shows the API base URL and model id, with a copy-paste setup for Claude Code, Cline, Continue and other agent tools.

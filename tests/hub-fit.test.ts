@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { activeB, budget, estimateTps, familyOf, fileOptions, kvBytesPerToken, paramsB, place, recommend, trustOf } from '../src/core/hub/fit'
+import { activeB, budget, estimateTps, familyOf, fileOptions, kvBytesPerToken, paramsB, place, recencyFactor, recommend, seriesOf, trustOf } from '../src/core/hub/fit'
+import { rowSummary, seriesGroups } from '../src/renderer/src/hubView'
 import type { HfGgufFile } from '../src/core/hub/hf'
 import { WORKLOADS } from '../src/core/scoring/workloads'
 import type { SystemProfile } from '../src/shared/types'
@@ -14,7 +15,7 @@ const prof = (vram: number | null | 'igpu', ramGiB: number, inUseGiB?: number): 
     : [{ name: 'g', vendor: 'nvidia', pnpDeviceId: 'x', driverVersion: '1', isIntegrated: false, dedicatedVramBytes: { value: vram * GiB, status: 'available', source: 't' } }], status: 'available', source: 't' },
   ...(inUseGiB !== undefined ? { vramInUse: { value: inUseGiB * GiB, status: 'available', source: 't' } } : {})
 }) as unknown as SystemProfile
-const m = (id: string, downloads = 0) => ({ id, downloads, likes: 0, gated: false, lastModified: null })
+const m = (id: string, downloads = 0, createdAt: string | null = null) => ({ id, downloads, likes: 0, gated: false, lastModified: null, createdAt })
 const f = (path: string, gb: number, shard?: { index: number; count: number }): HfGgufFile =>
   ({ path, sizeBytes: gb * GB, sha256: null, quant: /(I?Q\d_[A-Z0-9]+(?:_[A-Z0-9]+)?|BF16|F16|F32|MXFP4)/i.exec(path)?.[1]?.toUpperCase() ?? null, shard: shard ?? null })
 
@@ -145,5 +146,46 @@ describe('hub fit: recommendation on three machines', () => {
     const files = new Map([['z-lab/Qwen3.8-27B-DFlash2-GGUF', [f('Qwen3.8-27B-DFlash2-Q8_0.gguf', 2.1)]], ['prism-ml/Ternary-Bonsai-2-27B-gguf', FILES.get('prism-ml/Ternary-Bonsai-2-27B-gguf')!]])
     const r = recommend([m('z-lab/Qwen3.8-27B-DFlash2-GGUF'), m('prism-ml/Ternary-Bonsai-2-27B-gguf')], files, IGPU32, CHAT)
     expect(r.models.map((x) => x.id)).toEqual(['prism-ml/Ternary-Bonsai-2-27B-gguf']) // 7.2 GB ternary is plausible for 27B, 2.1 GB is not
+  })
+})
+
+const NOW = Date.parse('2026-09-29T00:00:00Z')
+describe('hub fit: series and recency', () => {
+  it('maps repos to a vendor series; distills belong to the tuner, unknown names to Other', () => {
+    expect(seriesOf('Qwen/Qwen3-Coder-30B-A3B-Instruct-GGUF').key).toBe('qwen')
+    expect(seriesOf('unsloth/DeepSeek-R1-Distill-Qwen-7B-GGUF').key).toBe('deepseek')
+    expect(seriesOf('bartowski/Meta-Llama-3.1-8B-Instruct-GGUF').key).toBe('llama')
+    expect(seriesOf('LiquidAI/LFM2.5-8B-A1B-GGUF').key).toBe('lfm')
+    expect(seriesOf('prism-ml/Ternary-Bonsai-2-27B-gguf').key).toBe('bonsai')
+    expect(seriesOf('microsoft/phi-4-gguf').key).toBe('phi')
+    expect(seriesOf('ornith-ai/Ornith-1.5-9B-GGUF')).toMatchObject({ key: 'other', label: 'Other' })
+  })
+  it('recency: 1.0 within 6 months, 0.5 at 30+ months, linear between, 0.75 when unknown', () => {
+    expect(recencyFactor('2026-06-01', NOW)).toBe(1)
+    expect(recencyFactor('2023-01-01', NOW)).toBe(0.5)
+    expect(recencyFactor('2025-03-29', NOW)).toBeCloseTo(0.75, 1) // 18 months: halfway
+    expect(recencyFactor(null, NOW)).toBe(0.75)
+    expect(recencyFactor('garbage', NOW)).toBe(0.75)
+  })
+  it('same size: the newer model ranks first; a 2-year-old 14B still beats a new 7B but by less', () => {
+    const models = [m('bartowski/Meta-Llama-3.1-8B-Instruct-GGUF', 900_000, '2024-07-23'), m('Qwen/Qwen3-8B-GGUF', 500_000, '2025-04-29'), m('x/Old-14B-GGUF', 10, '2024-09-01'), m('y/New-7B-GGUF', 10, '2026-08-01')]
+    const r = recommend(models, new Map(), DGPU24, CHAT, undefined, NOW)
+    const ids = r.models.map((x) => x.id)
+    expect(ids.indexOf('Qwen/Qwen3-8B-GGUF')).toBeLessThan(ids.indexOf('bartowski/Meta-Llama-3.1-8B-Instruct-GGUF'))
+    const old14 = r.models.find((x) => x.id === 'x/Old-14B-GGUF')!, new7 = r.models.find((x) => x.id === 'y/New-7B-GGUF')!
+    expect(old14.quality).toBeGreaterThan(new7.quality)
+    expect(old14.quality / new7.quality).toBeLessThan(14 / 7)
+    expect(r.models.find((x) => x.id === 'Qwen/Qwen3-8B-GGUF')?.releasedAt).toBe('2025-04')
+  })
+  it('groups keep rank order and are ordered by their best row; the row summary explains the rank', () => {
+    const r = recommend([...POPULAR, m('bartowski/Meta-Llama-3.1-8B-Instruct-GGUF', 1, '2024-07-23')], FILES, DGPU24, CODING, undefined, NOW)
+    const groups = seriesGroups(r.models)
+    expect(groups[0].series.key).toBe(r.models[0].series.key)
+    expect(groups.flatMap((g) => g.models.map((x) => x.id)).sort()).toEqual(r.models.map((x) => x.id).sort())
+    for (const g of groups) expect(g.models.map((x) => r.models.indexOf(x))).toEqual([...g.models.map((x) => r.models.indexOf(x))].sort((a, b) => a - b))
+    const s = rowSummary(r.models.find((x) => x.id === 'unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF')!)
+    expect(s).toContain('3B active per token, MoE')
+    expect(s).toContain('KV cache')
+    expect(s).toContain('size × recency')
   })
 })

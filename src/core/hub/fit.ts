@@ -129,8 +129,50 @@ export function familyOf(repoId: string): string {
     .replace(/^[-_.]+|[-_.]+$/g, '')
 }
 
+/** Model series (a vendor's line), for grouping the list and a hover profile. Profiles are static, deliberately
+ *  general (vendor, positioning, distinguishing facts, license family) — no benchmark claims. Unknown → 'other'. */
+export interface Series { key: string; label: string; vendor: string; profile: string }
+const SERIES: (Series & { match: RegExp })[] = [
+  { key: 'deepseek', label: 'DeepSeek', vendor: 'DeepSeek', match: /deepseek/i, profile: 'DeepSeek\'s open-weight line: V-series general MoE models and R-series reasoning models. Small "R1-Distill" variants are Qwen or Llama bases fine-tuned on R1 reasoning traces, so they inherit those bases\' behaviour. MIT license.' },
+  { key: 'qwen', label: 'Qwen', vendor: 'Alibaba', match: /qwen|qwq/i, profile: 'Alibaba\'s open-weight family, dense (0.5B–32B) and MoE (e.g. 30B-A3B). Qwen3 onward has a switchable thinking mode; "Coder" variants are tuned for code and agentic tool use. Broad multilingual coverage. Apache-2.0 for most sizes.' },
+  { key: 'llama', label: 'Llama', vendor: 'Meta', match: /llama(?!\.cpp)/i, profile: 'Meta\'s open-weight family (3.x: 1B–405B). Instruction-tuned chat models with a large ecosystem of fine-tunes and tooling. English-first with several supported languages. Llama community license (usage terms apply).' },
+  { key: 'gemma', label: 'Gemma', vendor: 'Google', match: /gemma/i, profile: 'Google\'s open models derived from Gemini research (1B–27B). Larger Gemma 3 sizes are multimodal; long context. Gemma terms of use.' },
+  { key: 'mistral', label: 'Mistral', vendor: 'Mistral AI', match: /mistral|mixtral|magistral|devstral|codestral|ministral/i, profile: 'Mistral AI\'s models: dense (7B, Ministral, Small 24B) and MoE (Mixtral 8x7B / 8x22B); Devstral and Codestral target code. Mostly Apache-2.0; some larger models under a research license.' },
+  { key: 'phi', label: 'Phi', vendor: 'Microsoft', match: /(?:^|[-_/])phi[-_]?\d/i, profile: 'Microsoft\'s small models (3.8B–14B) trained on heavily filtered and synthetic "textbook-quality" data, aiming at reasoning ability above their size. MIT license.' },
+  { key: 'lfm', label: 'LFM', vendor: 'Liquid AI', match: /lfm\d/i, profile: 'Liquid AI\'s LFM2 family for on-device use: a hybrid convolution + attention architecture built for fast, memory-light CPU and edge inference. Small sizes (hundreds of millions to a few billion parameters, plus a small MoE). LFM open license.' },
+  { key: 'glm', label: 'GLM', vendor: 'Zhipu AI (Z.ai)', match: /glm-?\d|chatglm/i, profile: 'Zhipu AI\'s GLM line: general chat models plus coding/agent-oriented releases; bilingual Chinese/English focus. MIT license for recent releases.' },
+  { key: 'gpt-oss', label: 'gpt-oss', vendor: 'OpenAI', match: /gpt-oss/i, profile: 'OpenAI\'s open-weight MoE models (20B, 120B) released in MXFP4 with adjustable reasoning effort and tool use. Apache-2.0.' },
+  { key: 'bonsai', label: 'Bonsai', vendor: 'PrismML', match: /bonsai/i, profile: 'PrismML\'s ternary models: weights stored at about 2 bits (PQ2_0 / PTQ1_0), so a 27B fits in ~6–7 GB. They load only with the PrismML llama.cpp fork (install it on the System page); Vulkan and CPU backends work.' },
+  { key: 'nemotron', label: 'Nemotron', vendor: 'NVIDIA', match: /nemotron/i, profile: 'NVIDIA\'s models, often built on Llama or Mistral bases and post-trained for reasoning and agentic use. NVIDIA open model license.' },
+  { key: 'granite', label: 'Granite', vendor: 'IBM', match: /granite/i, profile: 'IBM\'s Granite family, positioned for enterprise use with documented training data; small dense and MoE sizes. Apache-2.0.' },
+  { key: 'kimi', label: 'Kimi', vendor: 'Moonshot AI', match: /kimi/i, profile: 'Moonshot AI\'s Kimi line: very large MoE models oriented to agentic and coding tasks. Modified MIT license.' },
+  { key: 'smollm', label: 'SmolLM', vendor: 'Hugging Face', match: /smollm/i, profile: 'Hugging Face\'s small open models (hundreds of millions to a few billion parameters) with fully open training data and recipes. Apache-2.0.' }
+]
+export const OTHER_SERIES: Series = { key: 'other', label: 'Other', vendor: '', profile: 'No series profile yet: check the repository card for the base model, license and intended use.' }
+export function seriesOf(repoId: string): Series {
+  const s = SERIES.find((x) => x.match.test(repoId.split('/').pop()!))
+  return s ? { key: s.key, label: s.label, vendor: s.vendor, profile: s.profile } : OTHER_SERIES
+}
+
+/** Newer models do more per parameter. 1.0 up to 6 months after the repo was created, then linear to 0.5 at 30 months
+ *  (a 2-year-old 14B ranks with a fresh 7B). Unknown date = 0.75 (neither rewarded nor buried). */
+export const RECENCY = { fullMonths: 6, floorMonths: 30, floor: 0.5, unknown: 0.75 }
+export function recencyFactor(createdAt: string | null | undefined, now: number): number {
+  const t = createdAt ? Date.parse(createdAt) : NaN
+  if (!Number.isFinite(t)) return RECENCY.unknown
+  const months = Math.max(0, (now - t) / (30.44 * 86_400_000))
+  if (months <= RECENCY.fullMonths) return 1
+  if (months >= RECENCY.floorMonths) return RECENCY.floor
+  return 1 - (1 - RECENCY.floor) * (months - RECENCY.fullMonths) / (RECENCY.floorMonths - RECENCY.fullMonths)
+}
+
 export interface FitModel extends HfModel {
   family: string
+  series: Series
+  /** Repo creation month "YYYY-MM" (release proxy); null when unknown. */
+  releasedAt: string | null
+  /** Size × recency: the quality proxy used for ranking (shown on hover). */
+  quality: number
   paramsB: number
   activeB: number
   /** The file the size came from; null = estimated from the name (files not fetched yet). */
@@ -149,9 +191,9 @@ export interface FitModel extends HfModel {
 
 const TRUST_RANK: Record<Trust, number> = { official: 0, community: 1, risky: 2 }
 
-/** Rank: what fits on the GPU first, then usable speed, then trusted sources, then the largest model (quality proxy;
- *  Coder models get 1.5× for coding workloads), then downloads. Risky repos sink to the bottom. */
-export function recommend(models: HfModel[], files: ReadonlyMap<string, HfGgufFile[]>, p: SystemProfile, workload: WorkloadProfile, ctx = workload.targetContext): { budget: Budget; models: FitModel[] } {
+/** Rank: what fits on the GPU first, then not-too-slow, then trusted sources, then the quality proxy (size × recency;
+ *  Coder models ×1.5 for coding workloads), then downloads. Risky repos sink to the bottom. */
+export function recommend(models: HfModel[], files: ReadonlyMap<string, HfGgufFile[]>, p: SystemProfile, workload: WorkloadProfile, ctx = workload.targetContext, now = Date.now()): { budget: Budget; models: FitModel[] } {
   const b = budget(p, ctx)
   const kv = (params: number) => kvBytesPerToken(params) * ctx
   const coding = /coding/.test(workload.id)
@@ -187,9 +229,10 @@ export function recommend(models: HfModel[], files: ReadonlyMap<string, HfGgufFi
     }
     const weightsBytes = file ? file.sizeBytes : q4WeightBytes(total)
     const estTps = estimateTps(weightsBytes * (active / total), kvBytes, placed!.gpuShare, b.shared)
-    rows.push({ ...m, family: familyOf(m.id), paramsB: total, activeB: active, file, weightsBytes, kvBytes, fit: placed!.fit, gpuShare: placed!.gpuShare, estTps, usable: estTps >= (workload.minDecodeTps ?? 0), trust: trustOf(m.id), alsoIn: [] })
+    const quality = total * recencyFactor(m.createdAt, now) * (coding && /coder|code/i.test(m.id) ? 1.5 : 1)
+    rows.push({ ...m, family: familyOf(m.id), series: seriesOf(m.id), releasedAt: m.createdAt ? m.createdAt.slice(0, 7) : null, quality, paramsB: total, activeB: active, file, weightsBytes, kvBytes, fit: placed!.fit, gpuShare: placed!.gpuShare, estTps, usable: estTps >= (workload.minDecodeTps ?? 0), trust: trustOf(m.id), alsoIn: [] })
   }
-  const quality = (r: FitModel) => r.paramsB * (coding && /coder|code/i.test(r.id) ? 1.5 : 1)
+  const quality = (r: FitModel) => r.quality
   // The speed number is a bandwidth guess, so only picks under HALF the workload's decode gate sink below smaller
   // models; the rest keep their size rank and show a "slow" mark.
   const tooSlow = (r: FitModel) => r.estTps < (workload.minDecodeTps ?? 0) / 2

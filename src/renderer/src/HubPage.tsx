@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { HfGgufFile, HfModel, HubAccount, HubApi, HubProgress } from '../../shared/hub-types'
 import { recommend, type Fit, type FitModel } from '../../core/hub/fit'
+import { PRISM_NOTE, rowSummary, seriesGroups } from './hubView'
 import { WORKLOADS } from '../../core/scoring/workloads'
 import type { HfGgufFile as GgufFileRow } from '../../shared/hub-types'
 
@@ -128,12 +129,17 @@ export function HubPage() {
               {fits.fetched < fits.total ? ` Reading repo file lists ${fits.fetched}/${fits.total}…` : ' Sizes are the repos\' real files; speed is a bandwidth estimate. Benchmark to confirm.'}
             </p>
             <table>
-              <thead><tr><th>Model</th><th>File</th><th>Fit</th><th>Est. decode</th><th>Source</th><th>Downloads</th><th /></tr></thead>
+              <thead><tr><th>Model</th><th>Released</th><th>File</th><th>Fit</th><th>Est. decode</th><th>Source</th><th>Downloads</th><th /></tr></thead>
               <tbody>
-                {fits.models.map((m) => (
-                  <tr key={m.id} className={m.id === repo ? 'active' : ''}>
-                    <td>{m.id}{m.gated ? <span className="pill warn-pill">gated</span> : null}{m.file?.prism && <span className="pill warn-pill" title="PQ2_0 / PTQ1_0 ternary: needs the PrismML build (System page)">PrismML</span>}
+                {seriesGroups(fits.models).map((g) => [
+                  <tr key={`s:${g.series.key}`} className="group"><td colSpan={8} title={g.series.profile}>
+                    <b>{g.series.label}</b>{g.series.vendor && <span className="muted"> · {g.series.vendor}</span>}<span className="muted"> · {g.models.length} model{g.models.length > 1 ? 's' : ''} · hover for the series profile</span>
+                  </td></tr>,
+                  ...g.models.map((m) => (
+                  <tr key={m.id} className={m.id === repo ? 'active' : ''} title={rowSummary(m)}>
+                    <td>{m.id}{m.gated ? <span className="pill warn-pill">gated</span> : null}{m.file?.prism && <span className="pill warn-pill" title={PRISM_NOTE}>PrismML</span>}
                       {m.alsoIn.length > 0 && <span className="muted" title={m.alsoIn.join('\n')}> +{m.alsoIn.length} more repo{m.alsoIn.length > 1 ? 's' : ''}</span>}</td>
+                    <td className="muted">{m.releasedAt ?? '—'}</td>
                     <td title={m.file?.path ?? 'estimated from the name (Q4_K_M)'}>{m.file ? `${m.file.quant}${m.file.shards > 1 ? ` ×${m.file.shards}` : ''} ${gib(m.weightsBytes)}` : `~${gib(m.weightsBytes)} (est.)`}<span className="muted"> + KV {gib(m.kvBytes)}</span></td>
                     <td><span className={`pill${m.fit === 'gpu' || m.fit === 'shared' ? '' : ' warn-pill'}`} title={m.fit === 'offload' ? `${Math.round(m.gpuShare * 100)} % of the weights on the GPU` : undefined}>{FIT_LABEL[m.fit]}</span></td>
                     <td title={`active ${m.activeB}B of ${m.paramsB}B per token`}>≈{m.estTps >= 10 ? Math.round(m.estTps) : m.estTps.toFixed(1)} t/s{!m.usable && <span className="pill warn-pill" title="below the workload's decode gate">slow</span>}</td>
@@ -141,8 +147,9 @@ export function HubPage() {
                     <td>{m.downloads.toLocaleString()}</td>
                     <td><button className="mini" onClick={() => void open(m.id)}>Files</button></td>
                   </tr>
-                ))}
-                {!fits.models.length && <tr><td colSpan={7} className="muted">No popular model fits the scanned memory.</td></tr>}
+                  ))
+                ])}
+                {!fits.models.length && <tr><td colSpan={8} className="muted">No popular model fits the scanned memory.</td></tr>}
               </tbody>
             </table>
           </>
