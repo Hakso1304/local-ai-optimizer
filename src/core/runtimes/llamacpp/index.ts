@@ -186,11 +186,20 @@ export async function reconcileOwnedProcessScan(options: OwnedScanOptions): Prom
     const parent = children.get(record.parentPid)
     return !!parent && await stillOwned(parent) && await ancestryValid(parent, seen)
   }
+  // Y1: after the root exits, a row whose parent is not the root is ours only through a captured parent that is
+  // still the same live process (pid + creation identity), chained up to the root. Rows may chain through each other.
+  const chainsToOwned = async (record: ProcessIdentity): Promise<boolean> => {
+    const parent = record.parentPid === undefined ? undefined : children.get(record.parentPid)
+    return !!tree.inspect && !!parent && sameProcess(await tree.inspect(parent.pid), parent) &&
+      await ancestryValid(parent) && sameProcess(await tree.inspect(record.pid), record)
+  }
+  const pending: ProcessIdentity[] = []
   const found = await scan()
   for (const child of found) {
     const known = children.get(child.pid)
     if (known && sameProcess(child, known)) continue
     if (known && !sameProcess(child, known) && !rootWasLive) continue // recorded PID now belongs to a foreign process
+    if (!known && !rootWasLive && child.parentPid !== undefined && child.parentPid !== root) { pending.push(child); continue }
     if (!known && rootWasLive && rootIdentity && tree.inspect &&
         sameProcess(await tree.inspect(root), rootIdentity) &&
         sameProcess(await tree.inspect(child.pid), child) &&
@@ -201,11 +210,24 @@ export async function reconcileOwnedProcessScan(options: OwnedScanOptions): Prom
       continue
     }
     const born = Date.parse(child.startedAt)
+    // A child of the exited root PID born after that exit has a reused parent PID: provably foreign, never killed.
     if (!rootWasLive && Number.isFinite(born) && ownedExitAt !== null && born > ownedExitAt) continue
     throw new ServerStuckError(`llama-server pid ${root} has unverified descendant ${child.pid}`)
   }
+  for (let progress = true; progress && pending.length;) {
+    progress = false
+    for (const record of [...pending]) if (await chainsToOwned(record)) {
+      children.set(record.pid, record)
+      pending.splice(pending.indexOf(record), 1)
+      progress = true
+    }
+  }
+  // No owned parent chain: not ours to kill, and not provably foreign either → fail closed, survivor reported.
+  if (pending.length) throw new ServerStuckError(`llama-server pid ${root} has unverified descendant ${pending.map((x) => x.pid).join(', ')} (no owned parent identity after root exit)`)
   const remaining: ProcessIdentity[] = []
   for (const child of children.values()) if (await stillOwned(child)) remaining.push(child)
+  // Deepest first: a child is killed while its parent still proves its ancestry.
+  remaining.reverse()
   return { remaining, async reap() {
     for (const record of remaining) {
       if (!await ancestryValid(record)) throw new ServerStuckError(`descendant pid ${record.pid} lost its verified parent identity`)
