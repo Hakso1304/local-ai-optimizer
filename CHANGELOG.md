@@ -27,6 +27,7 @@
 - Kill owned processes on app quit with the same µs-tolerant creation-time match as the verified kill (`54e7a71`).
 - Scan descendants from the server and every captured process, so an orphan of an exited captured process is reaped or reported; two scans disagreeing on a process identity fail closed (`88d2a07`).
 - Record when each owned process was killed: an orphan born before that kill is reaped, one born after it (or under a reused parent PID after the new owner started) is left alone (`7e2d774`).
+- Treat a process at a captured parent's PID as a reuser only if it started after that parent and after its recorded kill; a row born at the same instant fails closed (`338f97f`).
 - Reserve and checkpoint session dumps atomically (`b647ed9`).
 
 ## 0.1.0 — 2026-09-27 / 2026-09-28 (first release, Windows 11)
