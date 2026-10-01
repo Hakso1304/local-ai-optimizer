@@ -226,8 +226,14 @@ export async function reconcileOwnedProcessScan(options: OwnedScanOptions): Prom
   if (pending.length) throw new ServerStuckError(`llama-server pid ${root} has unverified descendant ${pending.map((x) => x.pid).join(', ')} (no owned parent identity after root exit)`)
   const remaining: ProcessIdentity[] = []
   for (const child of children.values()) if (await stillOwned(child)) remaining.push(child)
-  // Deepest first: a child is killed while its parent still proves its ancestry.
-  remaining.reverse()
+  // Deepest first (by chain depth): a child is killed while its parent still proves its ancestry.
+  const depth = (r: ProcessIdentity, seen = new Set<number>()): number => {
+    const parent = r.parentPid === undefined ? undefined : children.get(r.parentPid)
+    if (!parent || seen.has(r.pid)) return 0
+    seen.add(r.pid)
+    return 1 + depth(parent, seen)
+  }
+  remaining.sort((a, b) => depth(b) - depth(a))
   return { remaining, async reap() {
     for (const record of remaining) {
       if (!await ancestryValid(record)) throw new ServerStuckError(`descendant pid ${record.pid} lost its verified parent identity`)
@@ -318,7 +324,7 @@ export class LlamaCppBackend implements InferenceBackend {
   private spawnFn: SpawnFn
   private processTree: ProcessTree
   private ownedRootPid: number | null = null
-  private ownedExitAt: number | null = null // exclusion bound only: a child born after exit cannot be owned
+  private ownedExitAt: number | null = null // exclusion bound only: a child of the exited ROOT pid born after exit is foreign (Y1: a captured child's later children can still be ours)
   private ownedRootIdentity: ProcessIdentity | null = null
   private ownedChildren = new Map<number, ProcessIdentity>()
   /** Last 100 output lines, for crash diagnostics. */
@@ -611,8 +617,8 @@ export class LlamaCppBackend implements InferenceBackend {
       }
       const initial = await reconcile(rootLive) // enumeration failure is a fatal inability to verify cleanup
       for (const [pid, child] of children) this.ownedChildren.set(pid, child)
-      // After the parent exits, only children captured while it was alive are
-      // owned. A new child of the same numeric parent PID is foreign.
+      // After the parent exits, owned = children captured while it was alive, plus later rows that chain to one of
+      // them through verified live identities (Y1). A new child of the exited root's numeric PID is foreign.
       await initial.reap()
       if (rootLive) {
         if (this.processTree.killVerified) await this.processTree.killVerified(this.ownedRootIdentity!)
