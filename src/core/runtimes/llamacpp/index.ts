@@ -165,13 +165,13 @@ export interface OwnedScanOptions {
   ownedExitAt: number | null
 }
 
-/** Reconcile a fresh scan against identities captured while the root lived.
+/** Reconcile fresh scans from the root and every captured descendant identity.
  *  Call reap() only after checking the caller's deadline. Unknown ancestry fails closed. */
 export async function reconcileOwnedProcessScan(options: OwnedScanOptions): Promise<{
   remaining: ProcessIdentity[]
   reap(): Promise<void>
 }> {
-  const { tree, root, rootIdentity, children, rootWasLive, ownedExitAt } = options
+  const { tree, root, rootIdentity, children, rootWasLive } = options
   const scan = () => tree.descendants(root)
   const stillOwned = async (record: ProcessIdentity) => {
     if (tree.inspect) return sameProcess(await tree.inspect(record.pid), record)
@@ -186,26 +186,39 @@ export async function reconcileOwnedProcessScan(options: OwnedScanOptions): Prom
     const parent = children.get(record.parentPid)
     return !!parent && await stillOwned(parent) && await ancestryValid(parent, seen)
   }
-  const found = await scan()
-  for (const child of found) {
+  // A captured child can create a grandchild after the root has exited. A
+  // root-only census can miss it, especially after the OS reparents the child.
+  const found = new Map<number, ProcessIdentity>()
+  for (const source of [root, ...children.keys()]) {
+    for (const record of await tree.descendants(source)) {
+      const previous = found.get(record.pid)
+      if (previous && !sameProcess(previous, record)) throw new ServerStuckError(`llama-server pid ${root} has conflicting descendant identity ${record.pid}`)
+      found.set(record.pid, record)
+    }
+  }
+  for (const child of found.values()) {
     const known = children.get(child.pid)
     if (known && sameProcess(child, known)) continue
     if (known && !sameProcess(child, known) && !rootWasLive) continue // recorded PID now belongs to a foreign process
-    if (!known && rootWasLive && rootIdentity && tree.inspect &&
-        sameProcess(await tree.inspect(root), rootIdentity) &&
-        sameProcess(await tree.inspect(child.pid), child) &&
-        (child.parentPid === root || (child.parentPid !== undefined &&
-          children.has(child.parentPid) && sameProcess(await tree.inspect(child.parentPid), children.get(child.parentPid)!) &&
-          await ancestryValid(children.get(child.parentPid)!)))) {
+    const parent = child.parentPid === undefined ? null : children.get(child.parentPid)
+    const provedParent = child.parentPid === root
+      ? rootWasLive && !!rootIdentity && !!tree.inspect && sameProcess(await tree.inspect(root), rootIdentity)
+      : !!parent && !!tree.inspect && sameProcess(await tree.inspect(parent.pid), parent) && await ancestryValid(parent)
+    if (!known && tree.inspect && sameProcess(await tree.inspect(child.pid), child) && provedParent) {
       children.set(child.pid, child)
       continue
     }
-    const born = Date.parse(child.startedAt)
-    if (!rootWasLive && Number.isFinite(born) && ownedExitAt !== null && born > ownedExitAt) continue
     throw new ServerStuckError(`llama-server pid ${root} has unverified descendant ${child.pid}`)
   }
   const remaining: ProcessIdentity[] = []
   for (const child of children.values()) if (await stillOwned(child)) remaining.push(child)
+  const depth = (record: ProcessIdentity, seen = new Set<number>()): number => {
+    if (record.parentPid === undefined || record.parentPid === root || seen.has(record.pid)) return 1
+    seen.add(record.pid)
+    const parent = children.get(record.parentPid)
+    return parent ? 1 + depth(parent, seen) : 1
+  }
+  remaining.sort((a, b) => depth(b) - depth(a)) // descendants must be reaped before their verified parents
   return { remaining, async reap() {
     for (const record of remaining) {
       if (!await ancestryValid(record)) throw new ServerStuckError(`descendant pid ${record.pid} lost its verified parent identity`)
