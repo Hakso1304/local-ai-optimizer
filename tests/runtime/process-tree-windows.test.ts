@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { describe, expect, it } from 'vitest'
-import { windowsProcessTree } from '../../src/core/runtimes/llamacpp'
+import { LlamaCppBackend, windowsProcessTree, type ProcessIdentity } from '../../src/core/runtimes/llamacpp'
 
 describe.skipIf(process.platform !== 'win32')('real Windows process identity, disposable Node only', () => {
   it('finds a live Node grandchild by identity and reaps both identities', async () => {
@@ -33,6 +33,25 @@ describe.skipIf(process.platform !== 'win32')('real Windows process identity, di
       expect(await windowsProcessTree.isAlive(child.pid!)).toBe(false)
     } finally {
       if (grandchildPid != null) { try { process.kill(grandchildPid) } catch { /* already reaped */ } }
+      if (child.exitCode === null && child.signalCode === null) child.kill()
+    }
+  }, 30_000)
+
+  // 54e7a71 regression guard: killSync compared Get-Process ticks with the CIM identity exactly, which differ by up
+  // to 9 ticks (µs truncation), so on app quit it killed nothing.
+  it('killSync kills an owned process identified by the production inspect', async () => {
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true })
+    try {
+      await once(child, 'spawn')
+      const identity = await windowsProcessTree.inspect!(child.pid!)
+      expect(identity).toMatchObject({ pid: child.pid })
+      const b = new LlamaCppBackend('unused')
+      ;(b as unknown as { ownedChildren: Map<number, ProcessIdentity> }).ownedChildren.set(child.pid!, identity!)
+      const closed = once(child, 'close')
+      b.killSync()
+      await Promise.race([closed, new Promise((_, reject) => setTimeout(() => reject(new Error('killSync left the owned process alive')), 10_000))])
+      expect(await windowsProcessTree.isAlive(child.pid!)).toBe(false)
+    } finally {
       if (child.exitCode === null && child.signalCode === null) child.kill()
     }
   }, 30_000)

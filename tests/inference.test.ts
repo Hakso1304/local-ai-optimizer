@@ -1,13 +1,13 @@
 // Test scope: MOCKED — llama-server (tests/fixtures/fake-llama-server.cjs: canned /health, /props, SSE, 400s, deaths;
 // no model, no GPU) and, in one test, a child that ignores kill(). REAL — node processes, sockets, the SSE parser,
 // the stderr classifier and Windows process cleanup in separate tests. Proves process/HTTP orchestration, not inference.
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { ConfigDriftError, LlamaCppBackend, ServerStuckError, type ProcessTree } from '../src/core/runtimes/llamacpp'
+import { ConfigDriftError, LlamaCppBackend, ServerStuckError, type ProcessIdentity, type ProcessTree } from '../src/core/runtimes/llamacpp'
 import { classifyExit, emptyDeclared, parseDevices, parseLogLine, parseSse, pickBenchmarkDevice, pickDiscreteDevice, toPromptResult, type CompletionChunk } from '../src/core/runtimes/llamacpp/parse'
 
 // Shape of a real llama-server /completion stream (b11208), split at awkward byte boundaries.
@@ -95,11 +95,33 @@ const exited = (p: { exitCode: number | null; signalCode: NodeJS.Signals | null 
 describe('LlamaCppBackend process handling (fake server, no GPU)', { timeout: 20_000 }, () => {
   const fake = join(__dirname, 'fixtures', 'fake-llama-server.cjs')
   const pidFile = join(tmpdir(), `lao-test-${process.pid}.pid`)
-  const backend = (mode: string) =>
-    new LlamaCppBackend('unused', {
-      pidFile,
-      spawnFn: (_cmd, args, opts) => spawn(process.execPath, [fake, ...args], { ...opts, env: { ...process.env, FAKE_MODE: mode } })
+  // Deterministic in-process ProcessTree: identity fixed at spawn, live while the ChildProcess runs, no descendants.
+  // Without it every load/unload ran 9–12 serial PowerShell CIM calls inside the 20 s budget (the flake). Real CIM
+  // identity is covered by tests/runtime/process-tree-windows.test.ts.
+  const backend = (mode: string) => {
+    let child: ChildProcess | null = null
+    let identity: ProcessIdentity | null = null
+    const live = (pid: number) => !!child && child.pid === pid && !exited(child)
+    const processTree: ProcessTree = {
+      descendants: async () => [],
+      inspect: async (pid) => (live(pid) ? identity : null),
+      killVerified: async (record) => {
+        if (!live(record.pid) || record.startedAt !== identity?.startedAt) return false
+        child!.kill()
+        return true
+      },
+      isAlive: async (pid) => live(pid),
+      kill: async () => { throw new Error('unverified numeric-PID kill') }
+    }
+    return new LlamaCppBackend('unused', {
+      pidFile, processTree,
+      spawnFn: (_cmd, args, opts) => {
+        child = spawn(process.execPath, [fake, ...args], { ...opts, env: { ...process.env, FAKE_MODE: mode } })
+        identity = { pid: child.pid!, name: 'node.exe', startedAt: new Date().toISOString() }
+        return child
+      }
     })
+  }
   const cfg = { modelPath: join(tmpdir(), 'm.gguf'), contextSize: 2048, gpuLayers: 99, device: 'Vulkan0' }
   let b: LlamaCppBackend | null = null
   afterEach(async () => { await b?.unloadModel() })
