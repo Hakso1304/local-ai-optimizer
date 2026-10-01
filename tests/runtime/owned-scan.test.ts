@@ -5,10 +5,21 @@ const root: ProcessIdentity = { pid: 81001, name: 'node.exe', startedAt: '2026-0
 const child: ProcessIdentity = { pid: 81002, parentPid: root.pid, name: 'node.exe', startedAt: '2026-09-28T00:00:01.000Z' }
 const grandchild: ProcessIdentity = { pid: 81003, parentPid: child.pid, name: 'node.exe', startedAt: '2026-09-28T00:00:20.000Z' }
 
+
+/** Source-aware fake census, like the real walkers: only rows reachable from `seed` through parentPid. A fake that
+ *  returns every row for any seed hides the dead-intermediate orphan class (Y1 real-process probe). */
+function reachableFrom(rows: ProcessIdentity[], seed: number): ProcessIdentity[] {
+  const seen = new Set([seed]), out: ProcessIdentity[] = []
+  for (let added = true; added;) {
+    added = false
+    for (const r of rows) if (!seen.has(r.pid) && r.parentPid !== undefined && seen.has(r.parentPid)) { seen.add(r.pid); out.push(r); added = true }
+  }
+  return out
+}
 function fakeTree(found: ProcessIdentity[], live: Map<number, ProcessIdentity>) {
   const killed: number[] = []
   const tree: ProcessTree = {
-    descendants: vi.fn(async () => found),
+    descendants: vi.fn(async (seed: number) => reachableFrom(found, seed)),
     inspect: vi.fn(async (pid) => live.get(pid) ?? null),
     killVerified: vi.fn(async (record) => {
       if (live.get(record.pid)?.startedAt !== record.startedAt) return false
@@ -87,9 +98,11 @@ describe('exported owned-process scan reconciliation (injected identities)', () 
   })
 
   it('Y1: fails closed on a post-exit scan row with no captured parent-identity chain', async () => {
+    // Reachable shape: X (99999) is a post-exit child of the exited root PID; the row under it has no owned chain.
+    const reuser: ProcessIdentity = { pid: 99999, parentPid: root.pid, name: 'node.exe', startedAt: '2026-09-28T00:00:15.000Z' }
     const foreign = { ...grandchild, parentPid: 99999 }
-    const live = new Map([[foreign.pid, foreign]])
-    const { tree, killed } = fakeTree([foreign], live)
+    const live = new Map([[reuser.pid, reuser], [foreign.pid, foreign]])
+    const { tree, killed } = fakeTree([reuser, foreign], live)
     await expect(reconcileOwnedProcessScan({ tree, root: root.pid, rootIdentity: root,
       children: new Map(), rootWasLive: false, ownedExitAt: Date.parse('2026-09-28T00:00:10.000Z') }))
       .rejects.toThrow(/unverified descendant|survivor|unknown ancestry/i)

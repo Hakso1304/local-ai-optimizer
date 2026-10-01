@@ -394,7 +394,8 @@ describe('unloadModel', () => {
     const root = { pid: child.pid, name: 'fake-root', startedAt }
     const descendant = { pid: descendantPid, parentPid: child.pid, name: 'fake-child', startedAt }
     const processTree: ProcessTree = {
-      descendants: async (pid) => { expect(pid).toBe(child.pid); return descendantAlive ? [descendant] : [] },
+      // The census may seed from the root or any captured PID (Y1); rows are only those reachable from that seed.
+      descendants: async (pid) => { expect([child.pid, descendantPid]).toContain(pid); return pid === child.pid && descendantAlive ? [descendant] : [] },
       inspect: async (pid) => pid === child.pid ? root : pid === descendantPid && descendantAlive ? descendant : null,
       killVerified: async (record) => { calls.push(record.pid); if (record.pid === descendantPid) descendantAlive = false; return true },
       kill: async () => { throw new Error('unverified PID kill') },

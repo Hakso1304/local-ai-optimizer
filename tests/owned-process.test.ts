@@ -15,13 +15,24 @@ function fakeProcess() {
   return events
 }
 
+
+/** Source-aware fake census, like the real walkers: only rows reachable from `seed` through parentPid. A fake that
+ *  returns every row for any seed hides the dead-intermediate orphan class (Y1 real-process probe). */
+function reachableFrom(rows: ProcessIdentity[], seed: number): ProcessIdentity[] {
+  const seen = new Set([seed]), out: ProcessIdentity[] = []
+  for (let added = true; added;) {
+    added = false
+    for (const r of rows) if (!seen.has(r.pid) && r.parentPid !== undefined && seen.has(r.parentPid)) { seen.add(r.pid); out.push(r); added = true }
+  }
+  return out
+}
 describe('identity-bound harness process teardown (injected fake tree)', () => {
   it('reaps a captured child even when its parent exited before teardown', async () => {
     const p = fakeProcess()
     let rootLive = true, childLive = true
     const killed: number[] = []
     const tree: ProcessTree = {
-      descendants: async () => [descendant], kill: async () => {}, isAlive: async () => false,
+      descendants: async (seed) => reachableFrom([descendant], seed), kill: async () => {}, isAlive: async () => false,
       inspect: async (pid) => pid === root.pid ? rootLive ? root : null : pid === descendant.pid && childLive ? descendant : null,
       killVerified: async (record) => { killed.push(record.pid); if (record.pid === descendant.pid) childLive = false; return true }
     }
@@ -38,7 +49,7 @@ describe('identity-bound harness process teardown (injected fake tree)', () => {
     let childIdentity = descendant, rootLive = true
     const killed: number[] = []
     const tree: ProcessTree = {
-      descendants: async () => [descendant], kill: async () => {}, isAlive: async () => false,
+      descendants: async (seed) => reachableFrom([descendant], seed), kill: async () => {}, isAlive: async () => false,
       inspect: async (pid) => pid === root.pid ? rootLive ? root : null : pid === descendant.pid ? childIdentity : null,
       killVerified: async (record) => { killed.push(record.pid); if (record.pid === root.pid) { rootLive = false; p.exitCode = 0; p.emit('close', 0) } return true }
     }
@@ -52,7 +63,7 @@ describe('identity-bound harness process teardown (injected fake tree)', () => {
     const p = fakeProcess()
     let rootLive = true
     const tree: ProcessTree = {
-      descendants: async () => [descendant], kill: async () => {}, isAlive: async () => false,
+      descendants: async (seed) => reachableFrom([descendant], seed), kill: async () => {}, isAlive: async () => false,
       inspect: async (pid) => pid === root.pid ? (rootLive ? root : null) : pid === descendant.pid ? descendant : null,
       killVerified: async (record) => { if (record.pid === root.pid) { rootLive = false; p.exitCode = 0; p.emit('close', 0) } return true }
     }
@@ -66,7 +77,7 @@ describe('identity-bound harness process teardown (injected fake tree)', () => {
     let rootLive = true, lateChildLive = false
     const killed: number[] = []
     const tree: ProcessTree = {
-      descendants: async () => lateChildLive && rootLive ? [descendant] : [],
+      descendants: async (seed) => reachableFrom(lateChildLive && rootLive ? [descendant] : [], seed),
       kill: async () => {}, isAlive: async () => false,
       inspect: async (pid) => pid === root.pid ? rootLive ? root : null : pid === descendant.pid && lateChildLive ? descendant : null,
       killVerified: async (record) => {
@@ -91,7 +102,7 @@ describe('identity-bound harness process teardown (injected fake tree)', () => {
     let lateGrandchild = grandchild
     const killed: number[] = []
     const tree: ProcessTree = {
-      descendants: async () => [descendant, ...(grandchildLive ? [lateGrandchild] : [])],
+      descendants: async (seed) => reachableFrom([descendant, ...(grandchildLive ? [lateGrandchild] : [])], seed),
       kill: async () => {}, isAlive: async () => false,
       inspect: async (pid) => pid === root.pid && rootLive ? root :
         pid === descendant.pid && childLive ? descendant : pid === lateGrandchild.pid && grandchildLive ? lateGrandchild : null,
@@ -113,16 +124,16 @@ describe('identity-bound harness process teardown (injected fake tree)', () => {
     if (error === null) expect(killed).toContain(grandchild.pid)
   })
 
-  it('Y1: rejects with the survivor when a captured child spawns a grandchild while being killed after root exit', async () => {
+  it('Y1: reaps a grandchild a captured child spawns while being killed after root exit (born within its parent\x27s lifetime)', async () => {
     // w4y's harder shape: the grandchild is born INSIDE killVerified(child), with the parent still alive at that
-    // moment and the root already gone. Once the parent dies, no live captured chain proves the grandchild owned,
-    // so stop() must reject (never resolve) and name the survivor. Killing it is optional; resolving is not.
+    // moment and the root already gone. Born within the captured parent's lifetime [startedAt, exit], it is owned
+    // (rule A′, childExitAt): it must be killed and gone, nothing foreign touched, and stop() resolves.
     const p = fakeProcess()
     let rootLive = true, childLive = true, grandchildLive = false
     let lateGrandchild = grandchild
     const killed: number[] = []
     const tree: ProcessTree = {
-      descendants: async () => [...(childLive ? [descendant] : []), ...(grandchildLive ? [lateGrandchild] : [])],
+      descendants: async (seed) => reachableFrom([...(childLive ? [descendant] : []), ...(grandchildLive ? [lateGrandchild] : [])], seed),
       kill: async () => {}, isAlive: async () => false,
       inspect: async (pid) => pid === root.pid && rootLive ? root :
         pid === descendant.pid && childLive ? descendant : pid === lateGrandchild.pid && grandchildLive ? lateGrandchild : null,
@@ -141,28 +152,34 @@ describe('identity-bound harness process teardown (injected fake tree)', () => {
     expect([...owned.descendants.values()]).toEqual([descendant])
     rootLive = false; p.exitCode = 0; p.emit('close', 0)
     await new Promise((resolve) => setTimeout(resolve, 10))
-    const error = await owned.stop().then(() => null, (reason: unknown) => reason)
+    await expect(owned.stop()).resolves.toBeUndefined()
     expect(killed).toContain(descendant.pid)
-    expect(error, 'stop() must not resolve while an unprovable grandchild may survive').not.toBeNull()
-    expect(String((error as Error).message)).toMatch(new RegExp(`${grandchild.pid}|unverified descendant|survivor|ancestry`, 'i'))
+    expect(killed, 'the grandchild born inside its parent\x27s lifetime is reaped').toContain(grandchild.pid)
+    expect(grandchildLive).toBe(false)
+    expect(killed.every((pid) => pid === root.pid || pid === descendant.pid || pid === grandchild.pid), `foreign kill in ${killed}`).toBe(true)
   })
 
   it('Y1: fails closed without killing a foreign post-exit descendant lacking an owned parent chain', async () => {
     const p = fakeProcess()
+    // Reachable shape: X (99999) is a post-exit child of the exited root PID (a PID reuser, skipped as foreign);
+    // the row under X has no captured owned parent, so it must fail closed and nothing may be killed.
+    let reuser: ProcessIdentity = { pid: 99999, parentPid: root.pid, name: 'reuser.exe', startedAt: root.startedAt }
     let foreign = { ...grandchild, parentPid: 99999 }
     let rootLive = true
     const killed: number[] = []
     const tree: ProcessTree = {
-      descendants: async () => rootLive ? [] : [foreign],
+      descendants: async (seed) => reachableFrom(rootLive ? [] : [reuser, foreign], seed),
       kill: async () => {}, isAlive: async () => false,
-      inspect: async (pid) => pid === root.pid && rootLive ? root : pid === foreign.pid ? foreign : null,
+      inspect: async (pid) => pid === root.pid && rootLive ? root : pid === foreign.pid ? foreign : pid === reuser.pid && !rootLive ? reuser : null,
       killVerified: async (record) => { killed.push(record.pid); return true }
     }
     const owned = await trackOwnedProcess(p as unknown as ChildProcess, tree, 10_000)
     rootLive = false; p.exitCode = 0; p.emit('close', 0)
     await new Promise((resolve) => setTimeout(resolve, 10))
+    reuser = { ...reuser, startedAt: new Date().toISOString() }
     foreign = { ...foreign, startedAt: new Date().toISOString() }
     await expect(owned.stop()).rejects.toThrow(/unverified descendant|survivor|ancestry/i)
     expect(killed).not.toContain(foreign.pid)
+    expect(killed).not.toContain(reuser.pid)
   })
 })
