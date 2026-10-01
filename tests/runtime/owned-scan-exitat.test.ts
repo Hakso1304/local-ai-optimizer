@@ -91,6 +91,31 @@ describe('owned scan: kill-time bound, reused parent PIDs, cross-seed conflicts 
     expect(live.get(X.pid)).toEqual(X)
   })
 
+  // (f)/(g): a "reuser" must have started strictly AFTER the captured parent (and after its recorded kill, if known).
+  // An identity at P's PID that started at or before P is P itself through another precision/source, not a reuser;
+  // treating it as one would skip an owned grandchild as foreign (silent survivor). Found by product-1-14 (probe c2).
+  it('(f) fails closed when the identity at the parent PID started before the captured parent (not a reuser)', async () => {
+    const P7: ProcessIdentity = { ...P, startedAt: '2026-10-02T00:00:01.1234567Z' }
+    const earlier: ProcessIdentity = { ...P7, startedAt: '2026-10-02T00:00:01.1234560Z' } // 7 ticks earlier: same process, other precision
+    const G: ProcessIdentity = { pid: 82008, parentPid: P.pid, name: 'node.exe', startedAt: '2026-10-02T00:00:01.5000000Z' }
+    const live = new Map([[earlier.pid, earlier], [G.pid, G]])
+    const { tree, killed } = fakeTree([G], live)
+    const res = await run({ tree, root: root.pid, rootIdentity: root, children: new Map([[P7.pid, P7]]), rootWasLive: false, ownedExitAt: rootExit, childExitAt: new Map() })
+    expect(res.ok, 'an owned grandchild must not be skipped as a reuser\'s child').toBe(false)
+    expect(killed).toEqual([])
+    expect(live.get(G.pid)).toEqual(G)
+  })
+
+  it('(g) fails closed when the row was born at the same instant the identity at the parent PID started (precision tie)', async () => {
+    const F: ProcessIdentity = { pid: P.pid, parentPid: 99999, name: 'other.exe', startedAt: t(25) }
+    const X: ProcessIdentity = { pid: 82009, parentPid: P.pid, name: 'node.exe', startedAt: t(25) }
+    const live = new Map([[F.pid, F], [X.pid, X]])
+    const { tree, killed } = fakeTree([X], live)
+    const res = await run({ tree, root: root.pid, rootIdentity: root, children: new Map([[P.pid, P]]), rootWasLive: false, ownedExitAt: rootExit, childExitAt: new Map() })
+    expect(res.ok, 'a tie is unprovable; it must not be classified as the reuser\'s child').toBe(false)
+    expect(killed).toEqual([])
+  })
+
   it('(e) fails closed when two census seeds report the same PID with different creation identities', async () => {
     const live = new Map([[P.pid, P]])
     const viaRoot: ProcessIdentity = { pid: 82007, parentPid: root.pid, name: 'node.exe', startedAt: t(5) }
