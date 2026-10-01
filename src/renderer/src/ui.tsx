@@ -14,6 +14,11 @@ export function useServe() {
   const [serve, setServe] = useState<ServeView>(SERVE_IDLE)
   const refresh = useCallback(() => window.api.serveStatus().then((s) => setServe({ ...s, ...(s.stopping ? { busy: 'stopping' as const } : {}) }), () => {}), [])
   useEffect(() => { void refresh() }, [refresh])
+  useEffect(() => { // while served: pick up a GPU loss (main latches it from the server log)
+    if (!serve.url) return
+    const t = setInterval(() => void refresh(), 5000)
+    return () => clearInterval(t)
+  }, [serve.url, refresh])
   const stop = async () => {
     setServe((s) => ({ ...s, busy: 'stopping', error: undefined }))
     const r = await window.api.serveStop().catch((e: Error) => ({ ok: false, error: e.message }))
@@ -34,6 +39,7 @@ export function RunningModel({ s, onStop }: { s: ServeView; onStop: () => void }
       <span>Running <b title={s.configId ?? ''}>{s.alias}</b> — chat: <a href={s.url} target="_blank" rel="noreferrer">{s.url}</a> · API: <code>{s.url}/v1</code> (OpenAI + Anthropic compatible, tool calling on) · model id <code>{s.alias}</code></span>
       <button disabled={stopping} onClick={() => void copy()} title="Base URL, model id and env vars for Claude Code, Cline, Continue, OpenCode and other agent tools">{copied ? 'Copied' : 'Copy agent setup'}</button>
       <button disabled={stopping} onClick={onStop} title="Kills llama-server and verifies its process tree is gone (a few seconds)">{stopping ? 'Stopping…' : 'Stop model'}</button>
+      {s.gpuLost && <span className="err">The GPU was reset (Vulkan device lost): every request now fails. Stop the model and start it again.</span>}
       {s.error && <span className="err">Stop failed: {s.error} — retry Stop; nothing else can start a server until the cleanup is verified.</span>}
     </p>
   )

@@ -5,7 +5,7 @@ import type { CandidateConfig, GenConfig, GpuBackendKind, KvType, ModelMeta, Rec
 import { genLabel, samplingFor, templateKwargsFor } from '../benchmark/gen'
 import type { LoadConfig } from '../runtimes/types'
 
-/** Batch sizes the runner benchmarks with (session.ts: batchSize 2048, ubatch = DEFAULT_CANDIDATE_RULES.ubatch). */
+/** Batch sizes the runner benchmarks with (session.ts: batchSize 2048, ubatch = cand.ubatch ?? DEFAULT_CANDIDATE_RULES.ubatch). */
 export const BENCH_BATCH = 2048
 export const BENCH_UBATCH = 512
 
@@ -47,7 +47,7 @@ export function exportConfigFrom(rec: Recommendation, cand: CandidateConfig, mod
   return {
     sessionId, configId: cand.id, modelPath: model.id, modelName: model.name, ctx,
     gpuLayers: cand.gpuLayers, gpuLayersAll: cand.gpuLayersAll, layers: model.layers, threads: cand.threads,
-    batch: BENCH_BATCH, ubatch: BENCH_UBATCH, flashAttn: cand.flashAttn, kvType: cand.kvType, device: cand.device, workload: rec.workload,
+    batch: BENCH_BATCH, ubatch: cand.ubatch ?? BENCH_UBATCH, flashAttn: cand.flashAttn, kvType: cand.kvType, device: cand.device, workload: rec.workload,
     kvOffload: cand.kvOffload !== false, mmap: cand.mmap !== false, backend: cand.backend ?? 'vulkan',
     ...(best.score.gen && (best.score.gen.thinking || best.score.gen.temperature > 0)
       ? { gen: { config: best.score.gen, sampling: samplingFor(best.score.gen), ...(templateKwargsFor(model, best.score.gen) ? { templateKwargs: templateKwargsFor(model, best.score.gen) } : {}) } }
@@ -109,6 +109,7 @@ export function modelAlias(modelName: string): string {
 /** Copy-paste setup for agent tools talking to the served model. llama-server speaks the OpenAI chat API with tool
  *  calling (/v1/chat/completions, jinja templates) and the Anthropic Messages API (/v1/messages); no API key is set. */
 export function agentSetupText(url: string, alias: string, ctx: number): string {
+  const body = JSON.stringify({ model: alias, messages: [{ role: 'user', content: 'hi' }] }) // alias is [A-Za-z0-9._-]
   return [
     `# Local AI Optimizer — model "${alias}" served by llama-server at ${url} (context ${ctx} tokens)`,
     `# Any API key value is accepted (none is configured). Requests queue on one slot.`,
@@ -129,10 +130,12 @@ export function agentSetupText(url: string, alias: string, ctx: number): string 
     `ANTHROPIC_BASE_URL=${url} ANTHROPIC_AUTH_TOKEN=none ANTHROPIC_MODEL=${alias} CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 claude`,
     `# or in ~/.claude/settings.json: { "env": { "ANTHROPIC_BASE_URL": "${url}", "ANTHROPIC_AUTH_TOKEN": "none", "ANTHROPIC_MODEL": "${alias}" } }`,
     ``,
-    `## curl`,
-    `curl ${url}/v1/chat/completions -H "Content-Type: application/json" -d "{\\"model\\":\\"${alias}\\",\\"messages\\":[{\\"role\\":\\"user\\",\\"content\\":\\"hi\\"}]}"`,
-    ``,
-    `# Agents send long system prompts and tool schemas: use a context of 32K or more for agent work (Run… form).`
+    `## Test request`,
+    `# PowerShell (its "curl" is Invoke-WebRequest, and \\" does not escape there)`,
+    `Invoke-RestMethod ${url}/v1/chat/completions -Method Post -ContentType application/json -Body '${body}'`,
+    `# bash/zsh`,
+    `curl ${url}/v1/chat/completions -H "Content-Type: application/json" -d '${body}'`,
+    ...(ctx < 32768 ? [``, `# Context ${ctx} is too small for agents (long system prompts + tool schemas): use 32K or more (Run… form).`] : [])
   ].join('\n')
 }
 

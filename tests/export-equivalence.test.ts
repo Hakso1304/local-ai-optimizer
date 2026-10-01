@@ -32,6 +32,7 @@ const variants: [string, CandidateConfig][] = [
   ['full offload f16', base],
   ['partial q8_0 KV, fa off', { ...base, gpuLayersAll: false, gpuLayers: 20, kvType: 'q8_0', flashAttn: false }],
   ['heavy: -nkvo, -lm none', { ...base, gpuLayersAll: false, gpuLayers: 55, kvOffload: false, mmap: false }],
+  ['integrated GPU: -ub 128, -lm none', { ...base, mmap: false, ubatch: 128 }],
   ['CPU only', { ...base, device: null, gpuLayersAll: false, gpuLayers: 0, kvType: 'q8_0' }],
   ['ROCm/HIP build: -dev ROCm0', { ...base, id: 'c|hip', backend: 'hip', device: 'ROCm0' }]
 ]
@@ -43,6 +44,7 @@ describe('T06 export equivalence', () => {
     const exported = flags(toLlamaServerArgs(exportConfigFrom(rec, cand, model, '1')!))
     const ran = flags(await runnerArgs(cand, model, ctx))
     expect(exported).toEqual(ran)
+    expect(ran['-ub']).toBe(String(cand.ubatch ?? 512))
     // the flags that matter are actually present (not both-missing)
     for (const f of ['-m', '-c', '-ngl', '-t', '-b', '-ub', '-fa', '-dev', '--parallel', '-fit', '--cache-ram']) expect(ran).toHaveProperty(f)
   })

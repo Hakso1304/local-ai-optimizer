@@ -208,6 +208,8 @@ export interface AppSettings {
   modelDirs?: string[]
   /** The model store: default download target and first scanned folder. Absent = the app's default folder. */
   modelsDir?: string
+  /** Port of the model served from the app, kept across runs so agent configs keep working. */
+  servePort?: number
 }
 
 /** The model store as resolved by main: the chosen folder or the default. */
@@ -270,7 +272,11 @@ export interface RendererApi {
 }
 
 /** The model the app is serving (serve:start), if any. alias = the API model id (llama-server --alias). */
-export interface ServeStatus { url: string | null; configId: string | null; alias: string | null; ctx: number | null; stopping: boolean; error?: string }
+export interface ServeStatus {
+  url: string | null; configId: string | null; alias: string | null; ctx: number | null; stopping: boolean; error?: string
+  /** llama-server logged a Vulkan device loss: the process stays up but every request fails until it is restarted. */
+  gpuLost?: boolean
+}
 
 // ---- Stored sessions (read side). Payload contract for benchmark_session / benchmark_run / recommendation rows. ----
 

@@ -170,7 +170,7 @@ describe('runSession', () => {
       }
     })
     expect(ctxOf(backend)).toEqual([2048, 4096])
-    expect(backend.calls.loads[0].extraArgs).toEqual(['-ub', '512', '-fa', 'on', '-lm', 'none'])
+    expect(backend.calls.loads[0].extraArgs).toEqual(['-ub', '128', '-fa', 'on', '-lm', 'none']) // igpuUbatch: 512 trips the GPU watchdog
     expect(s.runs.every((r) => r.status === 'pass' && r.peakSharedGpuBytes.kind === 'unavailable')).toBe(true)
     expect(s.runs.every((r) => r.minRamAvailBytes?.value === 20 * GiB)).toBe(true)
     expect(s.budget).toEqual([])

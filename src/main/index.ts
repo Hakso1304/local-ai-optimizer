@@ -5,8 +5,8 @@ import type { DatabaseSync } from 'node:sqlite'
 import { join } from 'node:path'
 import { scanSystem } from '../core/system/scanner'
 import { detectRuntimes } from '../core/runtimes'
-import { LlamaCppBackend, killStaleServer } from '../core/runtimes/llamacpp'
-import { pickBenchmarkDevice, pickDiscreteDevice } from '../core/runtimes/llamacpp/parse'
+import { LlamaCppBackend, freePort, killStaleServer } from '../core/runtimes/llamacpp'
+import { DEVICE_LOST, pickBenchmarkDevice, pickDiscreteDevice } from '../core/runtimes/llamacpp/parse'
 import { openDb } from '../core/storage/db'
 import { sessionInputs, getSession, getSessionResume, latestRecommendation, listSessions, listVramBudget, makeSessionStorage, markInterrupted, seedDemoSession, telemetryForRun, type PlanFor } from '../core/storage/sessions'
 import { REQUIRED_CTX, insideSomeRoot, isWorkloadId, rowId, sanitizeRequest, sanitizeServeConfig } from './validate'
@@ -16,7 +16,7 @@ import { modelSuggestions } from './suggestions'
 import { WORKLOADS } from '../core/scoring/workloads'
 import { val } from '../core/scoring/cliff'
 import { runSession, type InstalledBackend, type SessionStorage } from '../core/benchmark/session'
-import { applicableObservations, generateCandidates, machineFromProfile, planCandidates, rulesForRequest, vramBudgetKey, type PlannedBackend } from '../core/benchmark/candidates'
+import { DEFAULT_CANDIDATE_RULES, applicableObservations, generateCandidates, pickGpu, machineFromProfile, planCandidates, rulesForRequest, vramBudgetKey, type PlannedBackend } from '../core/benchmark/candidates'
 import { findGgufModels, toModelMeta } from '../core/models/gguf'
 import { fetchGenerationConfig, readSidecar, writeSidecar } from '../core/hub/modelcard'
 import { refreshSiblings } from '../core/hub/quants'
@@ -322,10 +322,14 @@ ipcMain.handle('bench:smoke', async (_e, modelPath: string): Promise<SmokeResult
 })
 
 // ---- Serve the recommended config from the app (llama-server + its built-in web UI in the default browser) ----
-let serving: { backend: LlamaCppBackend; configId: string; alias: string; ctx: number; url: string; stopping: boolean; error?: string } | null = null
-const serveStatus = (): ServeStatus => serving
-  ? { url: serving.url, configId: serving.configId, alias: serving.alias, ctx: serving.ctx, stopping: serving.stopping, ...(serving.error ? { error: serving.error } : {}) }
+let serving: { backend: LlamaCppBackend; configId: string; alias: string; ctx: number; url: string; stopping: boolean; error?: string; gpuLost?: boolean } | null = null
+const serveStatus = (): ServeStatus => {
+  // Latched: the log keeps only the last 100 lines. The renderer polls this while a model is served.
+  if (serving && !serving.gpuLost && serving.backend.log.some((l) => DEVICE_LOST.test(l))) serving.gpuLost = true
+  return serving
+  ? { url: serving.url, configId: serving.configId, alias: serving.alias, ctx: serving.ctx, stopping: serving.stopping, ...(serving.error ? { error: serving.error } : {}), ...(serving.gpuLost ? { gpuLost: true } : {}) }
   : { url: null, configId: null, alias: null, ctx: null, stopping: false }
+}
 ipcMain.handle('serve:start', async (_e, raw: unknown): Promise<{ ok: boolean; url?: string; error?: string }> => {
   const kind = raw && typeof raw === 'object' ? (raw as Record<string, unknown>).backend : undefined
   const backend = kind === 'hip' ? llamaHip : kind === 'prism' ? llamaPrism : llama
@@ -347,10 +351,19 @@ ipcMain.handle('serve:start', async (_e, raw: unknown): Promise<{ ok: boolean; u
   }
   const v = sanitizeServeConfig(raw, modelRoots())
   if (!v.ok) return { ok: false, error: v.error }
+  // Integrated GPU: cap -ub (igpuUbatch) — also for manual runs and recommendations measured before the cap, whose
+  // 512 lost the device on the first long agent prompt.
+  if (v.cfg.device && v.cfg.device !== 'none' && v.cfg.ubatch > DEFAULT_CANDIDATE_RULES.igpuUbatch && pickGpu(profileCache ??= await scanSystem())?.isIntegrated) {
+    v.cfg = { ...v.cfg, ubatch: DEFAULT_CANDIDATE_RULES.igpuUbatch }
+  }
   if (smokeBusy || active || installing || serving) return { ok: false, error: 'a benchmark, smoke run, served model or runtime install is already in progress' }
   serving = { backend, configId: v.cfg.configId, alias: modelAlias(v.cfg.modelName), ctx: v.cfg.ctx, url: '', stopping: false } // claim before the first await
   try {
-    await backend.loadModel(toLoadConfig(v.cfg))
+    // Same port every run (agent configs point at it); a new one only when something else holds it.
+    const saved = readSettings().servePort
+    const port = await (typeof saved === 'number' ? freePort(saved) : Promise.reject(new Error('none saved'))).catch(() => freePort())
+    if (port !== saved) writeSettings({ servePort: port })
+    await backend.loadModel({ ...toLoadConfig(v.cfg), port })
     const url = backend.url!
     serving.url = url
     await shell.openExternal(url)
@@ -491,6 +504,8 @@ function createWindow(): void {
     height: 800,
     backgroundColor: '#0f1115',
     title: 'Local AI Optimizer',
+    // Packaged builds take the icon from the exe; dev runs would otherwise show Electron's default.
+    ...(!app.isPackaged && { icon: join(__dirname, '../../build/icon.png') }),
     webPreferences: { preload: join(__dirname, '../preload/index.js'), sandbox: true, contextIsolation: true }
   })
   if (process.env.ELECTRON_RENDERER_URL) win.loadURL(process.env.ELECTRON_RENDERER_URL)

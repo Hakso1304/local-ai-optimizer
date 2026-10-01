@@ -46,7 +46,11 @@ export const DEFAULT_CANDIDATE_RULES = {
    *  smallest ctx. Measured at 2K: -nkvo lost to simply dropping ~5 layers (Qwen3.8 57-nkvo 7.4 vs 50 layers 10.7
    *  t/s; Gemma-4 26-nkvo 27.0 vs 21 layers 38.5 t/s) — useful only when the KV itself is what doesn't fit. */
   nkvoMinLayerGain: 8,
-  ubatch: 512
+  ubatch: 512,
+  /** -ub on an integrated GPU. On an Intel Arc iGPU (Windows, Vulkan) a 512-token micro-batch runs past the ~2 s GPU
+   *  watchdog (TDR) and kills the device (ErrorDeviceLost) on a ~2.5K-token prompt; 128 held on 6K prompts at
+   *  ~48 t/s prefill (Ternary-Bonsai-8B PQ2_0, 2026-09-29). */
+  igpuUbatch: 128
 }
 export type CandidateRules = typeof DEFAULT_CANDIDATE_RULES
 
@@ -297,7 +301,7 @@ export function generateCandidates(
       id, ...(runtime.backend === 'hip' || runtime.backend === 'cuda' || runtime.backend === 'prism' ? { backend: runtime.backend } : {}), modelId: model.id, device: ngl > 0 ? machine.gpuDevice : null, gpuLayers: Math.min(ngl, model.layers), gpuLayersAll: ngl >= model.layers,
       kvType: kv, flashAttn: true, threads, ctxSteps: steps, skippedSteps: skipped.sort((a, b) => a.ctx - b.ctx),
       estVramBytes: est(e0.vramBytes, src), estRamBytes: est(heavy ? e0.ramResidentBytes : e0.ramBytes, src), notes,
-      ...(machine.gpuSharedRam && ngl > 0 ? { mmap: false } : {}),
+      ...(machine.gpuSharedRam && ngl > 0 ? { mmap: false, ubatch: rules.igpuUbatch } : {}),
       ...(kvOnGpu ? {} : { kvOffload: false }), planning: ngl > 0 ? { ...planning, effectiveBudget: machine.gpuSharedRam ? { value: null, kind: 'unavailable', reason: 'integrated GPU uses shared RAM' } : budgetFor(machine, largestOf(estimateMemory(model, ngl, steps[steps.length - 1], kv, rules.ubatch, kvOnGpu))) } : planning
     }
   }

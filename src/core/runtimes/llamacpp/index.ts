@@ -226,12 +226,13 @@ export function serverEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Process
   return env
 }
 
-/** Ask the OS for a free loopback port (tiny race until llama-server binds it; /props check catches a squatter). */
-export function freePort(): Promise<number> {
+/** Ask the OS for a free loopback port (tiny race until llama-server binds it; /props check catches a squatter).
+ *  With `port`: that port if it is free, else rejects. */
+export function freePort(port = 0): Promise<number> {
   return new Promise((ok, fail) => {
     const s = createServer()
     s.on('error', fail)
-    s.listen(0, '127.0.0.1', () => {
+    s.listen(port, '127.0.0.1', () => {
       const { port } = s.address() as AddressInfo
       s.close(() => ok(port))
     })
