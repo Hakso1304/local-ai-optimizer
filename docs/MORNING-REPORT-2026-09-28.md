@@ -44,7 +44,7 @@ docs/EVIDENCE.md E-1…E-31 (S2 owns updates); E-12/E-13 now supported by stage 
 - HIP: driver enumeration unknown until `--list-devices` (stage 4).
 - Historical rows before O1 (sub-1 GiB spill verdicts) remain "unvalidated" in the ledger.
 - Console-window popups fixed (3e7183f).
-- **2026-10-02:** Y1 fixed (`251e497`, `d6db229`; tests `9234d54`/`29caa4c`/`6c9c7b2`; EVIDENCE E-52). killSync µs-tolerance defect fixed (`54e7a71`, E-53). App quit on the post-T3 interim build (f0fda83) likely leaked owned servers (fail-safe; ledger 2026-10-02 addendum).
+- **2026-10-02:** Y1 fixed for fake trees (`251e497`, `d6db229`; tests `9234d54`/`29caa4c`/`6c9c7b2`) but **reopened**: a real orphan of a dead captured intermediate escapes the root-seeded census (EVIDENCE E-52). killSync µs-tolerance defect fixed (`54e7a71`, E-53). App quit on the post-T3 interim build (f0fda83) likely leaked owned servers (fail-safe; ledger 2026-10-02 addendum).
 
 ## 7. Builds
 - Nightly pre-verdict at 3ec8278: `dist/Local AI Optimizer-0.1.0-nightly-2026-09-28-pre-verdict-*.exe` (+ BUILD-INFO.txt).
