@@ -649,7 +649,8 @@ export class LlamaCppBackend implements InferenceBackend {
   killSync(): void {
     const killIdentity = (record: ProcessIdentity) => {
       if (!Number.isSafeInteger(record.pid) || !/^\d{4}-\d\d-\d\dT[\d:.]+Z$/.test(record.startedAt)) return
-      const script = `$p=Get-Process -Id ${record.pid} -ErrorAction SilentlyContinue;if($p -and $p.StartTime.ToUniversalTime().Ticks -eq [datetime]::Parse('${record.startedAt}').ToUniversalTime().Ticks){$p.Kill();$p.WaitForExit(3000) | Out-Null}`
+      // Same tolerance as killVerified: CIM creation times are µs-truncated, Get-Process has 100 ns ticks.
+      const script = `$p=Get-Process -Id ${record.pid} -ErrorAction SilentlyContinue;if($p -and [math]::Abs($p.StartTime.ToUniversalTime().Ticks - [datetime]::Parse('${record.startedAt}').ToUniversalTime().Ticks) -lt 10){$p.Kill();$p.WaitForExit(3000) | Out-Null}`
       spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 5_000 })
     }
     for (const child of this.ownedChildren.values()) killIdentity(child)
