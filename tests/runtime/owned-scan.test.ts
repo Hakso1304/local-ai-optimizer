@@ -70,6 +70,22 @@ describe('exported owned-process scan reconciliation (injected identities)', () 
     if (error === null) expect(killed).toContain(grandchild.pid)
   })
 
+  it('Y1 control: skips a post-exit row whose parent is the exited root PID (a PID reuser\'s child), neither adopted nor fail-closed', async () => {
+    // A dead root cannot spawn: a row naming the exited root as parent and born after its exit belongs to whatever
+    // reused that PID. Pins the distinction against the chain-less 99999 case below, which must fail closed.
+    const reuserChild = { pid: 81004, parentPid: root.pid, name: 'node.exe', startedAt: '2026-09-28T00:00:20.000Z' }
+    const live = new Map([[reuserChild.pid, reuserChild]])
+    const { tree, killed } = fakeTree([reuserChild], live)
+    const children = new Map<number, ProcessIdentity>()
+    const result = await reconcileOwnedProcessScan({ tree, root: root.pid, rootIdentity: root,
+      children, rootWasLive: false, ownedExitAt: Date.parse('2026-09-28T00:00:10.000Z') })
+    expect(children.size).toBe(0)
+    expect(result.remaining).toEqual([])
+    await result.reap()
+    expect(killed).toEqual([])
+    expect(live.get(reuserChild.pid)).toEqual(reuserChild)
+  })
+
   it('Y1: fails closed on a post-exit scan row with no captured parent-identity chain', async () => {
     const foreign = { ...grandchild, parentPid: 99999 }
     const live = new Map([[foreign.pid, foreign]])

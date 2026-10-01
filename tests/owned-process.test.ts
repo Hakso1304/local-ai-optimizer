@@ -113,6 +113,40 @@ describe('identity-bound harness process teardown (injected fake tree)', () => {
     if (error === null) expect(killed).toContain(grandchild.pid)
   })
 
+  it('Y1: rejects with the survivor when a captured child spawns a grandchild while being killed after root exit', async () => {
+    // w4y's harder shape: the grandchild is born INSIDE killVerified(child), with the parent still alive at that
+    // moment and the root already gone. Once the parent dies, no live captured chain proves the grandchild owned,
+    // so stop() must reject (never resolve) and name the survivor. Killing it is optional; resolving is not.
+    const p = fakeProcess()
+    let rootLive = true, childLive = true, grandchildLive = false
+    let lateGrandchild = grandchild
+    const killed: number[] = []
+    const tree: ProcessTree = {
+      descendants: async () => [...(childLive ? [descendant] : []), ...(grandchildLive ? [lateGrandchild] : [])],
+      kill: async () => {}, isAlive: async () => false,
+      inspect: async (pid) => pid === root.pid && rootLive ? root :
+        pid === descendant.pid && childLive ? descendant : pid === lateGrandchild.pid && grandchildLive ? lateGrandchild : null,
+      killVerified: async (record) => {
+        killed.push(record.pid)
+        if (record.pid === descendant.pid) {
+          lateGrandchild = { ...grandchild, startedAt: new Date().toISOString() } // born while its parent still lives
+          grandchildLive = true
+          childLive = false
+        }
+        if (record.pid === grandchild.pid) grandchildLive = false
+        return true
+      }
+    }
+    const owned = await trackOwnedProcess(p as unknown as ChildProcess, tree, 10_000)
+    expect([...owned.descendants.values()]).toEqual([descendant])
+    rootLive = false; p.exitCode = 0; p.emit('close', 0)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    const error = await owned.stop().then(() => null, (reason: unknown) => reason)
+    expect(killed).toContain(descendant.pid)
+    expect(error, 'stop() must not resolve while an unprovable grandchild may survive').not.toBeNull()
+    expect(String((error as Error).message)).toMatch(new RegExp(`${grandchild.pid}|unverified descendant|survivor|ancestry`, 'i'))
+  })
+
   it('Y1: fails closed without killing a foreign post-exit descendant lacking an owned parent chain', async () => {
     const p = fakeProcess()
     let foreign = { ...grandchild, parentPid: 99999 }
