@@ -234,3 +234,9 @@ This addendum indexes E-47 through E-51 in [EVIDENCE.md](EVIDENCE.md). It is a C
 | W3 command binding | Source `c9fdcde` and `c6874fa` `tests/measurement-launcher.test.ts` changed `--backend hip` and `--models other.gguf` negatives, formerly RED, both GREEN in scoped 46/46 (E-51). | **Closed in software**; selected runtime/model binding awaits an actual archived launch. |
 
 No line here revises OVN-2P/2R, STAGE3-G4/Q5, I-2.8, or learned capacity.
+
+# 2026-10-02 addendum - app-quit teardown before 54e7a71
+
+- From `0a20d21` (2026-09-28 05:06) until `54e7a71`, `killSync` (app quit) killed owned processes only on an exact `Get-Process StartTime` == CIM `CreationDate` tick match. CIM truncates to whole µs, so the match failed for almost every real process (E-53: Δ = 9 ticks → not killed). App quit in that window likely **left owned llama-server processes (and captured descendants) running**. This is a fail-safe leak: the compare cannot match a foreign process, so nothing foreign was killed.
+- Affected build: the **post-T3 (interim) nightly at `f0fda83`**. The pre-verdict nightly at `3ec8278` predates `0a20d21` and has no identity compare in `killSync`.
+- Any "clean quit" evidence from builds in that window is limited to quits with no owned server running. The f0fda83 packaged launch check on 2026-09-28 quit with only `--version`/`--list-devices` children, which had already exited, so it did not exercise `killSync`. Re-check a quit with a loaded model on a build ≥ `54e7a71`.

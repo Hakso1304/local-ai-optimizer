@@ -23,6 +23,8 @@
 - Bound process reaping checks and hash probes (`3ad0641`).
 - Reject ambiguous port ownership and abort when the server is lost (`3a52076`).
 - Align selected HIP device metadata with ROCm0 (`f0fda83`).
+- After the server exits, adopt and reap a descendant whose parent is a captured process identity, leave a child of the exited server PID born after the exit, and fail closed on any other unverified descendant (`251e497`, `d6db229`).
+- Kill owned processes on app quit with the same µs-tolerant creation-time match as the verified kill (`54e7a71`).
 - Reserve and checkpoint session dumps atomically (`b647ed9`).
 
 ## 0.1.0 — 2026-09-27 / 2026-09-28 (first release, Windows 11)
