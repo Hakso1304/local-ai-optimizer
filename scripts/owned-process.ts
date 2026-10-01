@@ -77,13 +77,14 @@ export async function trackOwnedProcess(p: ChildProcess, tree: ProcessTree = win
       try { await snapshot() } catch (e) { errors.push(e) }
       if (fault) errors.push(fault)
       let rootWasLive = false
+      const childExitAt = new Map<number, number>() // captured pid → time WE confirmed it killed (kill-time bound)
       try {
         rootWasLive = same(await tree.inspect!(pid), root)
-        const before = await reconcileOwnedProcessScan({ tree, root: pid, rootIdentity: root, children: descendants, rootWasLive, ownedExitAt: exitAt })
+        const before = await reconcileOwnedProcessScan({ tree, root: pid, rootIdentity: root, children: descendants, rootWasLive, ownedExitAt: exitAt, childExitAt })
         await before.reap()
       } catch (e) { errors.push(e) }
       for (const child of [...descendants.values()].reverse()) {
-        try { if (same(await tree.inspect!(child.pid), child)) await tree.killVerified!(child) }
+        try { if (same(await tree.inspect!(child.pid), child) && await tree.killVerified!(child)) childExitAt.set(child.pid, Date.now()) }
         catch (e) { errors.push(e) }
       }
       let rootKilledDuringStop = false
@@ -113,7 +114,7 @@ export async function trackOwnedProcess(p: ChildProcess, tree: ProcessTree = win
         } } : tree
         const deadline = Date.now() + 3_000
         while (true) {
-          const result = await reconcileOwnedProcessScan({ tree: finalTree, root: pid, rootIdentity: root, children: descendants, rootWasLive: false, ownedExitAt: exitAt })
+          const result = await reconcileOwnedProcessScan({ tree: finalTree, root: pid, rootIdentity: root, children: descendants, rootWasLive: false, ownedExitAt: exitAt, childExitAt })
           if (!result.remaining.length) break
           if (Date.now() >= deadline) throw new Error(`owned PID ${pid} left descendants alive: ${result.remaining.map((x) => x.pid).join(', ')}`)
           await result.reap()

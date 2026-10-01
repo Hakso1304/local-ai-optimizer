@@ -163,6 +163,9 @@ export interface OwnedScanOptions {
   children: Map<number, ProcessIdentity>
   rootWasLive: boolean
   ownedExitAt: number | null
+  /** Captured pid → epoch ms at which WE confirmed that identity gone (our kill). Caller-owned, passed by reference;
+   *  reap() records into it. Absent → no kill-time rule (a dead captured parent always fails closed). */
+  childExitAt?: Map<number, number>
 }
 
 /** Reconcile a fresh scan against identities captured while the root lived.
@@ -171,7 +174,7 @@ export async function reconcileOwnedProcessScan(options: OwnedScanOptions): Prom
   remaining: ProcessIdentity[]
   reap(): Promise<void>
 }> {
-  const { tree, root, rootIdentity, children, rootWasLive, ownedExitAt } = options
+  const { tree, root, rootIdentity, children, rootWasLive, ownedExitAt, childExitAt } = options
   // Y1: census from the root AND every captured PID (dead ones included: both walkers accept a dead seed). An orphan
   // whose parent is a dead captured intermediate is invisible from the root alone (Windows keeps its ParentProcessId
   // pointing at the dead intermediate, which is no longer a Win32_Process row). Seeds disagreeing on a PID's
@@ -200,14 +203,37 @@ export async function reconcileOwnedProcessScan(options: OwnedScanOptions): Prom
     if (seen.has(record.pid)) return false
     seen.add(record.pid)
     const parent = children.get(record.parentPid)
-    return !!parent && await stillOwned(parent) && await ancestryValid(parent, seen)
+    if (!parent) return false
+    if (await stillOwned(parent)) return ancestryValid(parent, seen)
+    // A′: a parent WE killed vouches for rows born during its lifetime (its own ancestry was verified at capture).
+    return !!tree.inspect && (await tree.inspect(parent.pid)) === null && bornWithin(record, parent)
   }
-  // Y1: after the root exits, a row whose parent is not the root is ours only through a captured parent that is
-  // still the same live process (pid + creation identity), chained up to the root. Rows may chain through each other.
-  const chainsToOwned = async (record: ProcessIdentity): Promise<boolean> => {
+  const bornWithin = (record: ProcessIdentity, parent: ProcessIdentity) => {
+    const born = Date.parse(record.startedAt), from = Date.parse(parent.startedAt), until = childExitAt?.get(parent.pid)
+    return until !== undefined && Number.isFinite(born) && Number.isFinite(from) && born >= from && born <= until
+  }
+  // Y1: after the root exits, a row whose parent is not the root is ours only through a captured parent: one that is
+  // still the same live process chained to the root, or one WE killed whose lifetime contains the row's birth (A′).
+  // Rows may chain through each other.
+  // Classify a post-exit row under a captured parent P: 'adopt' (ours), 'skip' (provably foreign), 'wait' (unproven).
+  const classify = async (record: ProcessIdentity): Promise<'adopt' | 'skip' | 'wait'> => {
     const parent = record.parentPid === undefined ? undefined : children.get(record.parentPid)
-    return !!tree.inspect && !!parent && sameProcess(await tree.inspect(parent.pid), parent) &&
-      await ancestryValid(parent) && sameProcess(await tree.inspect(record.pid), record)
+    if (!tree.inspect || !parent) return 'wait'
+    const self = sameProcess(await tree.inspect(record.pid), record)
+    const current = await tree.inspect(parent.pid)
+    const born = Date.parse(record.startedAt)
+    if (sameProcess(current, parent)) return self && await ancestryValid(parent) ? 'adopt' : 'wait'
+    if (current === null) {
+      // B′: born after our confirmed kill of P → not P's child (a later process reusing P's PID as parent).
+      const until = childExitAt?.get(parent.pid)
+      if (until !== undefined && Number.isFinite(born) && born > until) return 'skip'
+      // A′ trust window: childExitAt is recorded just AFTER our kill returns. A row born between P's real death and
+      // that record, whose parent PID was reused in those milliseconds, would be adopted (and killed) wrongly.
+      return self && bornWithin(record, parent) ? 'adopt' : 'wait' // A′, or an orphan of a P that exited by itself
+    }
+    // P's PID now belongs to a live reuser F: rows born after F started are F's children; earlier ones are orphans
+    // of ours that cannot be proven → wait (fail closed).
+    return Number.isFinite(born) && born >= Date.parse(current.startedAt) ? 'skip' : 'wait'
   }
   const pending: ProcessIdentity[] = []
   const found = await scan()
@@ -234,8 +260,10 @@ export async function reconcileOwnedProcessScan(options: OwnedScanOptions): Prom
   }
   for (let progress = true; progress && pending.length;) {
     progress = false
-    for (const record of [...pending]) if (await chainsToOwned(record)) {
-      children.set(record.pid, record)
+    for (const record of [...pending]) {
+      const verdict = await classify(record)
+      if (verdict === 'wait') continue
+      if (verdict === 'adopt') children.set(record.pid, record)
       pending.splice(pending.indexOf(record), 1)
       progress = true
     }
@@ -256,7 +284,7 @@ export async function reconcileOwnedProcessScan(options: OwnedScanOptions): Prom
     for (const record of remaining) {
       if (!await ancestryValid(record)) throw new ServerStuckError(`descendant pid ${record.pid} lost its verified parent identity`)
       if (!await stillOwned(record)) continue
-      if (tree.killVerified) await tree.killVerified(record)
+      if (tree.killVerified) { if (await tree.killVerified(record)) childExitAt?.set(record.pid, Date.now()) }
       else if ((await scan()).some((current) => sameProcess(current, record))) await tree.kill(record.pid, { tree: true, force: true })
     }
   } }
