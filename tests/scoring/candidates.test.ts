@@ -75,6 +75,35 @@ describe('generateCandidates (16 GB VRAM / 31 GB RAM)', () => {
   })
 })
 
+describe('integrated-only shared-RAM planning', () => {
+  const GiB = 1024 ** 3
+  const profile = {
+    gpus: { value: [{ name: 'Intel Iris Xe', pnpDeviceId: 'PCI\\IGPU', driverVersion: '1', isIntegrated: true,
+      dedicatedVramBytes: { value: 16 * GiB, status: 'available', source: 'reported shared aperture' } }] },
+    ram: { value: { totalBytes: 16 * GiB, availableBytes: 11 * GiB }, source: 'scan' },
+    cpu: { value: { physicalCores: 4 } }
+  } as unknown as SystemProfile
+  it('fits a small model on Vulkan, never treats the advertised 16 GiB shared aperture as dedicated VRAM', () => {
+    const m = machineFromProfile(profile, 'Vulkan0')
+    const set = generateCandidates(m, llama8b, vulkan, WORKLOADS.coding)
+    expect(vramBudgetKey(profile, 'vulkan', 'b1')).toBeNull()
+    expect(m.vramBytes.value).toBeNull()
+    expect(set.candidates[0]).toMatchObject({ device: 'Vulkan0', gpuLayersAll: true, mmap: false })
+    expect(set.candidates[0].ctxSteps).toContain(2048)
+    expect(set.candidates[0].notes).toEqual(expect.arrayContaining([expect.stringMatching(/device allocations share system RAM/)]))
+    expect(set.candidates[0].planning?.planningVramBudgetBytes).toBeNull()
+  })
+  it('rejects when GPU buffers plus CPU buffers cross the available-RAM reserve, even if fake shared VRAM is large', () => {
+    const m = machineFromProfile(profile, 'Vulkan0')
+    const full = estimateMemory(q14b, q14b.layers, 2048, 'f16')
+    expect(full.ramBytes).toBeLessThan(7 * GiB)
+    expect(full.ramBytes + full.vramBytes).toBeGreaterThan(7 * GiB)
+    const set = generateCandidates(m, q14b, vulkan, WORKLOADS.coding)
+    expect(set.candidates).toEqual([])
+    expect(set.rejected[0].reason).toMatch(/est\. RAM .* > available − reserve/)
+  })
+})
+
 describe('machineFromProfile: measured VRAM in use from the profile', () => {
   const GiB = 1024 ** 3
   const profile = (vramInUse?: SystemProfile['vramInUse']): SystemProfile => ({
@@ -114,7 +143,7 @@ describe('planning snapshot (data contract §12)', () => {
     const f = load('calib-8b-rx9070.json')
     const m = machine(f.vramBytes)
     const c = generateCandidates(m, f.models[0], { backend: 'vulkan' }, WORKLOADS.coding).candidates[0]
-    expect(c.planning).toMatchObject({ vramTotalBytes: f.vramBytes, planningVramBudgetBytes: f.vramBytes, planningReserveBytes: 1024 ** 3, candidateRulesVersion: 'cand-1.5', vramInUse: { kind: 'measured' }, effectiveBudget: { kind: 'estimated', source: expect.stringMatching(/^no measured budget on this machine yet; assuming 80 % of the adapter total \(some GPUs\/backends allow 100 %\)$/) } })
+    expect(c.planning).toMatchObject({ vramTotalBytes: f.vramBytes, planningVramBudgetBytes: f.vramBytes, planningReserveBytes: 1024 ** 3, candidateRulesVersion: 'cand-1.6', vramInUse: { kind: 'measured' }, effectiveBudget: { kind: 'estimated', source: expect.stringMatching(/^no measured budget on this machine yet; assuming 80 % of the adapter total \(some GPUs\/backends allow 100 %\)$/) } })
     const blind = generateCandidates({ ...m, vramInUseBytes: { value: null, kind: 'unavailable', reason: 'no counter' } }, f.models[0], { backend: 'vulkan' }, WORKLOADS.coding).candidates[0]
     expect(blind.planning!.vramInUse).toMatchObject({ value: 1.5 * 1024 ** 3, kind: 'estimated' })
   })

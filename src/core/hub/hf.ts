@@ -61,18 +61,24 @@ async function getJson<T>(url: string, token?: string, signal?: AbortSignal, bas
   return { body: (await res.json()) as T, res }
 }
 
-export interface HfModel { id: string; downloads: number; likes: number; gated: boolean | 'auto' | 'manual'; lastModified: string | null }
+export interface HfModel {
+  id: string; downloads: number; likes: number; gated: boolean | 'auto' | 'manual'; lastModified: string | null
+  /** Repo creation (ISO) — the closest thing to a release date; lastModified moves on every README edit. */
+  createdAt?: string | null
+}
 
-export async function searchModels(query: string, opts: Common & { limit?: number } = {}): Promise<HfModel[]> {
+/** Empty query = most-downloaded GGUF repos overall. */
+export async function searchModels(query: string, opts: Common & { limit?: number; pipelineTag?: string } = {}): Promise<HfModel[]> {
   const u = new URL('/api/models', opts.baseUrl ?? HF_BASE)
-  u.searchParams.set('search', query)
+  if (query) u.searchParams.set('search', query)
   u.searchParams.set('filter', 'gguf')
+  if (opts.pipelineTag) u.searchParams.set('pipeline_tag', opts.pipelineTag)
   u.searchParams.set('sort', 'downloads')
   u.searchParams.set('direction', '-1')
   u.searchParams.set('limit', String(Math.min(100, Math.max(1, opts.limit ?? 20))))
-  for (const f of ['downloads', 'likes', 'gated', 'lastModified']) u.searchParams.append('expand[]', f)
-  const { body } = await getJson<{ id: string; downloads?: number; likes?: number; gated?: boolean | 'auto' | 'manual'; lastModified?: string }[]>(u.href, opts.token, undefined, opts.baseUrl)
-  return body.map((m) => ({ id: m.id, downloads: m.downloads ?? 0, likes: m.likes ?? 0, gated: m.gated ?? false, lastModified: m.lastModified ?? null }))
+  for (const f of ['downloads', 'likes', 'gated', 'lastModified', 'createdAt']) u.searchParams.append('expand[]', f)
+  const { body } = await getJson<{ id: string; downloads?: number; likes?: number; gated?: boolean | 'auto' | 'manual'; lastModified?: string; createdAt?: string }[]>(u.href, opts.token, undefined, opts.baseUrl)
+  return body.map((m) => ({ id: m.id, downloads: m.downloads ?? 0, likes: m.likes ?? 0, gated: m.gated ?? false, lastModified: m.lastModified ?? null, createdAt: m.createdAt ?? null }))
 }
 
 export interface HfGgufFile {
@@ -86,7 +92,7 @@ export interface HfGgufFile {
 }
 
 export const quantFromName = (name: string): string | null =>
-  /(I?Q\d_[A-Z0-9]+(?:_[A-Z0-9]+)?|BF16|F16|F32|MXFP4)/i.exec(name.split('/').pop()!.replace(/-\d{5}-of-\d{5}\.gguf$/i, ''))?.[1]?.toUpperCase() ?? null
+  /(TQ\d_\d|I?Q\d_[A-Z0-9]+(?:_[A-Z0-9]+)?|BF16|F16|F32|MXFP4)/i.exec(name.split('/').pop()!.replace(/-\d{5}-of-\d{5}\.gguf$/i, ''))?.[1]?.toUpperCase() ?? null
 
 export async function listGgufFiles(repoId: string, opts: Common & { revision?: string } = {}): Promise<HfGgufFile[]> {
   const base = opts.baseUrl ?? HF_BASE

@@ -29,6 +29,8 @@ export interface HubApi {
   hubOpenTokenPage(): Promise<void>
   hubDirs(): Promise<string[]>
   hubSearch(query: string): Promise<HubResult<{ models: HfModel[] }>>
+  /** Most-downloaded text-generation GGUF repos (feeds the "fits this PC" list). */
+  hubPopular(): Promise<HubResult<{ models: HfModel[] }>>
   hubFiles(repoId: string): Promise<HubResult<{ files: HfGgufFile[] }>>
   /** One download at a time. Calling it again for the same file resumes from the .part. */
   hubDownload(req: { repoId: string; path: string; destDir: string }): Promise<HubResult<{ filePath: string; sha256Verified: boolean | null }>>

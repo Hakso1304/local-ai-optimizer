@@ -1,6 +1,7 @@
 // Types shared between main, preload and renderer. No runtime code here.
 import type { BenchmarkRunResult, CandidateConfig, CliffReport, GenKnobs, GpuBackendKind, QuantSuggestion, GenQuality, ModelMeta, QualityResult, Recommendation, WorkloadId, WorkloadProfile, WorkloadScore } from './bench-types'
 import type { SessionEvent, SessionRequest, TelemetrySample } from './bench-events'
+import type { ExportConfig } from '../core/export/config'
 
 export type Status = 'available' | 'unavailable' | 'unsupported'
 
@@ -83,6 +84,11 @@ export interface GgufMetadata {
   embeddingLength: number | null
   fileType: number | null
   quantName: string | null // from general.file_type, else parsed from the filename
+  /** Distinct ggml tensor types in the file, ascending. */
+  tensorTypes: number[]
+  /** A tensor type at/above MAINLINE_GGML_TYPE_COUNT (PrismML PQ2_0 = 142, PTQ1_0 = 141): mainline llama.cpp rejects
+   *  the file ("invalid ggml type"); only the PrismML build (backend 'prism') loads it. */
+  requiresBackend: 'prism' | null
   fileSizeBytes: number
   /** File shorter than the tensor data the header describes (partial download). Such models are not benchmarked. */
   incomplete: boolean
@@ -198,8 +204,16 @@ export interface AppSettings {
   workload?: WorkloadId
   /** Last Benchmark "Required context" choice; null/absent = Auto (workload default). */
   requiredContext?: number | null
+  /** Extra model folders (scanned, allowed as download targets). */
   modelDirs?: string[]
+  /** The model store: default download target and first scanned folder. Absent = the app's default folder. */
+  modelsDir?: string
+  /** Port of the model served from the app, kept across runs so agent configs keep working. */
+  servePort?: number
 }
+
+/** The model store as resolved by main: the chosen folder or the default. */
+export interface ModelsStore { dir: string; defaultDir: string }
 
 export type StartResult = { ok: true; sessionId: string } | { ok: false; error: string }
 
@@ -228,6 +242,16 @@ export interface RendererApi {
   installRuntime(): Promise<RuntimeDetection>
   /** Opt-in AMD ROCm/HIP build (~245 MiB) into its own dir, same release tag as the installed Vulkan build. */
   installHipRuntime(): Promise<RuntimeDetection>
+  /** Opt-in PrismML llama.cpp fork (Vulkan Windows build) for ternary PQ2_0 / PTQ1_0 models such as Bonsai. */
+  installPrismRuntime(): Promise<RuntimeDetection>
+  /** OS folder picker; the folder joins settings.modelDirs (scanned for models, allowed as a download target). */
+  addModelDir(): Promise<AppSettings>
+  removeModelDir(dir: string): Promise<AppSettings>
+  /** The model store (default download target, first scanned folder). */
+  modelsStore(): Promise<ModelsStore>
+  /** OS folder picker for the model store; created if missing. Existing files are not moved. */
+  chooseModelsDir(): Promise<ModelsStore>
+  resetModelsDir(): Promise<ModelsStore>
   /** llama.cpp backends installed side by side (each checked with its own llama-server --version). */
   installedBackends(): Promise<InstalledRuntime[]>
   onRuntimeProgress(cb: (msg: string) => void): () => void
@@ -241,6 +265,17 @@ export interface RendererApi {
   /** Link a local model to a Hugging Face repo and fetch its sampling defaults (generation_config.json). */
   linkModelRepo(path: string, repoId: string): Promise<{ ok: boolean; generation?: unknown; error?: string }>
   benchSmoke(modelPath: string): Promise<SmokeResult>
+  /** Run the exported config from the app: starts llama-server as measured and opens its web UI in the browser. */
+  serveStart(cfg: ExportConfig): Promise<{ ok: boolean; url?: string; error?: string }>
+  serveStop(): Promise<{ ok: boolean; error?: string }>
+  serveStatus(): Promise<ServeStatus>
+}
+
+/** The model the app is serving (serve:start), if any. alias = the API model id (llama-server --alias). */
+export interface ServeStatus {
+  url: string | null; configId: string | null; alias: string | null; ctx: number | null; stopping: boolean; error?: string
+  /** llama-server logged a Vulkan device loss: the process stays up but every request fails until it is restarted. */
+  gpuLost?: boolean
 }
 
 // ---- Stored sessions (read side). Payload contract for benchmark_session / benchmark_run / recommendation rows. ----

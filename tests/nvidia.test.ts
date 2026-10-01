@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events'
 import type { ChildProcess } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { parseCudaVersion, parseQueryLine, probeNvidiaSmi, startNvidiaSampler, type Exec } from '../src/core/telemetry/nvidia'
-import { expectedSha256, pickReleaseAsset, pickRocmAsset, type ReleaseAsset } from '../src/core/runtimes/llamacpp/assets'
+import { expectedSha256, pickPrismAsset, pickReleaseAsset, pickRocmAsset, type ReleaseAsset } from '../src/core/runtimes/llamacpp/assets'
 
 const MiB = 1024 ** 2
 // Real output on the AMD dev machine (stale NVIDIA driver), captured 2026-09-27 — exit code 4.
@@ -93,6 +93,12 @@ describe('pickReleaseAsset (real b11208 asset list)', () => {
     expect(expectedSha256({ ...r, name: 'x.zip', digest: 'sha256:ABC' })).toBe('abc')
     expect(expectedSha256({ ...r, name: 'x.zip' })).toBeNull()
     expect(pickRocmAsset(assets.filter((a) => !a.name.includes('win-rocm')))).toBeNull()
+  })
+  it('PrismML fork asset: the win-vulkan x64 zip of the prism-bNNNN-<sha> release (real names, 2026-09-28)', () => {
+    const rel: ReleaseAsset[] = ['llama-prism-b10743-adfffbe-bin-win-cpu-x64.zip', 'llama-prism-b10743-adfffbe-bin-win-vulkan-x64.zip', 'llama-prism-b10743-adfffbe-bin-ubuntu-vulkan-x64.tar.gz', 'llama-prism-b10743-adfffbe-bin-win-cuda-12.4-x64.zip']
+      .map((name) => ({ name, size: 1, browser_download_url: `https://example/${name}` }))
+    expect(pickPrismAsset(rel)?.name).toBe('llama-prism-b10743-adfffbe-bin-win-vulkan-x64.zip')
+    expect(pickPrismAsset(assets)).toBeNull() // mainline release: no prism build
   })
   it('AMD / Intel / other → Vulkan, with Vulkan fallback', () => {
     for (const vendor of ['amd', 'intel', 'other'] as const) {

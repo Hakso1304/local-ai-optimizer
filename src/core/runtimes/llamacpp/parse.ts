@@ -123,15 +123,23 @@ export function parseDevices(out: string): LlamaDevice[] {
 export function pickDiscreteDevice(devs: LlamaDevice[]): LlamaDevice | null {
   return devs.find((d) => !INTEGRATED_GPU_NAME.test(d.name)) ?? null
 }
+/** Use an integrated Vulkan adapter only when there is no discrete device; never select virtual adapters. */
+export function pickBenchmarkDevice(devs: LlamaDevice[], allowIntegrated: boolean): LlamaDevice | null {
+  return pickDiscreteDevice(devs) ?? (allowIntegrated
+    ? devs.find((d) => INTEGRATED_GPU_NAME.test(d.name) && !/Microsoft|Virtual|Parsec|Remote/i.test(d.name)) ?? null
+    : null)
+}
 
 export type ExitReason = 'oom' | 'device_lost' | 'crash'
+
+/** Vulkan reports both the C++ enum names (vk::Result::eErrorDeviceLost → "ErrorDeviceLost") and the C codes
+ *  (VK_ERROR_DEVICE_LOST); match both spellings (W4 F9). */
+export const DEVICE_LOST = /DeviceLost|VK_ERROR_DEVICE_LOST/i
 
 export function classifyExit(tail: string[]): ExitReason {
   const text = tail.join('\n')
   // OOM first: an allocation failure is usually the root cause of a later device loss.
-  // Vulkan reports both the C++ enum names (vk::Result::eErrorDeviceLost → "ErrorDeviceLost") and the C codes
-  // (VK_ERROR_DEVICE_LOST); match both spellings (W4 F9).
   if (/failed to allocate|out of memory|ErrorOutOf(Device|Host)Memory|VK_ERROR_OUT_OF_(DEVICE|HOST)_MEMORY/i.test(text)) return 'oom'
-  if (/DeviceLost|VK_ERROR_DEVICE_LOST/i.test(text)) return 'device_lost'
+  if (DEVICE_LOST.test(text)) return 'device_lost'
   return 'crash'
 }

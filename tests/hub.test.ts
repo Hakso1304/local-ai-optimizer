@@ -63,8 +63,8 @@ afterAll(() => { hub.close(); cdn.close(); rmSync(dir, { recursive: true, force:
 describe('hub API', () => {
   it('searchModels maps fields and defaults missing ones', async () => {
     expect(await searchModels('llama', { baseUrl: base, limit: 5 })).toEqual([
-      { id: 'org/repo-GGUF', downloads: 10, likes: 2, gated: false, lastModified: '2026-09-01T00:00:00.000Z' },
-      { id: 'org/gated-GGUF', downloads: 0, likes: 0, gated: 'manual', lastModified: null }
+      { id: 'org/repo-GGUF', downloads: 10, likes: 2, gated: false, lastModified: '2026-09-01T00:00:00.000Z', createdAt: null },
+      { id: 'org/gated-GGUF', downloads: 0, likes: 0, gated: 'manual', lastModified: null, createdAt: null }
     ])
   })
   it('listGgufFiles follows Link pagination, keeps .gguf only, uses lfs oid/size, parses quant + shards', async () => {

@@ -1,21 +1,22 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { freemem } from 'node:os'
 import type { DatabaseSync } from 'node:sqlite'
 import { join } from 'node:path'
 import { scanSystem } from '../core/system/scanner'
 import { detectRuntimes } from '../core/runtimes'
-import { LlamaCppBackend, killStaleServer } from '../core/runtimes/llamacpp'
-import { pickDiscreteDevice } from '../core/runtimes/llamacpp/parse'
+import { LlamaCppBackend, freePort, killStaleServer } from '../core/runtimes/llamacpp'
+import { DEVICE_LOST, pickBenchmarkDevice, pickDiscreteDevice } from '../core/runtimes/llamacpp/parse'
 import { openDb } from '../core/storage/db'
 import { sessionInputs, getSession, getSessionResume, latestRecommendation, listSessions, listVramBudget, makeSessionStorage, markInterrupted, seedDemoSession, telemetryForRun, type PlanFor } from '../core/storage/sessions'
-import { REQUIRED_CTX, insideSomeRoot, isWorkloadId, rowId, sanitizeRequest } from './validate'
+import { REQUIRED_CTX, insideSomeRoot, isWorkloadId, rowId, sanitizeRequest, sanitizeServeConfig } from './validate'
+import { modelAlias, toLoadConfig } from '../core/export/config'
 import { registerHubIpc } from './hub'
 import { modelSuggestions } from './suggestions'
 import { WORKLOADS } from '../core/scoring/workloads'
 import { val } from '../core/scoring/cliff'
 import { runSession, type InstalledBackend, type SessionStorage } from '../core/benchmark/session'
-import { applicableObservations, generateCandidates, machineFromProfile, planCandidates, rulesForRequest, vramBudgetKey, type PlannedBackend } from '../core/benchmark/candidates'
+import { DEFAULT_CANDIDATE_RULES, applicableObservations, generateCandidates, pickGpu, machineFromProfile, planCandidates, rulesForRequest, vramBudgetKey, type PlannedBackend } from '../core/benchmark/candidates'
 import { findGgufModels, toModelMeta } from '../core/models/gguf'
 import { fetchGenerationConfig, readSidecar, writeSidecar } from '../core/hub/modelcard'
 import { refreshSiblings } from '../core/hub/quants'
@@ -26,7 +27,7 @@ import { evaluateAsync } from '../core/quality'
 import type { SessionEvent, SessionRequest } from '../shared/bench-events'
 import type { CandidateConfig, GpuBackendKind, ModelMeta, WorkloadId } from '../shared/bench-types'
 import { recommendForWorkload } from '../core/scoring/recommend'
-import type { AppSettings, InstalledRuntime, ComputedRecommendation, ModelFit, ModelInfo, SmokeResult, StartResult, SystemProfile } from '../shared/types'
+import type { AppSettings, InstalledRuntime, ComputedRecommendation, ModelFit, ModelInfo, ModelsStore, ServeStatus, SmokeResult, StartResult, SystemProfile } from '../shared/types'
 
 // Dev/test runs get their own userData so they never write the installed app's database or settings.
 // Must run before anything calls app.getPath('userData') (the llama pid file below does).
@@ -45,7 +46,11 @@ app.on('second-instance', () => {
 const llamaDir = () => (app.isPackaged ? join(app.getPath('userData'), 'runtime', 'llama.cpp') : join(app.getAppPath(), 'vendor', 'llama.cpp'))
 /** Opt-in ROCm/HIP build, side by side with the Vulkan one (docs/HIP-BACKEND.md §2); dev: vendor/llama.cpp-hip. */
 const hipDir = () => (app.isPackaged ? join(app.getPath('userData'), 'runtime', 'llama.cpp-hip') : join(app.getAppPath(), 'vendor', 'llama.cpp-hip'))
+const prismDir = () => (app.isPackaged ? join(app.getPath('userData'), 'runtime', 'llama.cpp-prism') : join(app.getAppPath(), 'vendor', 'llama.cpp-prism'))
 const bundledModelsDir = () => (app.isPackaged ? join(app.getPath('userData'), 'models') : join(app.getAppPath(), 'models'))
+/** The model store: settings.modelsDir when the user chose one (Models page "Browse…"), else the default folder. */
+const modelsDir = () => { const d = readSettings().modelsDir; return typeof d === 'string' && d.trim() ? d : bundledModelsDir() }
+const modelsStore = (): ModelsStore => ({ dir: modelsDir(), defaultDir: bundledModelsDir() })
 
 const settingsFile = () => join(app.getPath('userData'), 'settings.json')
 function readSettings(): AppSettings {
@@ -57,11 +62,12 @@ function writeSettings(patch: Partial<AppSettings>): AppSettings {
   return next
 }
 
-/** Bundled models dir plus settings.modelDirs (user-added; none by default). Missing dirs are skipped. */
+/** The model store first, then settings.modelDirs (user-added extra folders; none by default). */
 function modelDirs(): string[] {
   const s = readSettings()
-  const extra = Array.isArray(s.modelDirs) ? s.modelDirs.filter((d): d is string => typeof d === 'string') : []
-  return [bundledModelsDir(), ...extra]
+  const store = modelsDir()
+  const extra = Array.isArray(s.modelDirs) ? s.modelDirs.filter((d): d is string => typeof d === 'string' && d !== store) : []
+  return [store, ...extra]
 }
 
 /** Folder GGUFs (configured dirs) + LM Studio dirs + Ollama blobs, deduplicated by path (first source wins). */
@@ -102,6 +108,7 @@ const modelRoots = () => [...modelDirs(), ...defaultLmStudioDirs(), join(default
 
 const llama = new LlamaCppBackend(llamaDir(), { pidFile: join(app.getPath('userData'), 'llama-server.pid') })
 const llamaHip = new LlamaCppBackend(hipDir(), { pidFile: join(app.getPath('userData'), 'llama-server-hip.pid') })
+const llamaPrism = new LlamaCppBackend(prismDir(), { pidFile: join(app.getPath('userData'), 'llama-server-prism.pid') })
 const markerOf = (dir: string): string | null => { try { return readFileSync(join(dir, 'release-tag.txt'), 'utf8').trim() } catch { return null } }
 const primaryBackendKind = (): 'cuda' | 'vulkan' => /\bcuda-/.test(markerOf(llamaDir()) ?? '') ? 'cuda' : 'vulkan'
 
@@ -113,7 +120,7 @@ async function installedBackends(): Promise<InstalledRuntime[]> {
   }
   // the primary dir holds a CUDA build when the installer chose one (marker "<tag> cuda-X.Y")
   const primaryKind = primaryBackendKind()
-  return Promise.all([one(llama, llamaDir(), primaryKind), one(llamaHip, hipDir(), 'hip')])
+  return Promise.all([one(llama, llamaDir(), primaryKind), one(llamaHip, hipDir(), 'hip'), one(llamaPrism, prismDir(), 'prism')])
 }
 let smokeBusy = false
 let db: DatabaseSync | null = null
@@ -156,7 +163,7 @@ ipcMain.handle('models:fit', async (_e, w: WorkloadId): Promise<ModelFit> => {
   const infos = await listAllModels()
   const devices = await llama.listDevices().catch(() => null)
   if (!devices) return { reasons: Object.fromEntries(infos.map((m) => [m.id, 'llama.cpp runtime not installed (System page)'])), vramInUseBytes: null, vramTotalBytes: null }
-  const device = pickDiscreteDevice(devices)?.id ?? null
+  const device = pickBenchmarkDevice(devices, !!profileCache.gpus.value?.some((g) => g.isIntegrated))?.id ?? null
   const kind = device ? primaryBackendKind() : 'cpu'
   const bk = vramBudgetKey(profileCache, kind, (await llama.detect()).version)
   const machine = machineFromProfile(await withVramInUse(profileCache), device, undefined, bk ? applicableObservations(bk, listVramBudget(needDb(), bk.key)) : [])
@@ -199,6 +206,13 @@ ipcMain.handle('runtime:installHip', async () => {
   })()
   try { return await installing } finally { installing = null }
 })
+ipcMain.handle('runtime:installPrism', async () => {
+  if (installing) throw new Error('runtime install already running')
+  if (active || smokeBusy || serving) throw new Error('a benchmark or served model is running; install the runtime after it finishes')
+  const progress = (msg: string) => { for (const w of BrowserWindow.getAllWindows()) w.webContents.send('runtime:progress', msg) }
+  installing = llamaPrism.ensureRuntime(progress, { vendor: 'other', prism: true })
+  try { return await installing } finally { installing = null }
+})
 registerHubIpc(ipcMain, () => BrowserWindow.getAllWindows()[0] ?? null, { userDataDir: app.getPath('userData'), modelDirs })
 ipcMain.handle('settings:get', () => readSettings())
 ipcMain.handle('settings:setWorkload', (_e, w: WorkloadId) => {
@@ -209,6 +223,29 @@ ipcMain.handle('settings:setRequiredContext', (_e, ctx: unknown) => {
   if (ctx !== null && !REQUIRED_CTX.includes(ctx as number)) throw new Error('required context must be 32K, 64K, 128K or Auto')
   return writeSettings({ requiredContext: ctx as number | null })
 })
+/** Extra model folders (e.g. on a bigger drive): scanned for models and allowed as Download targets. */
+ipcMain.handle('settings:addModelDir', async (): Promise<AppSettings> => {
+  const r = await dialog.showOpenDialog({ title: 'Add a model folder', properties: ['openDirectory', 'createDirectory'] })
+  const dir = r.filePaths[0]
+  if (r.canceled || !dir) return readSettings()
+  const dirs = (readSettings().modelDirs ?? []).filter((d): d is string => typeof d === 'string')
+  if (!dirs.includes(dir) && dir !== modelsDir()) dirs.push(dir)
+  return writeSettings({ modelDirs: dirs })
+})
+ipcMain.handle('settings:removeModelDir', (_e, dir: unknown): AppSettings =>
+  writeSettings({ modelDirs: (readSettings().modelDirs ?? []).filter((d) => typeof d === 'string' && d !== dir) }))
+/** Model store: where downloads go by default and the first folder scanned. Changing it does not move files; the
+ *  previous folder can stay reachable via "Add folder…". */
+ipcMain.handle('settings:modelsStore', modelsStore)
+ipcMain.handle('settings:chooseModelsDir', async (): Promise<ModelsStore> => {
+  const r = await dialog.showOpenDialog({ title: 'Choose the model store folder', defaultPath: modelsDir(), properties: ['openDirectory', 'createDirectory'] })
+  const dir = r.filePaths[0]
+  if (r.canceled || !dir) return modelsStore()
+  mkdirSync(dir, { recursive: true })
+  writeSettings({ modelsDir: dir === bundledModelsDir() ? undefined : dir })
+  return modelsStore()
+})
+ipcMain.handle('settings:resetModelsDir', (): ModelsStore => { writeSettings({ modelsDir: undefined }); return modelsStore() })
 ipcMain.handle('workloads:list', () => Object.values(WORKLOADS))
 ipcMain.handle('sessions:list', () => listSessions(needDb()))
 ipcMain.handle('sessions:get', (_e, id: unknown) => getSession(needDb(), rowId(id)))
@@ -266,12 +303,13 @@ ipcMain.handle('bench:pause', () => {
 })
 ipcMain.handle('bench:smoke', async (_e, modelPath: string): Promise<SmokeResult> => {
   if (typeof modelPath !== 'string' || !insideSomeRoot(modelPath, modelRoots())) throw new Error('model path not in a configured model dir')
-  if (smokeBusy || active || installing) throw new Error('a smoke run, benchmark or runtime install is already in progress')
+  if (smokeBusy || active || installing || serving) throw new Error('a smoke run, benchmark, served model or runtime install is already in progress')
   smokeBusy = true
   try {
     // Deliberately tiny: ctx 2048, 32 tokens, one warmup + one measured request.
-    const dev = pickDiscreteDevice(await llama.listDevices())
-    if (!dev) throw new Error('no discrete Vulkan device reported by llama-server --list-devices')
+    const profile = profileCache ??= await scanSystem()
+    const dev = pickBenchmarkDevice(await llama.listDevices(), !!profile.gpus.value?.some((g) => g.isIntegrated))
+    if (!dev) throw new Error('no physical Vulkan device reported by llama-server --list-devices')
     const load = await llama.loadModel({ modelPath, contextSize: 2048, gpuLayers: 99, device: dev.id })
     const text = 'Explain in one sentence what a GPU does.'
     await llama.warmup(text)
@@ -283,8 +321,84 @@ ipcMain.handle('bench:smoke', async (_e, modelPath: string): Promise<SmokeResult
   }
 })
 
+// ---- Serve the recommended config from the app (llama-server + its built-in web UI in the default browser) ----
+let serving: { backend: LlamaCppBackend; configId: string; alias: string; ctx: number; url: string; stopping: boolean; error?: string; gpuLost?: boolean } | null = null
+const serveStatus = (): ServeStatus => {
+  // Latched: the log keeps only the last 100 lines. The renderer polls this while a model is served.
+  if (serving && !serving.gpuLost && serving.backend.log.some((l) => DEVICE_LOST.test(l))) serving.gpuLost = true
+  return serving
+  ? { url: serving.url, configId: serving.configId, alias: serving.alias, ctx: serving.ctx, stopping: serving.stopping, ...(serving.error ? { error: serving.error } : {}), ...(serving.gpuLost ? { gpuLost: true } : {}) }
+  : { url: null, configId: null, alias: null, ctx: null, stopping: false }
+}
+ipcMain.handle('serve:start', async (_e, raw: unknown): Promise<{ ok: boolean; url?: string; error?: string }> => {
+  const kind = raw && typeof raw === 'object' ? (raw as Record<string, unknown>).backend : undefined
+  const backend = kind === 'hip' ? llamaHip : kind === 'prism' ? llamaPrism : llama
+  if ((await backend.detect()).status !== 'available') {
+    return { ok: false, error: kind === 'prism' ? 'this model needs the PrismML ternary build: install it on the System page' : `the llama.cpp ${String(kind ?? 'vulkan')} build is not installed (System page)` }
+  }
+  // Models page "Run…" markers: device 'auto' → the device a benchmark would use on that backend; threads 0 → physical cores.
+  if (raw && typeof raw === 'object') {
+    const r = raw as Record<string, unknown>
+    if (r.device === 'auto' || r.threads === 0) {
+      const profile = profileCache ??= await scanSystem()
+      if (r.threads === 0) r.threads = profile.cpu.value?.physicalCores ?? 0
+      if (r.device === 'auto') {
+        r.device = (kind === 'hip'
+          ? pickDiscreteDevice(await llamaHip.listDevices())
+          : pickBenchmarkDevice(await backend.listDevices(), !!profile.gpus.value?.some((g) => g.isIntegrated)))?.id ?? null
+      }
+    }
+  }
+  const v = sanitizeServeConfig(raw, modelRoots())
+  if (!v.ok) return { ok: false, error: v.error }
+  // Integrated GPU: cap -ub (igpuUbatch) — also for manual runs and recommendations measured before the cap, whose
+  // 512 lost the device on the first long agent prompt.
+  if (v.cfg.device && v.cfg.device !== 'none' && v.cfg.ubatch > DEFAULT_CANDIDATE_RULES.igpuUbatch && pickGpu(profileCache ??= await scanSystem())?.isIntegrated) {
+    v.cfg = { ...v.cfg, ubatch: DEFAULT_CANDIDATE_RULES.igpuUbatch }
+  }
+  if (smokeBusy || active || installing || serving) return { ok: false, error: 'a benchmark, smoke run, served model or runtime install is already in progress' }
+  serving = { backend, configId: v.cfg.configId, alias: modelAlias(v.cfg.modelName), ctx: v.cfg.ctx, url: '', stopping: false } // claim before the first await
+  try {
+    // Same port every run (agent configs point at it); a new one only when something else holds it.
+    const saved = readSettings().servePort
+    const port = await (typeof saved === 'number' ? freePort(saved) : Promise.reject(new Error('none saved'))).catch(() => freePort())
+    if (port !== saved) writeSettings({ servePort: port })
+    await backend.loadModel({ ...toLoadConfig(v.cfg), port })
+    const url = backend.url!
+    serving.url = url
+    await shell.openExternal(url)
+    return { ok: true, url }
+  } catch (e) {
+    await backend.unloadModel().catch(() => {})
+    serving = null
+    return { ok: false, error: (e as Error).message }
+  }
+})
+/** Verified teardown (same path as the benchmark's unload: identity check, tree kill, descendant scans — a few
+ *  seconds). A failure keeps `serving` set with the error so the UI shows it and Stop can be retried; nothing else
+ *  may start a server until the cleanup is verified (fail-safe, like the runner's checkStuck). */
+ipcMain.handle('serve:stop', async (): Promise<{ ok: boolean; error?: string }> => {
+  if (!serving) return { ok: false, error: 'nothing is being served' }
+  if (serving.stopping) return { ok: false, error: 'already stopping' }
+  const me = serving
+  me.stopping = true
+  try {
+    await me.backend.unloadModel()
+    if (serving === me) serving = null
+    return { ok: true }
+  } catch (e) {
+    const error = (e as Error).message
+    console.warn(`serve:stop failed: ${error}`)
+    me.stopping = false
+    me.error = error
+    return { ok: false, error }
+  }
+})
+ipcMain.handle('serve:status', serveStatus)
+
 /** The scan plus a fresh reading of VRAM already in use (other apps), so planning budgets what is actually free. */
 async function withVramInUse(p: SystemProfile, signal?: AbortSignal): Promise<SystemProfile> {
+  if (!(p.gpus.value ?? []).some((g) => !g.isIntegrated)) return { ...p, vramInUse: { value: null, status: 'unavailable', source: 'integrated GPU', error: 'no separate dedicated-VRAM budget' } }
   const r = await readVramInUse(20_000, signal)
   return {
     ...p,
@@ -301,7 +415,7 @@ let profileCache: SystemProfile | null = null
 /** req is already sanitized. storedMachine / storedPlan: the scan and the candidate configs a resumed session was
  *  planned with — the runner re-uses the plan as-is, so config ids survive estimator changes. */
 async function startSession(req: SessionRequest, storedMachine?: SystemProfile, storedPlan?: CandidateConfig[]): Promise<StartResult> {
-  if (active || smokeBusy || installing) return { ok: false, error: 'a benchmark, smoke run or runtime install is already in progress' }
+  if (active || smokeBusy || installing || serving) return { ok: false, error: 'a benchmark, smoke run, served model or runtime install is already in progress' }
   const me = { cancel: new AbortController(), pause: new AbortController() }
   active = me // claim before the first await so a double click can't start two sessions
   try {
@@ -312,7 +426,7 @@ async function startSession(req: SessionRequest, storedMachine?: SystemProfile, 
     const runtime = await llama.detect()
     if (runtime.status !== 'available') throw new Error('llama.cpp runtime is not installed: install it on the System page first')
     const [infos, devices] = await Promise.all([listAllModels(), llama.listDevices()])
-    const device = pickDiscreteDevice(devices)?.id ?? null
+    const device = pickBenchmarkDevice(devices, !!profile.gpus.value?.some((g) => g.isIntegrated))?.id ?? null
     const models: ModelMeta[] = []
     for (const id of req.modelIds) {
       const info = infos.find((m) => m.path === id)
@@ -332,6 +446,18 @@ async function startSession(req: SessionRequest, storedMachine?: SystemProfile, 
       if (hipDev) backends.push({ kind: 'hip', backend: () => llamaHip, runtimeVersion: hipRt.version ?? null, exePath: llamaHip.exePath, device: hipDev })
       else sendBenchEvent({ sessionId: '', type: 'log', level: 'warn', msg: 'ROCm (HIP) build installed but it lists no discrete GPU (llama-server --list-devices): comparing on Vulkan only' })
     }
+    // PrismML fork: only for ternary models (requiresBackend), which no other backend can load.
+    const prismRt = await llamaPrism.detect()
+    const needsPrism = models.filter((m) => m.requiresBackend === 'prism')
+    if (needsPrism.length && prismRt.status === 'available') {
+      const dev = pickBenchmarkDevice(await llamaPrism.listDevices().catch(() => []), !!profile.gpus.value?.some((g) => g.isIntegrated))?.id ?? null
+      backends.push({ kind: 'prism', backend: () => llamaPrism, runtimeVersion: prismRt.version ?? null, exePath: llamaPrism.exePath, device: dev })
+    } else if (needsPrism.length) {
+      for (const m of needsPrism) sendBenchEvent({ sessionId: '', type: 'log', level: 'warn', msg: `${m.id}: needs the PrismML ternary build (System page); skipped` })
+      models.splice(0, models.length, ...models.filter((m) => m.requiresBackend !== 'prism'))
+      if (!models.length) throw new Error('the selected models need the PrismML ternary build: install it on the System page first')
+    }
+    const forModel = (model: ModelMeta) => (i: number) => (backends[i].kind === 'prism') === (model.requiresBackend === 'prism')
     const nvOk = (await nvidia()).available
     // Same deterministic candidate generation the runner does (planCandidates over the same backends, rulesForRequest
     // keeps heavyMode), so stored sessions carry full configs with identical ids.
@@ -346,7 +472,7 @@ async function startSession(req: SessionRequest, storedMachine?: SystemProfile, 
       return {
         machine: profile,
         vramBytes: val(machine.vramBytes, true),
-        candidates: models.flatMap((model) => planCandidates(profile, model, planned, WORKLOADS[r.workload], rulesForRequest(r)).candidates.map((config) => ({ config, model })))
+        candidates: models.flatMap((model) => planCandidates(profile, model, planned.filter((_, i) => forModel(model)(i)), WORKLOADS[r.workload], rulesForRequest(r)).candidates.map((config) => ({ config, model })))
       }
     }
     let gotId: (id: string) => void = () => {}
@@ -378,6 +504,8 @@ function createWindow(): void {
     height: 800,
     backgroundColor: '#0f1115',
     title: 'Local AI Optimizer',
+    // Packaged builds take the icon from the exe; dev runs would otherwise show Electron's default.
+    ...(!app.isPackaged && { icon: join(__dirname, '../../build/icon.png') }),
     webPreferences: { preload: join(__dirname, '../preload/index.js'), sandbox: true, contextIsolation: true }
   })
   if (process.env.ELECTRON_RENDERER_URL) win.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -385,6 +513,10 @@ function createWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  // The packaged app's default download destination is userData/models, not the read-only install/asar dir.
+  // Also covers portable builds and upgrades that did not run the NSIS install hook.
+  mkdirSync(bundledModelsDir(), { recursive: true })
+  try { mkdirSync(modelsDir(), { recursive: true }) } catch (e) { console.warn(`model store ${modelsDir()} not creatable: ${(e as Error).message}`) }
   // LAO_SEED_DEMO=1 uses a separate DB file so fixture data can never reach the real one.
   db = openDb(join(app.getPath('userData'), DEMO ? 'optimizer-demo.db' : 'optimizer.db'))
   const n = markInterrupted(db) // a previous app run quit mid-session (before-quit can't await the runner)
@@ -398,5 +530,5 @@ app.whenReady().then(async () => {
   createWindow()
 })
 app.on('window-all-closed', () => app.quit())
-app.on('before-quit', () => { active?.cancel.abort(); stopAllSamplers(); llama.killSync(); llamaHip.killSync() })
-process.on('exit', () => { llama.killSync(); llamaHip.killSync() })
+app.on('before-quit', () => { active?.cancel.abort(); stopAllSamplers(); llama.killSync(); llamaHip.killSync(); llamaPrism.killSync() })
+process.on('exit', () => { llama.killSync(); llamaHip.killSync(); llamaPrism.killSync() })

@@ -78,6 +78,7 @@ export function interpret(v: Verdicts): Insight[] {
     for (const r of c.scored.runs) {
       if (!isUsable(r)) continue
       for (const [m, label] of [['peakVramBytes', 'Peak VRAM'], ['peakSharedGpuBytes', 'Shared-GPU usage']] as const) {
+        if (v.data.machine.gpuSharedRam) continue // dedicated VRAM/spill counters do not describe iGPU capacity
         const x = r[m]
         if (x.kind === 'unavailable') add('prov.unavailable-reason', { what: label, config: id(c), ctx: fmtCtx(r.ctx), reason: x.reason ?? 'no reason recorded' }, [ev(m, x, r.ctx, id(c))], { configId: id(c), action: action('retry-telemetry') })
       }

@@ -60,6 +60,8 @@ export interface MachineLimits {
   physicalCores: number
   /** Runtime device id, e.g. 'Vulkan0'. null = CPU only. */
   gpuDevice: string | null
+  /** Integrated GPU allocations use system RAM, not a separate dedicated-VRAM budget. */
+  gpuSharedRam?: boolean
   /** Per-process dedicated VRAM ceilings observed on this GPU + driver + backend build (spill began there). */
   vramBudgetObservations?: VramBudgetObservation[]
   /** The most conservative per-process budget (min of observations), or the 80 % fallback labelled estimated. */
@@ -121,6 +123,8 @@ export interface ModelMeta {
   /** MoE: `<arch>.expert_count` / `<arch>.expert_used_count` (gemma4: 128 / 8). Absent or 0 = dense. */
   expertCount?: number | null
   expertUsedCount?: number | null
+  /** Tensor types mainline ggml does not know (PrismML PQ2_0 / PTQ1_0 ternary): loads only on the 'prism' backend. */
+  requiresBackend?: 'prism'
   /** Generation knobs (filled by #2 from the chat template + optional HF generation_config.json). */
   genKnobs?: GenKnobs
   /** Same base model across quantizations (I-7.5): `<repoId>#<file stem without quant>`, from the HF sidecar. */
@@ -206,7 +210,8 @@ export interface GenQuality {
 export type KvType = 'f16' | 'q8_0'
 
 /** llama.cpp GPU backend build a config runs on (docs/HIP-BACKEND.md). */
-export type GpuBackendKind = 'vulkan' | 'hip' | 'cuda'
+export type GpuBackendKind = 'vulkan' | 'hip' | 'cuda' | 'prism'
+// 'prism' = the PrismML llama.cpp fork (Vulkan build): the only runtime for ternary PQ2_0 / PTQ1_0 files (Bonsai).
 
 export interface CandidateConfig {
   /** Deterministic: `${modelId}|ngl=<all|n>|kv=<type>|t=<threads>[|nkvo][|hip]`. Tie-breaks sort on it. */
@@ -232,6 +237,8 @@ export interface CandidateConfig {
   /** false = load without mmap (llama-server `-lm none`). Heavy/partial configs: with mmap the whole GGUF stays
    *  resident (a 16.4 GB 27B cost ≈17 GiB of available RAM at 55/65 layers); without it host RAM ≈ CPU layers + KV. */
   mmap?: boolean
+  /** llama-server -ub. Absent = CandidateRules.ubatch (512). Integrated GPUs get a smaller one (igpuUbatch). */
+  ubatch?: number
   /** Heavy-model mode: partial offload chosen on purpose; slow decode is expected, with the reason. */
   expectDegraded?: boolean
   degradedReason?: string

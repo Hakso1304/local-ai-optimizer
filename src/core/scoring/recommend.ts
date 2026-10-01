@@ -30,12 +30,12 @@ function spillVerifiedUpTo(v: CandidateVerdict): number | null {
   return ok
 }
 
-function headline(s: CandidateVerdict): string {
+function headline(s: CandidateVerdict, sharedRam: boolean): string {
   const ctx = s.cs.recommendedCtx ?? s.cs.referenceCtx
   const dec = val(s.scored.runs.find((r) => r.ctx === ctx)?.decodeTps, true)
   const first = s.cs.cliff.steps.find((st) => st.reasons.some((r) => r.code === 'shared_spill' || r.code === 'vram_spill'))
   const upTo = spillVerifiedUpTo(s)
-  const spill = upTo !== null ? `no spill up to ${fmtCtx(upTo)}` : first ? `VRAM spill from ${fmtCtx(first.ctx)}` : 'spill not verified'
+  const spill = sharedRam ? 'integrated GPU (shared RAM; RAM floor guarded)' : upTo !== null ? `no spill up to ${fmtCtx(upTo)}` : first ? `VRAM spill from ${fmtCtx(first.ctx)}` : 'spill not verified'
   const gen = s.gen?.gq.gen.thinking ? `, ${genLabel(s.gen.gq.gen)}` : ''
   return `${label(s.input)}${ctx !== null ? ` @ ${fmtCtx(ctx)}` : ''} — ${dec === null ? 'decode unknown' : `${t1(dec)} t/s`}, quality ${qText(s)}${gen}, ${spill}`
 }
@@ -85,7 +85,7 @@ export function recommend(
     const declared = top.input.model.ctxTrain
     const genReason = said('gen.best-config', cid)[0]
     best = {
-      configId: cid, headline: headline(top),
+      configId: cid, headline: headline(top, machine.gpuSharedRam === true),
       score: { configId: cid, workload, total: top.total, eligible: top.eligible, gateFailures: top.failures.map((f) => f.text), breakdown: top.breakdown, referenceCtx: top.cs.referenceCtx, recommendedCtx: top.cs.recommendedCtx, ...(top.gen ? { gen: top.gen.gq.gen } : {}) },
       practicalContext: cliff.practicalContextCeiling,
       declaredContext: declared ? { value: declared, kind: 'declared', source: 'GGUF context_length' } : { value: null, kind: 'unavailable', reason: 'GGUF has no context_length' },
@@ -174,7 +174,7 @@ export function recommend(
     ranked: v.ranked.map((s) => ({ configId: s.input.config.id, workload, total: s.total, eligible: s.eligible, gateFailures: s.failures.map((f) => f.text), breakdown: s.breakdown, referenceCtx: s.cs.referenceCtx, recommendedCtx: s.cs.recommendedCtx, ...(s.gen ? { gen: s.gen.gq.gen } : {}) })),
     excluded: v.excluded, reasons, whyNot, insights,
     provisional: !top && !!provisional,
-    ...(provisional ? { provisionalBest: { configId: provisional.input.config.id, headline: headline(provisional), estimatedTerms: provisional.undecided.map((u) => `${u.component} (${u.kind})`), reason: cite('prov.confirmed-vs-provisional', { config: provisional.input.config.id, terms: provisional.undecided.map((u) => `${u.component} (${u.kind})`).join(', ') }) } } : {}),
+    ...(provisional ? { provisionalBest: { configId: provisional.input.config.id, headline: headline(provisional, machine.gpuSharedRam === true), estimatedTerms: provisional.undecided.map((u) => `${u.component} (${u.kind})`), reason: cite('prov.confirmed-vs-provisional', { config: provisional.input.config.id, terms: provisional.undecided.map((u) => `${u.component} (${u.kind})`).join(', ') }) } } : {}),
     ...(trace.unmetAlternatives.length ? { unmetAlternatives: trace.unmetAlternatives } : {}),
     decisionTrace: trace
   }

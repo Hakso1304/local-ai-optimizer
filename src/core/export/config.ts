@@ -3,8 +3,9 @@
 // benchmarked setup; Ollama / LM Studio outputs are translations and say so.
 import type { CandidateConfig, GenConfig, GpuBackendKind, KvType, ModelMeta, Recommendation } from '../../shared/bench-types'
 import { genLabel, samplingFor, templateKwargsFor } from '../benchmark/gen'
+import type { LoadConfig } from '../runtimes/types'
 
-/** Batch sizes the runner benchmarks with (session.ts: batchSize 2048, ubatch = DEFAULT_CANDIDATE_RULES.ubatch). */
+/** Batch sizes the runner benchmarks with (session.ts: batchSize 2048, ubatch = cand.ubatch ?? DEFAULT_CANDIDATE_RULES.ubatch). */
 export const BENCH_BATCH = 2048
 export const BENCH_UBATCH = 512
 
@@ -46,7 +47,7 @@ export function exportConfigFrom(rec: Recommendation, cand: CandidateConfig, mod
   return {
     sessionId, configId: cand.id, modelPath: model.id, modelName: model.name, ctx,
     gpuLayers: cand.gpuLayers, gpuLayersAll: cand.gpuLayersAll, layers: model.layers, threads: cand.threads,
-    batch: BENCH_BATCH, ubatch: BENCH_UBATCH, flashAttn: cand.flashAttn, kvType: cand.kvType, device: cand.device, workload: rec.workload,
+    batch: BENCH_BATCH, ubatch: cand.ubatch ?? BENCH_UBATCH, flashAttn: cand.flashAttn, kvType: cand.kvType, device: cand.device, workload: rec.workload,
     kvOffload: cand.kvOffload !== false, mmap: cand.mmap !== false, backend: cand.backend ?? 'vulkan',
     ...(best.score.gen && (best.score.gen.thinking || best.score.gen.temperature > 0)
       ? { gen: { config: best.score.gen, sampling: samplingFor(best.score.gen), ...(templateKwargsFor(model, best.score.gen) ? { templateKwargs: templateKwargsFor(model, best.score.gen) } : {}) } }
@@ -76,6 +77,66 @@ export function toLlamaServerArgs(c: ExportConfig): string[] {
     '--parallel', '1',
     '--cache-ram', '0' // as benchmarked: the default 8 GiB host prompt cache is RAM the measurement never saw
   ]
+}
+
+/** Serve the exported config from the app itself: the same launch the runner measured (LlamaCppBackend.loadModel adds
+ *  -fit off / --parallel 1 / --cache-ram 0 / host+port), plus the chosen sampling as server defaults so llama-server's
+ *  built-in web UI needs no per-request settings. */
+export function toLoadConfig(c: ExportConfig): LoadConfig {
+  const s = c.gen?.sampling
+  return {
+    modelPath: c.modelPath, contextSize: c.ctx, gpuLayers: c.gpuLayersAll ? 999 : c.gpuLayers, device: c.device ?? 'none',
+    threads: c.threads, batchSize: c.batch,
+    extraArgs: [
+      '-a', modelAlias(c.modelName), // the API model id agents ask for (default would be the full file path)
+      '-ub', String(c.ubatch), '-fa', c.flashAttn ? 'on' : 'off',
+      ...(c.kvType === 'f16' ? [] : ['-ctk', c.kvType, '-ctv', c.kvType]),
+      ...(c.kvOffload ? [] : ['-nkvo']), ...(c.mmap ? [] : ['-lm', 'none']),
+      '--temp', String(s?.temperature ?? 0),
+      ...(s?.top_p !== undefined ? ['--top-p', String(s.top_p)] : []),
+      ...(s?.top_k !== undefined ? ['--top-k', String(s.top_k)] : []),
+      ...(s?.min_p !== undefined ? ['--min-p', String(s.min_p)] : []),
+      ...(c.gen?.templateKwargs ? ['--chat-template-kwargs', JSON.stringify(c.gen.templateKwargs)] : [])
+    ]
+  }
+}
+
+/** llama-server --alias: the model id clients send. Safe subset of the display name, e.g. "Llama-3.2-3B-Instruct". */
+export function modelAlias(modelName: string): string {
+  return modelName.trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'local-model'
+}
+
+/** Copy-paste setup for agent tools talking to the served model. llama-server speaks the OpenAI chat API with tool
+ *  calling (/v1/chat/completions, jinja templates) and the Anthropic Messages API (/v1/messages); no API key is set. */
+export function agentSetupText(url: string, alias: string, ctx: number): string {
+  const body = JSON.stringify({ model: alias, messages: [{ role: 'user', content: 'hi' }] }) // alias is [A-Za-z0-9._-]
+  return [
+    `# Local AI Optimizer — model "${alias}" served by llama-server at ${url} (context ${ctx} tokens)`,
+    `# Any API key value is accepted (none is configured). Requests queue on one slot.`,
+    ``,
+    `## OpenAI-compatible clients (Cline, Continue, OpenCode, Aider, Open WebUI, SDKs)`,
+    `base_url: ${url}/v1`,
+    `model:    ${alias}`,
+    `api_key:  none`,
+    ``,
+    `## Claude Code (Anthropic Messages API)`,
+    `# PowerShell`,
+    `$env:ANTHROPIC_BASE_URL = "${url}"`,
+    `$env:ANTHROPIC_AUTH_TOKEN = "none"`,
+    `$env:ANTHROPIC_MODEL = "${alias}"`,
+    `$env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1"`,
+    `claude`,
+    `# bash/zsh`,
+    `ANTHROPIC_BASE_URL=${url} ANTHROPIC_AUTH_TOKEN=none ANTHROPIC_MODEL=${alias} CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 claude`,
+    `# or in ~/.claude/settings.json: { "env": { "ANTHROPIC_BASE_URL": "${url}", "ANTHROPIC_AUTH_TOKEN": "none", "ANTHROPIC_MODEL": "${alias}" } }`,
+    ``,
+    `## Test request`,
+    `# PowerShell (its "curl" is Invoke-WebRequest, and \\" does not escape there)`,
+    `Invoke-RestMethod ${url}/v1/chat/completions -Method Post -ContentType application/json -Body '${body}'`,
+    `# bash/zsh`,
+    `curl ${url}/v1/chat/completions -H "Content-Type: application/json" -d '${body}'`,
+    ...(ctx < 32768 ? [``, `# Context ${ctx} is too small for agents (long system prompts + tool schemas): use 32K or more (Run… form).`] : [])
+  ].join('\n')
 }
 
 /** Quote for cmd.exe / PowerShell / sh alike: double quotes around anything with spaces or shell metacharacters. */

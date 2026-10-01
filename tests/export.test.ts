@@ -3,7 +3,7 @@ import { generateCandidates } from '../src/core/benchmark/candidates'
 import { recommend } from '../src/core/scoring/recommend'
 import { WORKLOADS } from '../src/core/scoring/workloads'
 import {
-  exportConfigFrom, provenanceNote, toJson, toLlamaServerArgs, toLlamaServerCommand, toLlamaServerRequest, toLmStudioSettings, toOllamaModelfile, type ExportConfig
+  exportConfigFrom, provenanceNote, toJson, toLlamaServerArgs, toLlamaServerCommand, toLlamaServerRequest, toLmStudioSettings, toLoadConfig, toOllamaModelfile, agentSetupText, modelAlias, type ExportConfig
 } from '../src/core/export/config'
 import { inputs, load, machine, withQuality } from './scoring/helpers'
 
@@ -90,5 +90,46 @@ describe('export', () => {
     expect(prior.provisionalBest?.estimatedTerms).toContain('quality (estimated)')
     expect(provenanceNote(prior)).toBe('No recommendation: nothing to export.')
     expect(provenanceNote({ ...rec, best: null })).toBe('No recommendation: nothing to export.')
+  })
+})
+
+describe('export: serve from the app (toLoadConfig)', () => {
+  it('launches exactly the exported llama-server args plus the chosen sampling as server defaults', () => {
+    const lc = toLoadConfig(cfg)
+    // Everything toLlamaServerArgs emits is either a LoadConfig field (loadModel adds it) or in extraArgs.
+    expect(lc).toMatchObject({ modelPath: cfg.modelPath, contextSize: cfg.ctx, gpuLayers: cfg.gpuLayersAll ? 999 : cfg.gpuLayers, device: cfg.device ?? 'none', threads: cfg.threads, batchSize: cfg.batch })
+    const exported = toLlamaServerArgs(cfg).join(' ')
+    for (const flag of ['-ub', '-fa', '-ctk', '-nkvo', '-lm']) {
+      const inExport = exported.includes(` ${flag} `) || exported.endsWith(` ${flag}`) || exported.includes(`${flag} `)
+      expect(lc.extraArgs!.includes(flag)).toBe(inExport)
+    }
+    expect(lc.extraArgs).toContain('--temp') // baseline = deterministic, same as toLlamaServerRequest
+    expect(lc.extraArgs![lc.extraArgs!.indexOf('--temp') + 1]).toBe(String(toLlamaServerRequest(cfg).temperature))
+  })
+  it('carries top-p/top-k/min-p and chat-template kwargs when a generation config was chosen', () => {
+    const g: ExportConfig['gen'] = { config: { id: 'x', thinking: true, effort: 'low', temperature: 0.6, topP: 0.95, topK: 20, source: 'model-card' }, sampling: { temperature: 0.6, top_p: 0.95, top_k: 20 }, templateKwargs: { enable_thinking: true } }
+    const a = toLoadConfig({ ...cfg, gen: g }).extraArgs!
+    expect(a.slice(a.indexOf('--temp'))).toEqual(['--temp', '0.6', '--top-p', '0.95', '--top-k', '20', '--chat-template-kwargs', '{"enable_thinking":true}'])
+  })
+})
+
+describe('export: agent setup for the served model', () => {
+  it('aliases the model to a safe API id and passes it to llama-server', () => {
+    expect(modelAlias('Meta Llama 3.1 8B Instruct (Q4_K_M)')).toBe('Meta-Llama-3.1-8B-Instruct-Q4_K_M')
+    expect(modelAlias('  ')).toBe('local-model')
+    const a = toLoadConfig(cfg).extraArgs!
+    expect(a[a.indexOf('-a') + 1]).toBe(modelAlias(cfg.modelName))
+  })
+  it('setup text names the OpenAI base URL, the Claude Code env vars and the alias', () => {
+    const t = agentSetupText('http://127.0.0.1:14489', 'Llama-3.2-3B-Instruct', 32768)
+    expect(t).toContain('base_url: http://127.0.0.1:14489/v1')
+    expect(t).toContain('ANTHROPIC_BASE_URL = "http://127.0.0.1:14489"')
+    expect(t).toContain('ANTHROPIC_MODEL = "Llama-3.2-3B-Instruct"')
+    expect(t).not.toContain('\\n') // real newlines, not a literal backslash-n
+    // single-quoted JSON: literal in bash and in PowerShell (a cmdlet, so no native-arg quote stripping)
+    expect(t).toContain(`-d '{"model":"Llama-3.2-3B-Instruct","messages":[{"role":"user","content":"hi"}]}'`)
+    expect(t).toContain(`Invoke-RestMethod http://127.0.0.1:14489/v1/chat/completions -Method Post`)
+    expect(t).not.toContain('too small for agents')
+    expect(agentSetupText('http://x', 'm', 8192)).toContain('Context 8192 is too small for agents')
   })
 })

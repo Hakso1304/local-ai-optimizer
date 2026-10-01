@@ -20,6 +20,13 @@ export function pickRocmAsset(assets: ReleaseAsset[]): ReleaseAsset | null {
   return assets.find((a) => ROCM.test(a.name)) ?? null
 }
 
+const PRISM = /^llama-prism-b\d+-[0-9a-f]+-bin-win-vulkan-x64\.zip$/
+/** PrismML llama.cpp fork (github.com/PrismML-Eng/llama.cpp): ternary PQ2_0 / PTQ1_0 kernels that mainline lacks.
+ *  Its Vulkan Windows build offloaded Bonsai 2 27B PQ2_0 fully to an Intel Arc iGPU (prism-b10743, 2026-09-28). */
+export function pickPrismAsset(assets: ReleaseAsset[]): ReleaseAsset | null {
+  return assets.find((a) => PRISM.test(a.name)) ?? null
+}
+
 /** sha256 of assets verified by hand (docs/HIP-BACKEND.md §1), for releases whose API entry has no digest. */
 export const KNOWN_SHA256: Record<string, string> = {
   'llama-b11208-bin-win-rocm-10.0-x64.zip': '769c6476e709f890ac68b3e3c265fc7ab88d0e866ab3aacb67c182dd81db034a'

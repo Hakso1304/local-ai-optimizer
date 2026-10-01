@@ -112,24 +112,28 @@ function quality(input: CandidateInput, profile: WorkloadProfile, cfg: ScoringCo
 
 function memory(ref: BenchmarkRunResult, input: CandidateInput, machine: MachineLimits, cfg: ScoringConfig): ComponentScore {
   const n = cfg.norm
-  // ngl 0 on a GPU machine still uses the GPU for prefill (calibration) → scored as partial offload on VRAM.
+  // ngl 0 on a GPU machine still uses the GPU for prefill (calibration).
   const cpu = input.config.gpuLayers === 0 && machine.gpuDevice === null
-  const used = val(cpu ? ref.peakRamBytes : ref.peakVramBytes)
-  const total = val(cpu ? machine.ramTotalBytes : machine.vramBytes, true)
-  if (used === null || total === null) return unknown(NA(`${cpu ? 'RAM' : 'VRAM'} ${used === null ? 'peak' : 'total'} unavailable`), cfg)
+  const sharedRam = machine.gpuSharedRam === true
+  const total = val(cpu || sharedRam ? machine.ramTotalBytes : machine.vramBytes, true)
+  // On an iGPU device buffers are system RAM. Use the lowest measured available RAM (all processes),
+  // not per-PID dedicated VRAM or private RAM, which omit shared device allocations.
+  const peak = sharedRam ? ref.minRamAvailBytes : cpu ? ref.peakRamBytes : ref.peakVramBytes
+  const available = sharedRam ? val(peak, true) : null
+  const used = sharedRam ? total !== null && available !== null ? Math.max(0, total - available) : null : val(peak)
+  if (used === null || total === null) return unknown(NA(`${sharedRam ? 'shared RAM' : cpu ? 'RAM' : 'VRAM'} ${used === null ? 'peak' : 'total'} unavailable`), cfg)
   const u = used / total
   let m = u <= n.memFullUntil ? 100
     : u <= n.memKnee ? 100 - ((u - n.memFullUntil) / (n.memKnee - n.memFullUntil)) * (100 - n.memKneeScore)
       : n.memKneeScore * clamp01((1 - u) / (1 - n.memKnee))
   const notes: string[] = []
-  const peak = cpu ? ref.peakRamBytes : ref.peakVramBytes
   const shared = ref.peakSharedGpuBytes
-  // G01: an unmeasured spill is not "no spill" — without it the memory term is not verified (neutral, unavailable).
-  if (!cpu && shared.kind !== 'measured') return unknown(NA(`shared-GPU usage not measured at ${ref.ctx} (${shared.reason ?? shared.kind}); spill not verified`), cfg)
-  if ((val(shared) ?? 0) > cfg.cliff.sharedSpillBytes) { m = Math.min(m, n.memSpillCap); notes.push('spills to shared GPU memory') }
+  // Shared GPU usage is normal on an iGPU; only the RAM floor can establish memory safety.
+  if (!cpu && !sharedRam && shared.kind !== 'measured') return unknown(NA(`shared-GPU usage not measured at ${ref.ctx} (${shared.reason ?? shared.kind}); spill not verified`), cfg)
+  if (!sharedRam && (val(shared) ?? 0) > cfg.cliff.sharedSpillBytes) { m = Math.min(m, n.memSpillCap); notes.push('spills to shared GPU memory') }
   if (!cpu && !input.config.gpuLayersAll) { m = Math.min(m, n.memPartialOffloadCap); notes.push('partial GPU offload') }
-  // Provenance follows the peak (an estimated peak never becomes a measured memory term).
-  return { score: m, input: { value: u, kind: peak.kind === 'measured' ? 'measured' : peak.kind, source: `peak ${cpu ? 'RAM' : 'VRAM'} / total${peak.kind === 'measured' ? '' : ` (peak ${peak.kind})`}` }, note: notes.join('; ') || undefined }
+  // Provenance follows the peak; an unmeasured RAM minimum cannot become a measured memory term.
+  return { score: m, input: { value: u, kind: peak?.kind === 'measured' ? 'measured' : peak?.kind ?? 'unavailable', source: `peak ${sharedRam ? 'system RAM in use' : cpu ? 'RAM' : 'VRAM'} / total${peak?.kind === 'measured' ? '' : ` (peak ${peak?.kind ?? 'unavailable'})`}` }, note: notes.join('; ') || undefined }
 }
 
 export function componentScores(

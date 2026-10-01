@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ConfigDriftError, LlamaCppBackend, ServerStuckError, type ProcessTree } from '../src/core/runtimes/llamacpp'
-import { classifyExit, emptyDeclared, parseDevices, parseLogLine, parseSse, pickDiscreteDevice, toPromptResult, type CompletionChunk } from '../src/core/runtimes/llamacpp/parse'
+import { classifyExit, emptyDeclared, parseDevices, parseLogLine, parseSse, pickBenchmarkDevice, pickDiscreteDevice, toPromptResult, type CompletionChunk } from '../src/core/runtimes/llamacpp/parse'
 
 // Shape of a real llama-server /completion stream (b11208), split at awkward byte boundaries.
 const STREAM =
@@ -78,6 +78,10 @@ describe('startup log + exit classification', () => {
     ].join('\r\n'))
     expect(devs).toHaveLength(2)
     expect(pickDiscreteDevice(devs)).toMatchObject({ id: 'Vulkan1', name: 'AMD Radeon RX 9070 XT', totalMiB: 16304 })
+    expect(pickBenchmarkDevice(devs, true)?.id).toBe('Vulkan1')
+    expect(pickBenchmarkDevice(devs.slice(0, 1), true)?.id).toBe('Vulkan0')
+    expect(pickBenchmarkDevice(devs.slice(0, 1), false)).toBeNull()
+    expect(pickBenchmarkDevice(parseDevices('Vulkan0: Microsoft Basic Render Driver (512 MiB, 256 MiB free)'), true)).toBeNull()
   })
 })
 

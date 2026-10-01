@@ -10,6 +10,7 @@ export function hubPreloadApi(ipc: IpcRenderer): HubApi {
     hubOpenTokenPage: () => ipc.invoke('hub:openTokenPage'),
     hubDirs: () => ipc.invoke('hub:dirs'),
     hubSearch: (q) => ipc.invoke('hub:search', q),
+    hubPopular: () => ipc.invoke('hub:popular'),
     hubFiles: (repoId) => ipc.invoke('hub:files', repoId),
     hubDownload: (req) => ipc.invoke('hub:download', req),
     hubCancel: (discard) => ipc.invoke('hub:cancel', discard),

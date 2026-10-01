@@ -11,11 +11,13 @@ import { pipeline } from 'node:stream/promises'
 import type { ReadableStream as WebReadableStream } from 'node:stream/web'
 import { runPowerShell, runProcess } from '../../exec'
 import type { GpuVendor, RuntimeDetection } from '../../../shared/types'
-import { expectedSha256, pickReleaseAsset, pickRocmAsset, type ReleaseAsset } from './assets'
-import { getJson, type HealthStatus, type InferenceBackend, type LoadConfig, type LoadResult, type ModelInfo, type PromptRequest, type PromptResult, type RuntimeStats } from '../types'
+import { expectedSha256, pickPrismAsset, pickReleaseAsset, pickRocmAsset, type ReleaseAsset } from './assets'
+import { fetchOrExplain, getJson, type HealthStatus, type InferenceBackend, type LoadConfig, type LoadResult, type ModelInfo, type PromptRequest, type PromptResult, type RuntimeStats } from '../types'
 import { acceptedSampling, classifyExit, emptyDeclared, parseDevices, parseLogLine, parseSse, toPromptResult, type CompletionChunk, type ExitReason, type LlamaDevice } from './parse'
 
 const RELEASES_URL = 'https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=20'
+// The fork publishes proper (non-prerelease) releases, so /latest is fine here.
+const PRISM_RELEASE_URL = 'https://api.github.com/repos/PrismML-Eng/llama.cpp/releases/latest'
 export const VULKAN_ASSET = /^llama-.+-bin-win-vulkan-x64\.zip$/
 
 interface GhRelease {
@@ -224,12 +226,13 @@ export function serverEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Process
   return env
 }
 
-/** Ask the OS for a free loopback port (tiny race until llama-server binds it; /props check catches a squatter). */
-export function freePort(): Promise<number> {
+/** Ask the OS for a free loopback port (tiny race until llama-server binds it; /props check catches a squatter).
+ *  With `port`: that port if it is free, else rejects. */
+export function freePort(port = 0): Promise<number> {
   return new Promise((ok, fail) => {
     const s = createServer()
     s.on('error', fail)
-    s.listen(0, '127.0.0.1', () => {
+    s.listen(port, '127.0.0.1', () => {
       const { port } = s.address() as AddressInfo
       s.close(() => ok(port))
     })
@@ -342,8 +345,17 @@ export class LlamaCppBackend implements InferenceBackend {
   /** Download + extract the newest official Windows build for this GPU into vendorDir if not installed.
    *  NVIDIA with a CUDA-capable driver → CUDA build + cudart (same dir); anything else, or any CUDA failure → Vulkan.
    *  Installed = release-tag.txt ("<tag> <build>") exists; it is written last, after an atomic rename. */
-  async ensureRuntime(log: (m: string) => void = () => {}, pref: { vendor: GpuVendor; cudaMajor?: number; hip?: boolean; tag?: string } = { vendor: 'other' }): Promise<RuntimeDetection> {
+  async ensureRuntime(log: (m: string) => void = () => {}, pref: { vendor: GpuVendor; cudaMajor?: number; hip?: boolean; prism?: boolean; tag?: string } = { vendor: 'other' }): Promise<RuntimeDetection> {
     if (existsSync(join(this.vendorDir, 'release-tag.txt'))) return this.detect()
+    // Opt-in PrismML fork (ternary models) into its own vendorDir. Marker "<tag> prism-vulkan".
+    if (pref.prism) {
+      const rel = await getJson<GhRelease>(PRISM_RELEASE_URL, 15_000)
+      const asset = pickPrismAsset(rel.assets)
+      if (!asset) throw new Error(`no win-vulkan-x64 build in PrismML release ${rel.tag_name}`)
+      log(`PrismML ternary build ${asset.name}`)
+      await this.installAssets(rel.tag_name, [asset], 'prism-vulkan', log)
+      return this.detect()
+    }
     // Opt-in ROCm/HIP build into this (separate) vendorDir, at the installed Vulkan build's tag when given so an A/B
     // compares backends of the same llama.cpp build. Marker "<tag> hip".
     if (pref.hip) {
@@ -383,7 +395,7 @@ export class LlamaCppBackend implements InferenceBackend {
         const zip = join(tmpdir(), asset.name)
         zips.push(zip)
         log(`downloading ${asset.name} (${(asset.size / 1e6).toFixed(1)} MB)`)
-        const res = await fetch(asset.browser_download_url, { signal: AbortSignal.timeout(15 * 60_000) })
+        const res = await fetchOrExplain(asset.browser_download_url, { signal: AbortSignal.timeout(15 * 60_000) })
         if (!res.ok || !res.body) throw new Error(`download ${asset.browser_download_url} -> HTTP ${res.status}`)
         let received = 0
         let shown = -1
@@ -425,6 +437,9 @@ export class LlamaCppBackend implements InferenceBackend {
   }
 
   /** Start llama-server for one model on a free port; resolves once /health is OK and /props shows our model. */
+  /** Base URL of the running server (its built-in web UI is at /); null when nothing is loaded. */
+  get url(): string | null { return this.proc ? `http://127.0.0.1:${this.port}` : null }
+
   async loadModel(cfg: LoadConfig): Promise<LoadResult> {
     if (this.proc || this.ownedRootPid) await this.unloadModel()
     if (cfg.signal?.aborted) throw new Error('cancelled')

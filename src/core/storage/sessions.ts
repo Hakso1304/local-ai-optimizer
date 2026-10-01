@@ -97,8 +97,8 @@ export function saveQualityResults(db: DatabaseSync, sessionId: number, modelId:
 function suiteScope(rows: (GenRow & { backend?: string; configId?: string; expected?: number })[]): { backend: string; runtime: string | null; configId: string | null } | null {
   const suite = rows.filter((r) => r.testId !== 'CR-04-long')
   if (!suite.length) return null
-  const backendOf = (r: typeof suite[number]) => r.backend ?? (r.configId?.endsWith('|hip') ? 'hip' : 'vulkan')
-  const normalize = (x: string | null | undefined) => !x ? null : /^(vulkan|cuda|hip|cpu):/.test(x) ? x : `vulkan:${x}`
+  const backendOf = (r: typeof suite[number]) => r.backend ?? (r.configId?.endsWith('|hip') ? 'hip' : r.configId?.endsWith('|prism') ? 'prism' : 'vulkan')
+  const normalize = (x: string | null | undefined) => !x ? null : /^(vulkan|cuda|hip|prism|cpu):/.test(x) ? x : `vulkan:${x}`
   const backends = new Set(suite.map(backendOf))
   const runtimes = new Set(suite.map((r) => normalize(r.runtimeVersion)))
   const configs = new Set(suite.map((r) => r.configId ?? null))
@@ -183,7 +183,7 @@ export function getSession(db: DatabaseSync, id: number): SessionDetail | null {
       const sourceMatches = scope?.configId === config.id && scope.backend === (config.backend ?? 'vulkan') &&
         (scope.runtime === null ? runtimes.size === 0 : runtimes.has(scope.runtime))
       const qualityRows = sourceMatches ? allQualityRows.filter((q) => q.testId !== 'CR-04-long' ||
-        (q.configId === config.id && (q.backend ?? (q.configId?.endsWith('|hip') ? 'hip' : 'vulkan')) === scope.backend &&
+        (q.configId === config.id && (q.backend ?? (q.configId?.endsWith('|hip') ? 'hip' : q.configId?.endsWith('|prism') ? 'prism' : 'vulkan')) === scope.backend &&
           (q.runtimeVersion ? normalizeRuntime(q.runtimeVersion) === scope.runtime : scope.runtime === null))) : []
       return {
         config, model, runs: mine.map((r) => r.run), runIds: mine.map((r) => r.rowId),

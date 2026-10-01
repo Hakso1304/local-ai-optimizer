@@ -1,3 +1,9 @@
+; Create the same writable default download folder that the packaged app exposes via hub:dirs.
+; Program Files/app.asar is not writable by a standard user; uninstall preserves downloaded models.
+!macro customInstall
+  CreateDirectory "$APPDATA\local-ai-optimizer\models"
+!macroend
+
 ; Uninstall: stop the llama-server this app started, and only that one (W4c D11). The pid file records
 ; {pid, exePath, startedAt}; the process is killed only if its exe path matches and it started within 30 s of the
 ; record, so a reused pid is never touched. An old plain-number pid file can't be verified and is left alone.

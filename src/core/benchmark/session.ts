@@ -176,7 +176,7 @@ export function loadConfigFor(cand: CandidateConfig, model: ModelMeta, ctx: numb
   return {
     modelPath: model.id, contextSize: ctx, gpuLayers: cand.gpuLayersAll ? 999 : cand.gpuLayers, device: cand.device ?? 'none',
     threads: cand.threads, batchSize: 2048,
-    extraArgs: ['-ub', String(rules.ubatch), '-fa', cand.flashAttn ? 'on' : 'off', ...(cand.kvType === 'f16' ? [] : ['-ctk', cand.kvType, '-ctv', cand.kvType]),
+    extraArgs: ['-ub', String(cand.ubatch ?? rules.ubatch), '-fa', cand.flashAttn ? 'on' : 'off', ...(cand.kvType === 'f16' ? [] : ['-ctk', cand.kvType, '-ctv', cand.kvType]),
       ...(cand.kvOffload === false ? ['-nkvo'] : []), // -nkvo / --no-kv-offload: KV cache in RAM (b11208 --help)
       ...(cand.mmap === false ? ['-lm', 'none'] : [])] // --load-mode none: no mmap (b11208 --help)
   }
@@ -214,7 +214,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
   // generalised across them) and machine view. [0] = primary; compareBackends === false → primary only.
   const installed = deps.backends?.length ? deps.backends
     : [{ kind: deps.backendKind ?? 'vulkan', backend: deps.backend, runtimeVersion: deps.runtimeVersion ?? null, exePath: '', device: deps.gpuDevice }]
-  const states = await Promise.all((req.compareBackends === false ? installed.slice(0, 1) : installed).map(async (b) => {
+  // compareBackends=false keeps the primary only — plus 'prism', which is never a comparison but the sole runtime for its models.
+  const states = await Promise.all((req.compareBackends === false ? installed.filter((b, i) => i === 0 || b.kind === 'prism') : installed).map(async (b) => {
     const budgetKey = vramBudgetKey(deps.machine, b.kind, b.runtimeVersion)
     const observations = budgetKey ? applicableObservations(budgetKey, (await storage.listVramBudget?.(budgetKey.key)) ?? []) : []
     let inst: SessionBackend | null = null
@@ -388,8 +389,8 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       const suiteRows = stored.filter((r) => r.testId !== 'CR-04-long') as (GenRow & { backend?: string; configId?: string; suite?: string; suiteSeed?: number | null })[]
       const expectedBackend = best.config.backend ?? 'vulkan'
       const expectedRuntime = stateOf(best.config)?.runtime ?? null
-      const normalizeRuntime = (x: string | null | undefined) => !x ? null : /^(vulkan|cuda|hip|cpu):/.test(x) ? x : `vulkan:${x}`
-      const rowBackend = (r: typeof suiteRows[number]) => r.backend ?? (r.configId?.endsWith('|hip') ? 'hip' : 'vulkan')
+      const normalizeRuntime = (x: string | null | undefined) => !x ? null : /^(vulkan|cuda|hip|prism|cpu):/.test(x) ? x : `vulkan:${x}`
+      const rowBackend = (r: typeof suiteRows[number]) => r.backend ?? (r.configId?.endsWith('|hip') ? 'hip' : r.configId?.endsWith('|prism') ? 'prism' : 'vulkan')
       const expectedKeys = new Set(gens.flatMap((g) => suite.tests.flatMap((t) => Array.from({ length: samplesOf(g) }, (_, i) => `${g.id}|${t.id}|${i + 1}`))))
       const actualKeys = suiteRows.map((r) => `${r.genId ?? BASELINE_GEN.id}|${r.testId}|${r.sample ?? 1}`)
       const exactSuite = suiteRows.length === expectedKeys.size && new Set(actualKeys).size === expectedKeys.size && actualKeys.every((k) => expectedKeys.has(k))
@@ -532,7 +533,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
           const residentOf = (r: BenchmarkRunResult) => { const x = readingOf(r); return x.state === 'over' ? x.bytes : null }
           const sh0 = residentOf(out.run)
           let first: BenchmarkRunResult | null = null
-          if (isUsable(out.run) && sh0 !== null && !signal?.aborted) {
+          if (!machine.gpuSharedRam && isUsable(out.run) && sh0 !== null && !signal?.aborted) {
             await storage.saveRun(sessionId, out.run, out.detail)
             recordAttempt(out.run, out.detail)
             log('warn', `${cand.id} @${ctx}: ${(sh0 / GiB).toFixed(2)} GiB resident in shared memory — restarting the server and re-measuring once (I-2.8)`)
@@ -570,7 +571,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
           // N4: qualification needs MEASURED request timings (runtime timings, not wall-clock estimates) on every attempt.
           const timed = (r: BenchmarkRunResult) => r.decodeTps.kind === 'measured' && r.prefillTps.kind === 'measured' && r.ttftMs.kind === 'measured'
           const { budgetKey } = cur
-          if (budgetKey && kind && dedN !== null) {
+          if (!machine.gpuSharedRam && budgetKey && kind && dedN !== null) {
             const b = buffersOf(out.detail)
             const o: VramBudgetObservation = {
               kind, qualified: budgetKey.verified && timed(run) && (!first || timed(first)) && (kind === 'clean' || b.largestBytes !== null), ceilingBytes: dedN,
@@ -724,7 +725,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     checkStuck() // the previous server could not be confirmed dead: never start another one
     const avail = osRam() ?? val(machine.ramAvailableBytes)
     const e = estimateMemory(model, cand.gpuLayersAll ? model.layers : cand.gpuLayers, ctx, cand.kvType, rules.ubatch, cand.kvOffload !== false)
-    const need = req.heavyMode ? e.ramResidentBytes : e.ramBytes
+    const need = (req.heavyMode ? e.ramResidentBytes : e.ramBytes) + (machine.gpuSharedRam ? e.vramBytes : 0)
     // mmap'd weights already uploaded to the GPU are clean file pages the OS can drop: they lower 'available RAM'
     // (calibration: ≈ file size) without being memory pressure. Credit them in the in-step floor check.
     // Without mmap (heavy configs) there are no reclaimable file pages to credit.
@@ -791,7 +792,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         // ladder moves on), not an abort. The RAM floor always aborts.
         // Budget-independent pressure guard: observed residual (per-PID shared − pinned − baseline) above the limit on
         // `spillAbortSamples` consecutive measured samples. An unknown reading breaks the streak.
-        const adj = s.procVramSharedBytes != null ? adjustedSpill(s.procVramSharedBytes, s.procVramDedicatedBytes, pinned, spillBase).value : null
+        const adj = !machine.gpuSharedRam && s.procVramSharedBytes != null ? adjustedSpill(s.procVramSharedBytes, s.procVramDedicatedBytes, pinned, spillBase).value : null
         // While load declarations are arriving, protect against a new growth in
         // residual shared memory. The first observed load level can be host-pinned,
         // so raw shared by itself cannot justify an abort (I-4.0).
@@ -957,7 +958,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
       decodeTps: tps(decode, estDecode, 'predicted'),
       totalMs: measured(median(reps.map((r) => r.totalMs)), 'client wall clock', 'no successful request'),
       peakVramBytes: tele(pk.max.procVramDedicatedBytes, 'procVramDedicatedBytes'),
-      peakSharedGpuBytes: spillMetric(),
+      peakSharedGpuBytes: machine.gpuSharedRam ? na('integrated GPU uses shared system RAM; shared usage is not VRAM spill') : spillMetric(),
       // I-2.8: same-window adapter free VRAM at the per-PID shared peak (placement vs capacity)
       adapterFreeAtSharedPeakBytes: (() => {
         const withShared = samples.filter((x) => x.procVramSharedBytes != null && x.vramDedicatedBytes != null)
@@ -965,7 +966,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
         const peak = withShared.reduce((a, b) => (b.procVramSharedBytes! > a.procVramSharedBytes! ? b : a))
         return { value: Math.max(0, vramTotal - peak.vramDedicatedBytes!), kind: 'measured' as const, source: 'VRAM total − adapter dedicated at the per-PID shared peak (typeperf)' }
       })(),
-      peakSharedGpuRawBytes: tele(pk.max.procVramSharedBytes, 'procVramSharedBytes'),
+      peakSharedGpuRawBytes: machine.gpuSharedRam ? na('integrated GPU shared memory is normal, not a dedicated-VRAM spill signal') : tele(pk.max.procVramSharedBytes, 'procVramSharedBytes'),
       hostPinnedBytes: { value: pinned, kind: 'declared', source: 'llama-server load log: host-side model/KV/compute buffers' },
       peakRamBytes: tele(pk.max.procRamPrivateBytes, 'procRamPrivateBytes'),
       avgGpuUtil: tele(win.meanGpuUtilPct, 'gpuUtilPct', win.n),
@@ -991,7 +992,7 @@ export async function runSession(req: SessionRequest, deps: SessionDeps, emit: (
     checkStuck()
     const ngl = cand.gpuLayersAll ? model.layers : cand.gpuLayers
     const e = estimateMemory(model, ngl, ctx, cand.kvType, rules.ubatch, cand.kvOffload !== false)
-    const need = req.heavyMode ? e.ramResidentBytes : e.ramBytes
+    const need = (req.heavyMode ? e.ramResidentBytes : e.ramBytes) + (machine.gpuSharedRam ? e.vramBytes : 0)
     const avail = osRam() ?? val(machine.ramAvailableBytes)
     if (avail !== null && need > avail - ramFloor) {
       return { ok: false, reason: `${what} skipped: est. RAM ${(need / GiB).toFixed(1)} GiB > available ${(avail / GiB).toFixed(1)} GiB − floor ${(ramFloor / GiB).toFixed(1)} GiB` }

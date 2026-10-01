@@ -3,8 +3,9 @@ import { existsSync, realpathSync } from 'node:fs'
 import { isAbsolute, relative, resolve } from 'node:path'
 import { DEFAULT_CANDIDATE_RULES, type CandidateRules } from '../core/benchmark/candidates'
 import { WORKLOADS } from '../core/scoring/workloads'
+import type { ExportConfig } from '../core/export/config'
 import type { SessionRequest } from '../shared/bench-events'
-import type { WorkloadId } from '../shared/bench-types'
+import type { GenConfig, WorkloadId } from '../shared/bench-types'
 
 /** True if p is dir itself's descendant (no `..` escape, same drive). */
 export function isInside(dir: string, p: string): boolean {
@@ -90,4 +91,41 @@ export function sanitizeRequest(raw: unknown, modelRoots: string[]): { ok: true;
       ...(sanitizeRules(r.candidateRules) ? { candidateRules: sanitizeRules(r.candidateRules) } : {})
     }
   }
+}
+
+/** Renderer input → ExportConfig for serve:start. Every field becomes a llama-server argument, so only the value
+ *  shapes toLoadConfig expects get through; the model path must be inside a configured root like a bench request. */
+export function sanitizeServeConfig(raw: unknown, modelRoots: string[]): { ok: true; cfg: ExportConfig } | { ok: false; error: string } {
+  if (!raw || typeof raw !== 'object') return { ok: false, error: 'bad config' }
+  const r = raw as Record<string, unknown>
+  if (typeof r.modelPath !== 'string' || !insideSomeRoot(r.modelPath, modelRoots)) return { ok: false, error: 'model path not in a configured model dir' }
+  const backend = r.backend === 'hip' ? 'hip' : r.backend === 'prism' ? 'prism' : r.backend === 'vulkan' ? 'vulkan' : null
+  if (!backend) return { ok: false, error: `unsupported backend ${String(r.backend)}` }
+  const kvType = r.kvType === 'q8_0' ? 'q8_0' : r.kvType === 'f16' ? 'f16' : null
+  if (!kvType) return { ok: false, error: `bad kvType ${String(r.kvType)}` }
+  const device = r.device === null ? null : typeof r.device === 'string' && /^[A-Za-z]+\d+$/.test(r.device) ? r.device : undefined
+  if (device === undefined) return { ok: false, error: `bad device ${String(r.device)}` }
+  const ints: Record<string, number> = {}
+  for (const k of ['ctx', 'gpuLayers', 'layers', 'threads', 'batch', 'ubatch']) {
+    const v = num(r[k])
+    if (v === null || v < 0 || !Number.isInteger(v)) return { ok: false, error: `bad ${k} ${String(r[k])}` }
+    ints[k] = v
+  }
+  let gen: ExportConfig['gen']
+  if (r.gen && typeof r.gen === 'object') {
+    const g = r.gen as Record<string, unknown>
+    const sm = (g.sampling && typeof g.sampling === 'object' ? g.sampling : {}) as Record<string, unknown>
+    const t = num(sm.temperature)
+    if (t === null) return { ok: false, error: 'bad gen.sampling.temperature' }
+    const opt = (k: 'top_p' | 'top_k' | 'min_p') => { const v = num(sm[k]); return v === null ? {} : { [k]: v } }
+    const kw = g.templateKwargs && typeof g.templateKwargs === 'object' && !Array.isArray(g.templateKwargs) ? (g.templateKwargs as Record<string, unknown>) : undefined
+    // gen.config is display-only downstream (nothing in toLoadConfig reads it); sampling and kwargs are what get launched.
+    gen = { config: g.config as GenConfig, sampling: { temperature: t, ...opt('top_p'), ...opt('top_k'), ...opt('min_p') }, ...(kw ? { templateKwargs: kw } : {}) }
+  }
+  return { ok: true, cfg: {
+    sessionId: String(r.sessionId ?? ''), configId: String(r.configId ?? ''), modelPath: r.modelPath, modelName: String(r.modelName ?? ''),
+    ctx: ints.ctx, gpuLayers: ints.gpuLayers, gpuLayersAll: r.gpuLayersAll === true, layers: ints.layers, threads: ints.threads, batch: ints.batch, ubatch: ints.ubatch,
+    flashAttn: r.flashAttn === true, kvType, device, kvOffload: r.kvOffload !== false, mmap: r.mmap !== false, backend,
+    workload: isWorkloadId(r.workload) ? r.workload : 'fast_assistant', ...(gen ? { gen } : {})
+  } }
 }

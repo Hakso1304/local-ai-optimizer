@@ -1,6 +1,16 @@
 # Changelog
 
 ## Unreleased
+- Models page: "Browse…" picks the model store (default download target and first scanned folder; created if missing), "Reset to default" returns to the app's folder. Files are not moved; the old folder stays reachable via "Add folder…".
+- Download page: a Use case dropdown (same use cases as the Benchmark page, defaulting to its workload) drives the recommendation's context length, speed gate and coding boost.
+- Download page recommendations are grouped by model series (Qwen, Llama, Gemma, …) with a hover profile per series and per row (what the size, file, speed and rank are based on); repo creation date acts as a release proxy so newer models outrank older ones of the same size (1.0 → 0.5 over 6–30 months).
+- Download page recommendations rebuilt: budgets follow the benchmark planner (VRAM minus in-use and margin, RAM minus reserve, an integrated GPU's shared pool as one budget), sizes come from each repo's real GGUF files (best quant that fits, shards summed, ternary flagged) with the workload's context KV cache included, a bandwidth-based decode estimate marks slow picks, duplicate quantizer repos fold into one row, official sources rank first and abliterated/uncensored repos last.
+- Ternary models (PrismML Bonsai, PQ2_0 / PTQ1_0): the Models page flags files whose tensor types mainline llama.cpp rejects, and the System page can install the PrismML llama.cpp fork (Vulkan build) as an opt-in third backend. Such models run and benchmark on that backend only; verified on an Intel Arc iGPU (Bonsai 2 27B fully offloaded, ~4 tok/s).
+- Run a model from the app: "Run this model" (Results) and "Run…" (Models page, prefilled from the recommendation or defaults) start llama-server and open its chat UI; the running-model line shows the API base URL and model id, with a copy-paste setup for Claude Code, Cline, Continue and other agent tools.
+- Download page: "Add folder…" registers a model folder on another drive as a scan and download target (C: is often the small drive).
+- Classify the bare "Intel(R) Arc(TM) Graphics" adapter (Core Ultra iGPU) as integrated, so its shared-memory use is no longer aborted as VRAM spill.
+- Benchmark integrated-only laptops on Vulkan instead of forcing CPU-only: account for GPU allocations in shared system RAM, retain the live RAM floor, and avoid interpreting ordinary shared-GPU usage as dedicated-VRAM spill.
+- Create the writable `%APPDATA%\local-ai-optimizer\models` download folder during NSIS installation and on app startup (including portable builds); preserve downloads on uninstall.
 
 - Use CIM creation time for inspection and a tolerant creation-time match for kill, restoring session completion after `0a20d21`..`bbe12dc` (`127d96f`).
 - Keep standalone quality MEASURED and disclose an unverified thinking state (`127d96f`).

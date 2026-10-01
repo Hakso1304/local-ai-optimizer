@@ -58,10 +58,19 @@ export class NotImplementedError extends Error {
   }
 }
 
+/** fetch whose network failure names the cause: undici reports every DNS / TLS / proxy / reset problem as the bare
+ *  "TypeError: fetch failed" and hides the code (ENOTFOUND, UNABLE_TO_VERIFY_LEAF_SIGNATURE, ECONNRESET, …) in .cause. */
+export async function fetchOrExplain(url: string, init?: RequestInit): Promise<Response> {
+  try { return await fetch(url, init) } catch (e) {
+    const c = (e as Error & { cause?: { code?: string; message?: string } }).cause
+    throw new Error(`GET ${url} failed: ${(e as Error).message}${c ? ` (${[c.code, c.message].filter(Boolean).join(': ')})` : ''}`)
+  }
+}
+
 /** HTTP GET JSON with a hard timeout. Throws on network error, timeout or non-2xx. */
 export async function getJson<T>(url: string, timeoutMs: number, signal?: AbortSignal): Promise<T> {
   const timeout = AbortSignal.timeout(timeoutMs)
-  const res = await fetch(url, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout })
+  const res = await fetchOrExplain(url, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout })
   if (!res.ok) throw new Error(`GET ${url} -> HTTP ${res.status}`)
   return (await res.json()) as T
 }

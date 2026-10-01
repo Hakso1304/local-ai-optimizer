@@ -23,7 +23,7 @@ function kvBytes([k, t, v]: Kv): Buffer {
   return Buffer.concat([gstr(k), val])
 }
 /** F32 tensors with real (zero) data at 32-byte aligned offsets, like a complete file. */
-function gguf(version: number, kvs: Kv[], tensors: number[][]): Buffer {
+function gguf(version: number, kvs: Kv[], tensors: number[][], types: number[] = []): Buffer {
   const sizes = tensors.map((dims) => dims.reduce((a, b) => a * b, 1) * 4)
   const offsets: number[] = []
   let off = 0
@@ -31,7 +31,7 @@ function gguf(version: number, kvs: Kv[], tensors: number[][]): Buffer {
   const head = Buffer.concat([
     u32(0x46554747), u32(version), u64(tensors.length), u64(kvs.length),
     ...kvs.map(kvBytes),
-    ...tensors.map((dims, i) => Buffer.concat([gstr(`t${i}`), u32(dims.length), ...dims.map(u64), u32(0), u64(offsets[i])]))
+    ...tensors.map((dims, i) => Buffer.concat([gstr(`t${i}`), u32(dims.length), ...dims.map(u64), u32(types[i] ?? 0), u64(offsets[i])]))
   ])
   const pad = Buffer.alloc((Math.ceil(head.length / 32) * 32) - head.length)
   return Buffer.concat([head, pad, Buffer.alloc(off)])
@@ -64,6 +64,18 @@ describe('readGgufMetadata', () => {
     const [info] = await findGgufModels([sub])
     const mm = toModelMeta(info)
     expect(mm.meta?.genKnobs).toMatchObject({ repoId: 'Qwen/Qwen3.8-27B', recommended: { temperature: 1, topP: 0.95, topK: 20 } })
+  })
+
+  it('flags PrismML ternary tensor types (PQ2_0 = 142) as needing the prism backend; mainline types do not', async () => {
+    const p = join(dir, 'ternary.gguf')
+    writeFileSync(p, gguf(3, KVS, [[64, 100], [64, 64], [64]], [142, 142, 0]))
+    const m = await readGgufMetadata(p)
+    expect(m).toMatchObject({ tensorTypes: [0, 142], requiresBackend: 'prism' })
+    const mm = toModelMeta({ id: p, name: 'ternary', path: p, sizeBytes: 0, runtime: 'llamacpp', meta: m })
+    expect(mm.meta?.requiresBackend).toBe('prism')
+    const q = join(dir, 'q4.gguf')
+    writeFileSync(q, gguf(3, KVS, [[64, 100], [64, 64], [64]], [12, 12, 0])) // Q4_K + F32
+    expect(await readGgufMetadata(q)).toMatchObject({ tensorTypes: [0, 12], requiresBackend: null })
   })
 
   it('parses a synthetic v3 file and derives params from tensor dims', async () => {
