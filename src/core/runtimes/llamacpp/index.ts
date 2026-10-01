@@ -233,7 +233,11 @@ export async function reconcileOwnedProcessScan(options: OwnedScanOptions): Prom
     }
     // P's PID now belongs to a live reuser F: rows born after F started are F's children; earlier ones are orphans
     // of ours that cannot be proven → wait (fail closed).
-    return Number.isFinite(born) && born >= Date.parse(current.startedAt) ? 'skip' : 'wait'
+    // F counts as a reuser only if it started after P and (when known) after our recorded kill of P; otherwise it may
+    // be P itself seen through another precision/source → fail closed. Skip only rows born strictly after F started.
+    const fStart = Date.parse(current.startedAt), until = childExitAt?.get(parent.pid)
+    const reuser = Number.isFinite(fStart) && fStart > Date.parse(parent.startedAt) && (until === undefined || fStart >= until)
+    return reuser && Number.isFinite(born) && born > fStart ? 'skip' : 'wait'
   }
   const pending: ProcessIdentity[] = []
   const found = await scan()
