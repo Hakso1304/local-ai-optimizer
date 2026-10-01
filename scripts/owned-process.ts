@@ -100,7 +100,16 @@ export async function trackOwnedProcess(p: ChildProcess, tree: ProcessTree = win
         if (!rootSeenByOs && rootKilledDuringStop && descendants.size === 0) throw new Error(`owned PID ${pid} final descendant scan unavailable after root exit`)
         const finalTree: ProcessTree = rootSeenByOs ? { ...tree, descendants: async (source) => {
           const [treeRows, osRows] = await Promise.all([tree.descendants(source), finalDescendantCensus(source)])
-          return [...new Map([...treeRows, ...osRows].map((child) => [child.pid, child])).values()]
+          // Rule iii: the two sources must agree on every PID they both report; last-wins would mask a conflict.
+          const merged = new Map<number, ProcessIdentity>()
+          for (const child of [...treeRows, ...osRows]) {
+            const prior = merged.get(child.pid)
+            if (prior && (prior.startedAt !== child.startedAt || prior.parentPid !== child.parentPid)) {
+              throw new Error(`owned PID ${pid}: census sources disagree on descendant ${child.pid}`)
+            }
+            merged.set(child.pid, child)
+          }
+          return [...merged.values()]
         } } : tree
         const deadline = Date.now() + 3_000
         while (true) {

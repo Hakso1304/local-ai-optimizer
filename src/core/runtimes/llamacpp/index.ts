@@ -172,7 +172,23 @@ export async function reconcileOwnedProcessScan(options: OwnedScanOptions): Prom
   reap(): Promise<void>
 }> {
   const { tree, root, rootIdentity, children, rootWasLive, ownedExitAt } = options
-  const scan = () => tree.descendants(root)
+  // Y1: census from the root AND every captured PID (dead ones included: both walkers accept a dead seed). An orphan
+  // whose parent is a dead captured intermediate is invisible from the root alone (Windows keeps its ParentProcessId
+  // pointing at the dead intermediate, which is no longer a Win32_Process row). Seeds disagreeing on a PID's
+  // identity fail closed.
+  const scan = async (): Promise<ProcessIdentity[]> => {
+    const merged = new Map<number, ProcessIdentity>()
+    for (const seed of [root, ...children.keys()]) {
+      for (const row of await tree.descendants(seed)) {
+        const prior = merged.get(row.pid)
+        if (prior && (prior.startedAt !== row.startedAt || prior.parentPid !== row.parentPid)) {
+          throw new ServerStuckError(`llama-server pid ${root}: census seeds disagree on descendant ${row.pid}`)
+        }
+        merged.set(row.pid, row)
+      }
+    }
+    return [...merged.values()]
+  }
   const stillOwned = async (record: ProcessIdentity) => {
     if (tree.inspect) return sameProcess(await tree.inspect(record.pid), record)
     if (!await tree.isAlive(record.pid)) return false
@@ -200,6 +216,8 @@ export async function reconcileOwnedProcessScan(options: OwnedScanOptions): Prom
     if (known && sameProcess(child, known)) continue
     if (known && !sameProcess(child, known) && !rootWasLive) continue // recorded PID now belongs to a foreign process
     if (!known && !rootWasLive && child.parentPid !== undefined && child.parentPid !== root) { pending.push(child); continue }
+    // After root exit an uncaptured row with no recorded parent cannot be attributed either way: fail closed.
+    if (!known && !rootWasLive && child.parentPid === undefined) throw new ServerStuckError(`llama-server pid ${root} has unverified descendant ${child.pid} (no parent identity after root exit)`)
     if (!known && rootWasLive && rootIdentity && tree.inspect &&
         sameProcess(await tree.inspect(root), rootIdentity) &&
         sameProcess(await tree.inspect(child.pid), child) &&
@@ -210,7 +228,7 @@ export async function reconcileOwnedProcessScan(options: OwnedScanOptions): Prom
       continue
     }
     const born = Date.parse(child.startedAt)
-    // A child of the exited root PID born after that exit has a reused parent PID: provably foreign, never killed.
+    // Rule B: a child of the exited root PID born after that exit has a reused parent PID: provably foreign, never killed.
     if (!rootWasLive && Number.isFinite(born) && ownedExitAt !== null && born > ownedExitAt) continue
     throw new ServerStuckError(`llama-server pid ${root} has unverified descendant ${child.pid}`)
   }
